@@ -6,9 +6,11 @@
 //! normalization (`search_text`), and the vector format (`vectors`) support it. Crawler, extractors,
 //! and search land in later phases.
 
+pub mod code;
 pub mod crawler;
 pub mod db;
 pub mod estimator;
+pub mod extract;
 pub mod index_store;
 pub mod jsonline;
 pub mod model;
