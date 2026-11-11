@@ -9,6 +9,8 @@
 //! preflight), `PDF+Portable.swift` (PDFium text and page renders) and `Media+Portable.swift`
 //! (ffmpeg/ffprobe: audio windows, video keyframes, preview frames).
 
+pub mod exif;
+pub mod ffmpeg;
 pub mod image;
 pub mod rgb;
 pub mod stb;
