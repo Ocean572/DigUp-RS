@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use std::path::Path;
 
 /// What a file is, for indexing and grouping (Model.swift:4). Raw value == the `kind` column text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FileKind {
     Screenshot,
     Image,
@@ -103,6 +103,7 @@ impl Modality {
 }
 
 /// A file as a walk reported it — the unit of `insert` (IndexStore.swift:621).
+#[derive(Debug, Clone)]
 pub struct Candidate {
     pub path: String,
     pub kind: FileKind,

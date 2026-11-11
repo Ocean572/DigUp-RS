@@ -11,67 +11,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// `Costs`: seconds of indexing per unit, measured 2026-10-07 on an M4 Pro with llama.cpp
-/// (Q8_0), reading files while the model embeds.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Costs {
-    /// 140 tokens, decode included.
-    pub image: f64,
-    /// 280 tokens; its OCR (0.24 s) runs alongside and sets the pace.
-    pub screenshot: f64,
-    /// Text pages are cheap, rendered scans cost an image.
-    pub pdf_page: f64,
-    /// 40 at a time (a data dump's go to keyword search only, nearly free).
-    pub doc_chunk: f64,
-    /// A 30 s window every 25 s.
-    pub audio_second: f64,
-    /// A 70-token keyframe per shot (at most one per 3 s) + the soundtrack.
-    pub video_second: f64,
-    /// A stretch of code (2026-10-09: 258 Swift and Objective-C files, 1,245 stretches in 45 s).
-    pub code_stretch: f64,
-}
-
-impl Default for Costs {
-    fn default() -> Self {
-        Self {
-            image: 0.12,
-            screenshot: 0.32,
-            pdf_page: 0.09,
-            doc_chunk: 0.045,
-            audio_second: 0.0089,
-            video_second: 0.019,
-            code_stretch: 0.037,
-        }
-    }
-}
-
-impl Costs {
-    fn set(&mut self, name: &str, value: f64) {
-        match name {
-            "image" => self.image = value,
-            "screenshot" => self.screenshot = value,
-            "pdfPage" => self.pdf_page = value,
-            "docChunk" => self.doc_chunk = value,
-            "audioSecond" => self.audio_second = value,
-            "videoSecond" => self.video_second = value,
-            "codeStretch" => self.code_stretch = value,
-            _ => {}
-        }
-    }
-
-    fn get(&self, name: &str) -> f64 {
-        match name {
-            "image" => self.image,
-            "screenshot" => self.screenshot,
-            "pdfPage" => self.pdf_page,
-            "docChunk" => self.doc_chunk,
-            "audioSecond" => self.audio_second,
-            "videoSecond" => self.video_second,
-            "codeStretch" => self.code_stretch,
-            _ => 0.0,
-        }
-    }
-}
+/// `Costs` lives in core next to the estimator that multiplies it; re-exported here so the
+/// `costs.json` reader/writer and the estimate share one definition.
+pub use digup_core::estimator::Costs;
 
 /// `MeasuredCosts.Tally`: seconds spent for units of one kind, as indexing measured them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]

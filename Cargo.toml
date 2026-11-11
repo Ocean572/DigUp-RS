@@ -39,6 +39,7 @@ unicode-general-category = "1"
 tempfile = "3"
 memmap2 = "0.9"
 libc = "0.2"
+walkdir = "2"
 
 # Phase 2 (crates/runtime): the fp16 vector format the engine stores (`Vectors.swift`), the model
 # file pins (`ModelFiles.swift`), and the bindings for the vendored, pinned llama.cpp

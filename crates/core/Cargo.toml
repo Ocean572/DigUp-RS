@@ -9,11 +9,14 @@ description = "DigUp engine core (Rust port): index store, schema, search primit
 
 [dependencies]
 rusqlite = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 unicode-normalization = { workspace = true }
 unicode-general-category = { workspace = true }
 half = { workspace = true }
 memmap2 = { workspace = true }
+libc = { workspace = true }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
