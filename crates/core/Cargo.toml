@@ -12,6 +12,7 @@ rusqlite = { workspace = true }
 thiserror = { workspace = true }
 unicode-normalization = { workspace = true }
 unicode-general-category = { workspace = true }
+half = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

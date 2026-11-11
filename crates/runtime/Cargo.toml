@@ -5,7 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "LlamaRuntime (Rust port): llama.cpp bindings + the 768x fp16 EmbeddingGemma 2 embedder. Scaffold — Phase 2+."
+description = "EmbeddingGemma 2 on the vendored llama.cpp (Rust port): 768×fp16 embedder, device choice."
 
 [dependencies]
 digup-core = { workspace = true }
+half = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+
+[build-dependencies]
+bindgen = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
