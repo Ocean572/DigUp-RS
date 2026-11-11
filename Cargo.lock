@@ -181,6 +181,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "digup-native"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "digup-core",
+ "hex",
+ "libc",
+ "sha2",
+]
+
+[[package]]
 name = "digup-platform"
 version = "0.1.0"
 dependencies = [

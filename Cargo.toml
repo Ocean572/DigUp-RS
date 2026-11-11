@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/core",
+    "crates/native",
     "crates/runtime",
     "crates/services",
     "crates/cli",
@@ -25,6 +26,7 @@ publish = false
 # `server/pyproject.toml`: pin, don't resolve ad-hoc per crate).
 [workspace.dependencies]
 digup-core = { path = "crates/core" }
+digup-native = { path = "crates/native" }
 digup-runtime = { path = "crates/runtime" }
 digup-services = { path = "crates/services" }
 digup-platform = { path = "crates/platform" }
@@ -46,6 +48,10 @@ walkdir = "2"
 # supports case-insensitive class-free patterns the way Foundation's `NSRegularExpression` does.
 flate2 = "1"
 regex = "1"
+# Phase 2 step 8c (crates/native): the vendored stb builds with `cc` — the same single translation
+# unit and the same `-w` the Swift package's CStb target uses, so decodes, resizes and writes are
+# the engine's own C code, not a Rust reimplementation of it.
+cc = "1"
 
 # Phase 2 (crates/runtime): the fp16 vector format the engine stores (`Vectors.swift`), the model
 # file pins (`ModelFiles.swift`), and the bindings for the vendored, pinned llama.cpp

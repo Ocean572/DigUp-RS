@@ -1,0 +1,22 @@
+[package]
+name = "digup-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The C-backed readers of the Rust port: stb pictures (decode, turn, scale, write), PDFium pages, ffmpeg media. Links the same vendored libraries the Swift engine links (Vendor/stb, Vendor/pdfium)."
+
+[dependencies]
+digup-core = { workspace = true }
+libc = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
+
+# The picture pins compare pixels, so the test side hashes them (`sha2` is the same digest the
+# engine's `SHA256.swift` uses) and spells the digests in hex.
+[dev-dependencies]
+sha2 = { workspace = true }
+hex = { workspace = true }
