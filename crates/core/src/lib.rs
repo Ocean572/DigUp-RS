@@ -10,6 +10,7 @@ pub mod db;
 pub mod index_store;
 pub mod model;
 pub mod schema;
+pub mod scoring;
 pub mod search_text;
 pub mod vectors;
 

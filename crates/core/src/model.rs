@@ -83,7 +83,7 @@ impl SegmentKind {
 }
 
 /// What produced a segment's vector (Model.swift:38); scores normalize per modality.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Modality {
     None,
     Text,
