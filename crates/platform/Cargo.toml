@@ -1,0 +1,11 @@
+[package]
+name = "digup-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Per-OS file readers (Rust port): Apple frameworks vs PDFium/ffmpeg/stb/miniz. Scaffold — Phase 4+."
+
+[dependencies]
+digup-core = { workspace = true }

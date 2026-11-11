@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/runtime",
+    "crates/services",
+    "crates/cli",
+    "crates/server",
+    "crates/platform",
+]
+
+# digup-core: the pure-Rust engine port. The crate split mirrors ARCHITECTURE_MAP.md §3 so the
+# map stays the spec. Only `core` is implemented in Phase 1 (the rusqlite storage foundation);
+# the rest are scaffold stubs so the workspace builds end to end.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/Ocean572/DigUp"
+publish = false
+
+# Shared dependency versions, declared once (the repo convention from `worker/` and
+# `server/pyproject.toml`: pin, don't resolve ad-hoc per crate).
+[workspace.dependencies]
+digup-core = { path = "crates/core" }
+digup-runtime = { path = "crates/runtime" }
+digup-services = { path = "crates/services" }
+digup-platform = { path = "crates/platform" }
+
+# `bundled` compiles the SQLite amalgamation with FTS5 + JSON1 enabled — the same feature set
+# `scripts/fetch-vendor.sh` builds into Vendor/sqlite (SQLITE_ENABLE_FTS5). A port that lacks
+# FTS5 cannot create the `fts` virtual table; the schema test proves it is present.
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "2"
+unicode-normalization = "0.1"
+unicode-general-category = "1"
+tempfile = "3"

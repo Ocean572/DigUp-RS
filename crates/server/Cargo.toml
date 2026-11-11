@@ -1,0 +1,15 @@
+[package]
+name = "digup-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "HTTP /api/v1 wrapper (Rust port): FastAPI -> axum. Scaffold — Phase 6+."
+
+[[bin]]
+name = "digup-server"
+path = "src/main.rs"
+
+[dependencies]
+digup-core = { workspace = true }

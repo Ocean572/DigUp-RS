@@ -1,0 +1,11 @@
+[package]
+name = "digup-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "LlamaRuntime (Rust port): llama.cpp bindings + the 768x fp16 EmbeddingGemma 2 embedder. Scaffold — Phase 2+."
+
+[dependencies]
+digup-core = { workspace = true }

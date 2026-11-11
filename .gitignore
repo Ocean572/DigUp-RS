@@ -60,3 +60,8 @@ deploy/data-demo/
 # by FastAPI; the host copy is only for `npm run dev`/local preview.
 server/ui/dist/
 server/ui/node_modules/
+
+# The Rust workspace (digup-core port): cargo build output. Cargo.lock is committed (the
+# workspace ships binaries — cli + server — so the lockfile is part of a reproducible build).
+/target/
+**/*.rs.bk

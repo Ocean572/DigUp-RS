@@ -1,0 +1,18 @@
+[package]
+name = "digup-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The `digup` binary (Rust port): estimate/index/search/status/speed/eval + services. Scaffold — Phase 5+."
+
+[[bin]]
+name = "digup"
+path = "src/main.rs"
+
+[dependencies]
+digup-core = { workspace = true }
+digup-runtime = { workspace = true }
+digup-services = { workspace = true }
+digup-platform = { workspace = true }
