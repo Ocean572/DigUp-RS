@@ -41,6 +41,11 @@ tempfile = "3"
 memmap2 = "0.9"
 libc = "0.2"
 walkdir = "2"
+# Phase 2 step 8b (the doc readers): the Office zips inflate with the same RFC 1951 stream miniz
+# feeds the engine (`flate2`'s pure-Rust backend), and the HTML strip needs a regex engine that
+# supports case-insensitive class-free patterns the way Foundation's `NSRegularExpression` does.
+flate2 = "1"
+regex = "1"
 
 # Phase 2 (crates/runtime): the fp16 vector format the engine stores (`Vectors.swift`), the model
 # file pins (`ModelFiles.swift`), and the bindings for the vendored, pinned llama.cpp

@@ -94,6 +94,20 @@ fn foundation_escapes_the_slash_in_every_path() {
 }
 
 #[test]
+fn control_characters_take_the_short_forms_and_lowercase_hex() {
+    // Foundation's own bytes for the whole control range, measured by escprobe.swift: \b \t \n \f
+    // \r as short forms, the rest as `\u00xx` in LOWERCASE hex (0x0B → `\u000b`, 0x1A → `\u001a`);
+    // U+007F, U+2028, U+2029, U+FEFF and U+FFFD are written raw.
+    let mixed = "\u{09}\u{00}\u{08}\u{0B}\u{0C}\u{0D}\u{0A}";
+    assert_eq!(
+        line(json!({ "a": mixed })),
+        r#"{"a":"\t\u0000\b\u000b\f\r\n"}"#
+    );
+    let raw = "\u{7F}\u{2028}\u{2029}\u{FEFF}\u{FFFD}";
+    assert_eq!(line(json!({ "a": raw })), format!(r#"{{"a":"{raw}"}}"#));
+}
+
+#[test]
 fn keys_sort_in_foundations_localized_order() {
     // The order Foundation produced for this exact key set, measured on the same box.
     let want: &[&str] = &[

@@ -9,18 +9,24 @@
 pub mod code;
 pub mod crawler;
 pub mod db;
+pub mod doc;
 pub mod estimator;
 pub mod extract;
 pub mod index_store;
 pub mod jsonline;
+pub mod mail;
 pub mod model;
+pub mod office;
 pub mod options;
 pub mod paths;
+pub mod rtf;
 pub mod rules;
 pub mod schema;
 pub mod scoring;
 pub mod search_text;
 pub mod vectors;
+pub mod xmlscan;
+pub mod zipfile;
 
 pub use db::{Database, Error, Result, Sql};
 pub use index_store::{Counts, IndexStore, CODE_FILE, MAIN_FILE, SCHEMA_VERSION};

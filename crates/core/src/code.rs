@@ -528,11 +528,16 @@ fn path_components(path: &str) -> Vec<String> {
     parts
 }
 
-fn extension_of(path: &str) -> String {
+/// `URL.pathExtension` / `NSString.pathExtension`: the text after the LAST dot of the last path
+/// component. Foundation's quirks are kept — a leading dot does not make an empty extension
+/// (".hidden" is "hidden"), a trailing dot gives none, and a component with no dot has none.
+pub fn extension_of(path: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
+    // `NSString.pathExtension`: the text after the LAST dot in the last component — a dotfile
+    // ".hidden" has extension "hidden", and a name ending in a dot has none.
     match name.rfind('.') {
-        Some(index) if index > 0 => name[index + 1..].to_string(),
-        _ => String::new(),
+        Some(index) => name[index + 1..].to_string(),
+        None => String::new(),
     }
 }
 

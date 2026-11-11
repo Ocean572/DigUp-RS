@@ -8,8 +8,10 @@
 //! Measured against Swift 6.4 / Foundation on this box (`/tmp/opencode/jsonfmt`):
 //! * compact, no spaces; keys sorted by Foundation's localized order (`.sortedKeys`), which is
 //!   case-insensitive, numeric-aware, space before punctuation before digits before letters;
-//! * `/` is escaped as `\/`; control characters use `\n \r \t` and `\u00XX`, everything from
-//!   U+0020 up is written raw (as UTF-8), so non-ASCII folder names stay readable;
+//! * `/` is escaped as `\/`; the control characters use the short forms `\b \t \n \f \r` and,
+//!   for the rest of U+0000…U+001F, `\u00xx` in LOWERCASE hex (measured over all 32 of them by
+//!   `/tmp/opencode/doccheck/escprobe.swift`); `/`, `"`, `\`, U+007F, U+2028/9, U+FEFF and
+//!   U+FFFD up from U+0020 are written raw (as UTF-8), so non-ASCII folder names stay readable;
 //! * a number is the shortest decimal that reads back as the same double, in plain notation when
 //!   its leading digit sits between 10⁻⁴ and 10¹⁵ (both ends included) and as `1.23e+16`
 //!   otherwise, with an exponent of at least two digits; a whole double is written without a
@@ -72,7 +74,10 @@ fn write_string(text: &str, out: &mut String) {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            // The other control characters, in LOWERCASE hex (measured: `\u000b`, `\u001a`).
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
     }
