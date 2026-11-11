@@ -29,3 +29,7 @@ pub const INDEX_COMMANDS: [&str; 4] = ["sync", "sync code", "stop", "backfill on
 pub const INDEX_EVENTS: [&str; 10] = [
     "scanning", "sync", "file", "rest", "summary", "waiting", "idle", "error", "exit", "reindex",
 ];
+
+pub mod costs;
+pub mod speed;
+pub mod system_load;

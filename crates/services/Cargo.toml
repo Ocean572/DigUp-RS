@@ -9,3 +9,7 @@ description = "JSON-lines services (Rust port): search-service / index-service /
 
 [dependencies]
 digup-core = { workspace = true }
+digup-runtime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+libc = { workspace = true }

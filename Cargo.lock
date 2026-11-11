@@ -142,6 +142,7 @@ dependencies = [
  "digup-platform",
  "digup-runtime",
  "digup-services",
+ "serde_json",
 ]
 
 [[package]]
@@ -192,6 +193,10 @@ name = "digup-services"
 version = "0.1.0"
 dependencies = [
  "digup-core",
+ "digup-runtime",
+ "libc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
