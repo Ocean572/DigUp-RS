@@ -234,6 +234,29 @@ pub fn simple_lowercase(text: &str) -> String {
     text.chars().flat_map(|c| c.to_lowercase()).collect()
 }
 
+/// `replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)` — NSRE's `\s`
+/// is the White_Space property: every run becomes ONE space, leading and trailing runs
+/// kept, nothing is trimmed (measured, ⑩a `facts-re`: `" x "` for `" x  "`).
+pub fn collapse_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut space = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            space = true;
+            continue;
+        }
+        if space {
+            out.push(' ');
+        }
+        space = false;
+        out.push(c);
+    }
+    if space {
+        out.push(' ');
+    }
+    out
+}
+
 /// `text` normalized one Character at a time, remembering where each piece came from
 /// (SearchText.swift:125). Swift's Character is an extended grapheme cluster — a Bengali
 /// conjunct ("ক্ষ", one Character), a letter joined to its neighbor by ZWJ, an emoji with

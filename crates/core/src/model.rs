@@ -84,6 +84,22 @@ impl SegmentKind {
             SegmentKind::Cells => "cells",
         }
     }
+    /// `SegmentKind(rawValue:)` — the caller applies the Swift default (`.name` in `search`).
+    pub fn parse(s: &str) -> Option<SegmentKind> {
+        Some(match s {
+            "name" => SegmentKind::Name,
+            "image" => SegmentKind::Image,
+            "ocr" => SegmentKind::Ocr,
+            "page" => SegmentKind::Page,
+            "page_image" => SegmentKind::PageImage,
+            "chunk" => SegmentKind::Chunk,
+            "audio" => SegmentKind::Audio,
+            "frame" => SegmentKind::Frame,
+            "lines" => SegmentKind::Lines,
+            "cells" => SegmentKind::Cells,
+            _ => return None,
+        })
+    }
 }
 
 /// What produced a segment's vector (Model.swift:38); scores normalize per modality.
@@ -103,6 +119,16 @@ impl Modality {
             Modality::Image => "image",
             Modality::Audio => "audio",
         }
+    }
+    /// `Modality(rawValue:)` — `search`'s reload defaults an unknown string to `.none`.
+    pub fn parse(s: &str) -> Option<Modality> {
+        Some(match s {
+            "none" => Modality::None,
+            "text" => Modality::Text,
+            "image" => Modality::Image,
+            "audio" => Modality::Audio,
+            _ => return None,
+        })
     }
 }
 

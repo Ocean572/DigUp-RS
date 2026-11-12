@@ -88,6 +88,11 @@ impl<'a, 'b> RowView<'a, 'b> {
             Some(rusqlite::types::Type::Null)
         )
     }
+    /// `copyBlob`-style read of a BLOB column (the stored fp16 vectors); None when the column
+    /// is not a blob (NULL included) — the engine's `copyBlob` returns false there.
+    pub fn blob(&self, col: usize) -> Option<Vec<u8>> {
+        self.row.get::<_, Vec<u8>>(col).ok()
+    }
 }
 
 pub struct Database {
