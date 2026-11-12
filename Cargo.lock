@@ -209,9 +209,12 @@ dependencies = [
  "digup-native",
  "half",
  "hex",
+ "libc",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror",
  "unicode-segmentation",
 ]

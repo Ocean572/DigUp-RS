@@ -1,0 +1,5 @@
+A payment gateway keeps its receipts in a ledger it audits every night. When a charge fails twice in a row the gateway parks it, and a person reads the parked notes in the morning. Most of them are cards that expired mid-trip; a few are banks that went away for the night and came back friendly.
+
+The ledger is small on purpose. A clerk can read a week of it in an afternoon, and the clerk notices what a machine misses: the customer who calls from a landline, the invoice printed on a ship, the refund that should have been a discount.
+
+Nobody indexes the ledger for punishment. The index exists so that when a customer reads a line from an old letter aloud, somebody can find the letter, the charge, and the night the bank went away.

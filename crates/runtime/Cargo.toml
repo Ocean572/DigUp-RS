@@ -25,3 +25,10 @@ bindgen = { workspace = true }
 [dev-dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The ⑨ index suite: rebuilds the corpus (sha2), stamps mtimes (libc), replays the engine's
+# dumps through rusqlite, decodes fp16 vectors (half), and works in a temp folder (tempfile).
+libc = { workspace = true }
+rusqlite = { workspace = true }
+tempfile = { workspace = true }
+sha2 = { workspace = true }
+half = { workspace = true }

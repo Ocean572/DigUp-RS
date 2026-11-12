@@ -1,0 +1,17 @@
+From: Accounting <billing@northline.example>
+To: Sam <sam@example.com>
+Subject: December invoice reminder
+Date: Mon, 1 Dec 2026 09:30:00 +0100
+Content-Type: text/plain; charset=us-ascii
+Message-ID: <20261201093000.northline1@example.com>
+
+Hello,
+
+the December invoice of the storage contract arrived early this year, on the first of
+the month. The amount is the same as November: the ramp stayed open, the drives stayed
+quiet. Pay by the fifteenth as usual, and write to this address if the number reads
+odd; the ledger keeps the contract terms and will show what changed.
+
+The winter audit begins on the twentieth. Nothing for you to prepare.
+
+— Accounting, Northline Storage
