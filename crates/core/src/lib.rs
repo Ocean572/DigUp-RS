@@ -25,6 +25,7 @@ pub mod rules;
 pub mod schema;
 pub mod scoring;
 pub mod search_text;
+pub mod searcher;
 pub mod uuid;
 pub mod vectors;
 pub mod xmlscan;

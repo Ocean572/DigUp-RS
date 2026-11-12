@@ -1,0 +1,184 @@
+{"fn": "facts-sets", "id": "f001", "scalars": [95, 2494, 2509, 775, 8205, 160, 65039, 8232, 8551, 178, 1632, 12288, 5760, 8239, 133, 11, 12, 1648, 8288, 3633, 8233, 9, 10, 13, 1600, 2507, 2503, 7835, 304, 769, 128512, 10084, 1575, 1571, 3585, 3376, 2965, 2309, 2453, 3523, 1872, 2208, 65271, 65136]}
+{"fn": "facts-lower", "id": "f002", "s": "\u0130"}
+{"fn": "facts-lower", "id": "f003", "s": "\u03a3"}
+{"fn": "facts-lower", "id": "f004", "s": "\u039f\u0394\u03a5\u03a3\u03a3\u0395\u0399\u0391\u03a3"}
+{"fn": "facts-lower", "id": "f005", "s": "\u1e9b"}
+{"fn": "facts-lower", "id": "f006", "s": "\ufb00"}
+{"fn": "facts-lower", "id": "f007", "s": "\ufb01"}
+{"fn": "facts-lower", "id": "f008", "s": "\u01c5"}
+{"fn": "facts-lower", "id": "f009", "s": "\u03a3\u03a3"}
+{"fn": "facts-lower", "id": "f010", "s": "\u1e9e"}
+{"fn": "facts-lower", "id": "f011", "s": "\ufb05"}
+{"fn": "facts-lower", "id": "f012", "s": "\ufb03"}
+{"fn": "facts-lower", "id": "f013", "s": "\u03a9\u03a3"}
+{"fn": "facts-lower", "id": "f014", "s": "\u03c2"}
+{"fn": "facts-lower", "id": "f015", "s": "\u03a3\u03a4\u039f\u03a3"}
+{"fn": "facts-grapheme", "id": "f016", "s": "a\u200db"}
+{"fn": "facts-grapheme", "id": "f017", "s": "\u200d"}
+{"fn": "facts-grapheme", "id": "f018", "s": "\u2764\ufe0f"}
+{"fn": "facts-grapheme", "id": "f019", "s": "\u0995\u09be"}
+{"fn": "facts-grapheme", "id": "f020", "s": "\u0915\u093c"}
+{"fn": "facts-grapheme", "id": "f021", "s": "\u00a0"}
+{"fn": "facts-grapheme", "id": "f022", "s": "  "}
+{"fn": "facts-grapheme", "id": "f023", "s": "12"}
+{"fn": "facts-grapheme", "id": "f024", "s": "\u0301"}
+{"fn": "facts-grapheme", "id": "f025", "s": "\u0130"}
+{"fn": "facts-grapheme", "id": "f026", "s": "\ud83d\udc08\u200d\u2b1b"}
+{"fn": "facts-grapheme", "id": "f027", "s": "\u00e9"}
+{"fn": "facts-grapheme", "id": "f028", "s": " \u0301"}
+{"fn": "facts-grapheme", "id": "f029", "s": "\u00b2"}
+{"fn": "facts-grapheme", "id": "f030", "s": "\u2167"}
+{"fn": "facts-grapheme", "id": "f031", "s": "\u2474"}
+{"fn": "facts-grapheme", "id": "f032", "s": "1\u0301"}
+{"fn": "facts-grapheme", "id": "f033", "s": "\u09951"}
+{"fn": "facts-re", "id": "f034", "s": "a\u00a0b"}
+{"fn": "facts-re", "id": "f035", "s": "a\u3000b"}
+{"fn": "facts-re", "id": "f036", "s": "a\u200b b"}
+{"fn": "facts-re", "id": "f037", "s": "a\u0085b"}
+{"fn": "facts-re", "id": "f038", "s": "a\u2028b"}
+{"fn": "facts-re", "id": "f039", "s": "a\tb"}
+{"fn": "facts-re", "id": "f040", "s": "a\u202fb"}
+{"fn": "facts-re", "id": "f041", "s": "a\u1680b"}
+{"fn": "facts-re", "id": "f042", "s": "\u00a0x\u00a0"}
+{"fn": "facts-re", "id": "f043", "s": " x  "}
+{"fn": "facts-re", "id": "f044", "s": "\u00a0\u0301x"}
+{"fn": "facts-trim", "id": "f045", "s": " \u00a0 x \u3000"}
+{"fn": "facts-trim", "id": "f046", "s": "\u0085\u2028\u2029"}
+{"fn": "facts-trim", "id": "f047", "s": "\t\n\r\u000b\f x"}
+{"fn": "facts-trim", "id": "f048", "s": "  x  "}
+{"fn": "facts-trim", "id": "f049", "s": " \u0301x"}
+{"fn": "facts-trim", "id": "f050", "s": "x\u0301 "}
+{"fn": "facts-trim", "id": "f051", "s": "\u2028\u0301x"}
+{"fn": "matches", "id": "m052", "text": "\u09b6\u09be\u09ac\u09b2 \u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0 \u09aa\u09be\u09a8\u09bf", "word": "\u0995\u09c1\u09ae\u09bf\u09b0"}
+{"fn": "matches", "id": "m053", "text": "\u0995\u09c1\u09ae\u09bf\u09b0 \u09a6\u09c7\u0996\u09be \u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0", "word": "\u0995\u09c1\u09ae\u09bf\u09b0"}
+{"fn": "matches", "id": "m054", "text": "\u0986\u0995\u09c3\u09a4\u09bf \u0995\u09cd\u09b7 \u0997\u09cd\u09b0\u09be\u09ae", "word": "\u0995"}
+{"fn": "matches", "id": "m055", "text": "\u09a8\u09cb\u09a4\u09be\u09ae \u099b\u09ac\u09bf", "word": "\u09a8\u09cb\u099f"}
+{"fn": "matches", "id": "m056", "text": "\u09a8\u09cb\u099f \u09ac\u09be\u099c\u09be\u09b0", "word": "\u09a8\u09cb\u09a4"}
+{"fn": "matches", "id": "m057", "text": "\u09b8\u09cd\u0995\u09cd\u09b0\u09bf\u09a8\u09b6\u099f \u09a6\u09c7\u0996\u09be", "word": "\u09b8\u09cd\u0995\u09cd\u09b0\u09bf\u09a8"}
+{"fn": "matches", "id": "m058", "text": "\u0645\u062f\u0631\u0633\u0629 \u0643\u0628\u064a\u0631", "word": "\u09ae\u062f\u0631\u0633"}
+{"fn": "matches", "id": "m059", "text": "\u0635\u0648\u0631\u0629 \u0648\u0635\u0648\u0631\u064a\u0646", "word": "\u0635\u0648\u0631"}
+{"fn": "matches", "id": "m060", "text": "\u0645\u0640\u062f\u0631\u0633\u0629", "word": "\u0645\u062f\u0631"}
+{"fn": "matches", "id": "m061", "text": "\u064a\u064e\u0643\u0652\u062a\u064f\u0628\u064f \u0643\u062a\u0627\u0628", "word": "\u0643\u062a\u0628"}
+{"fn": "matches", "id": "m062", "text": "\u0627\u0644\u0623\u0645\u0644", "word": "\u0627\u0644\u0627\u0645"}
+{"fn": "matches", "id": "m063", "text": "Caf\u00e9 au lait, cafe", "word": "cafe"}
+{"fn": "matches", "id": "m064", "text": "caf\u00e9 r\u00e9sum\u00e9", "word": "resume"}
+{"fn": "matches", "id": "m065", "text": "a \ufb01le", "word": "file"}
+{"fn": "matches", "id": "m066", "text": "\u0130stanbul ve istanbul", "word": "istanbul"}
+{"fn": "matches", "id": "m067", "text": "\u1e9buchen", "word": "\u017f"}
+{"fn": "matches", "id": "m068", "text": "cat_cat cat", "word": "cat"}
+{"fn": "matches", "id": "m069", "text": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x ", "word": "x"}
+{"fn": "matches", "id": "m070", "text": "aaaa", "word": "aa"}
+{"fn": "matches", "id": "m071", "text": "abc", "word": ""}
+{"fn": "matches", "id": "m072", "text": "caf\u00e9", "word": "\u0301"}
+{"fn": "matches", "id": "m073", "text": "a\u200db and ab", "word": "ab"}
+{"fn": "matches", "id": "m074", "text": "\u039f\u0394\u03a5\u03a3\u03a3\u0395\u0399\u0391", "word": "\u03bf\u03b4\u03c5\u03c3\u03c3\u03b5\u03b1"}
+{"fn": "matches", "id": "m075", "text": "a123 123x 123", "word": "123"}
+{"fn": "matches", "id": "m076", "text": "\u2764\ufe0f text", "word": "\u2764"}
+{"fn": "matches", "id": "m077", "text": "cat\u00a0cat", "word": "cat"}
+{"fn": "matches", "id": "m078", "text": "\u09ae\u09be \u09ae\u09be\u09a4\u09be \u09ae", "word": "\u09ae\u09be"}
+{"fn": "matches", "id": "m079", "text": "b a\u200db", "word": "a\u200db"}
+{"fn": "matches", "id": "m080", "text": "\u0995\u09c1\u09ae\u09bf\u09b0 \u09aa\u09be\u09a8\u09bf", "word": "\u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0"}
+{"fn": "matches", "id": "m081", "text": "\u0645\u062f\u0631\u0633\u0629", "word": "\u09ae\u062f\u0631\u0633\u0629"}
+{"fn": "matches", "id": "m082", "text": "FILES", "word": "file"}
+{"fn": "matches", "id": "m083", "text": "AB ab Ab", "word": "ab"}
+{"fn": "matches", "id": "m084", "text": "Caf\u00e9 CAF\u00c9 cafe", "word": "\u00e9"}
+{"fn": "matches", "id": "m085", "text": "caf\u00e9", "word": "cafe"}
+{"fn": "matches", "id": "m086", "text": "\u0995\u09be\u0995", "word": "\u0995"}
+{"fn": "matches", "id": "m087", "text": "\u0995\u09be\u0995 \u0995\u09c1\u09ae\u09bf\u09b0", "word": "\u0995"}
+{"fn": "matches", "id": "m088", "text": "cat\u00a0cat\u00a0cat", "word": "cat"}
+{"fn": "snippet", "id": "s089", "terms": ["\u03b6\u03b8"], "text": "alpha beta gamma delta \u03b5\u03c6 \u03b6\u03b8 \u03ba\u03bb \u03bc\u03bd \u03be\u03bf \u03c0\u03c1 \u03c1\u03c3"}
+{"fn": "snippet", "id": "s090", "terms": ["cat"], "text": "cat sat mat"}
+{"fn": "snippet", "id": "s091", "terms": ["cat"], "text": "sat mat cat"}
+{"fn": "snippet", "id": "s092", "terms": ["cat", "sat"], "text": "cat sat cat sat cat"}
+{"fn": "snippet", "id": "s093", "terms": ["cat"], "text": "one two three four cat five six", "words": 3}
+{"fn": "snippet", "id": "s094", "terms": ["cat"], "text": "one two three four cat five six", "words": 1}
+{"fn": "snippet", "id": "s095", "terms": ["cat"], "text": "one two three four cat five six", "words": 0}
+{"fn": "snippet", "id": "s096", "terms": ["cat"], "text": "one two three four five six seven eight cat", "words": 4}
+{"fn": "snippet", "id": "s097", "terms": ["cat"], "text": "a   b  cat  d"}
+{"fn": "snippet", "id": "s098", "terms": ["dog"], "text": "sat mat dog"}
+{"fn": "snippet", "id": "s099", "terms": ["cat"], "text": "a\u200db cat\u00a0dog"}
+{"fn": "snippet", "id": "s100", "terms": ["\u0995\u09c1\u09ae\u09bf\u09b0"], "text": "\u09b6\u09be\u09ac\u09b2 \u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0 \u09aa\u09be\u09a8\u09bf \u09ad\u09be\u09b2\u09cb"}
+{"fn": "snippet", "id": "s101", "terms": ["cat"], "text": "  cat  "}
+{"fn": "snippet", "id": "s102", "terms": ["cat", "at"], "text": "catcat"}
+{"fn": "snippet", "id": "s103", "terms": ["caf\u00e9"], "text": "Caf\u00e9 bar"}
+{"fn": "snippet", "id": "s104", "terms": [], "text": "a b"}
+{"fn": "snippet", "id": "s105", "terms": ["cat"], "text": "a\nb cat"}
+{"fn": "snippet", "id": "s106", "terms": ["cat"], "text": "x y cat", "words": 2}
+{"fn": "snippet", "id": "s107", "terms": ["cat"], "text": "a\u200db c d e f cat g h i j k"}
+{"fn": "snippet", "id": "s108", "terms": ["\u0995"], "text": "\u0995"}
+{"fn": "snippet", "id": "s109", "terms": ["cat"], "text": "one two cat three four", "words": 2}
+{"fn": "snippet", "id": "s110", "terms": ["cat", "sat"], "text": "no words here"}
+{"fn": "terms", "id": "t111", "names": false, "text": "screenshot of kumir"}
+{"fn": "terms", "id": "t112", "names": false, "text": "the photo my file"}
+{"fn": "terms", "id": "t113", "names": false, "text": "\u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0 \u099b\u09ac\u09bf \u09ad\u09bf\u09a1\u09bf\u0993"}
+{"fn": "terms", "id": "t114", "names": false, "text": "a\u200db foo_bar ab1 K7Q2LM 4815162342 \u09ae\u09be"}
+{"fn": "terms", "id": "t115", "names": true, "text": "the photo in"}
+{"fn": "terms", "id": "t116", "names": false, "text": "\u0130"}
+{"fn": "terms", "id": "t117", "names": false, "text": "\u03a3"}
+{"fn": "terms", "id": "t118", "names": false, "text": "\ufb01le \ufb00"}
+{"fn": "terms", "id": "t119", "names": false, "text": "cat\u00a0dog"}
+{"fn": "terms", "id": "t120", "names": false, "text": "42 1 007"}
+{"fn": "terms", "id": "t121", "names": false, "text": "\u0995\u09c1\u09ae\u09bf\u09b0 \u0993 \u0997\u09be\u09a8"}
+{"fn": "terms", "id": "t122", "names": false, "text": "Name: K7Q2LM"}
+{"fn": "terms", "id": "t123", "names": false, "text": "a b c d ab abc"}
+{"fn": "terms", "id": "t124", "names": false, "text": "TRX-50 v2.1.0 x"}
+{"fn": "terms", "id": "t125", "names": false, "text": "\u1e9buchen \ufb01le"}
+{"fn": "ftsQuery", "id": "f126", "prefixLast": true, "text": "hello wor"}
+{"fn": "ftsQuery", "id": "f127", "prefixLast": true, "text": "kumir\u09c7\u09b0 \u0997\u09be\u09a8"}
+{"fn": "ftsQuery", "id": "f128", "prefixLast": false, "text": "the of"}
+{"fn": "ftsQuery", "id": "f129", "prefixLast": true, "text": "K7Q2LM 4815162342"}
+{"fn": "ftsQuery", "id": "f130", "prefixLast": true, "text": "\u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0 \u09aa\u09be\u09a8\u09bf"}
+{"fn": "ftsQuery", "id": "f131", "prefixLast": true, "text": "cat dog"}
+{"fn": "ftsQuery", "id": "f132", "prefixLast": false, "text": "cat dog"}
+{"fn": "kindHints", "id": "k133", "text": "screenshot of kumir"}
+{"fn": "kindHints", "id": "k134", "text": "photo and Videos"}
+{"fn": "kindHints", "id": "k135", "text": "\u09ad\u09bf\u09a1\u09bf\u0993\u09a4\u09c7 \u0997\u09be\u09a8"}
+{"fn": "kindHints", "id": "k136", "text": "\u09b8\u09cd\u0995\u09cd\u09b0\u09bf\u09a8\u09b6\u099f\u09c7\u09b0 \u099b\u09ac\u09bf"}
+{"fn": "kindHints", "id": "k137", "text": "\u0644\u0642\u0637\u0629 \u0634\u0627\u0634\u0629"}
+{"fn": "kindHints", "id": "k138", "text": "\u0645\u0642\u0637\u0639\u064a\u0646 \u0627\u063a\u0627\u0646\u064a"}
+{"fn": "kindHints", "id": "k139", "text": "paper notes video"}
+{"fn": "kindHints", "id": "k140", "text": "podcast voice sound"}
+{"fn": "kindHints", "id": "k141", "text": "\u099b\u09ac\u09bf"}
+{"fn": "kindHints", "id": "k142", "text": "\u0985\u09a1\u09bf\u0993"}
+{"fn": "kindHints", "id": "k143", "text": "\u09a8\u09cb\u099f\u09ac\u09c1\u0995"}
+{"fn": "kindHints", "id": "k144", "text": ""}
+{"fn": "kindHints", "id": "k145", "text": "movie clip"}
+{"fn": "kindHints", "id": "k146", "text": "\u0997\u09be\u09a8\u09c7\u09b0 \u09b0\u09c7\u0995\u09b0\u09cd\u09a1\u09bf\u0982"}
+{"fn": "kindHints", "id": "k147", "text": "\u0635\u0648\u0631 \u0645\u0633\u062a\u0646\u062f\u0627\u062a"}
+{"fn": "kindHints", "id": "k148", "text": "images"}
+{"fn": "isLookup", "id": "i149", "terms": ["k7q2lm"]}
+{"fn": "isLookup", "id": "i150", "terms": ["4815162342"]}
+{"fn": "isLookup", "id": "i151", "terms": ["a1"]}
+{"fn": "isLookup", "id": "i152", "terms": ["ab1"]}
+{"fn": "isLookup", "id": "i153", "terms": ["1"]}
+{"fn": "isLookup", "id": "i154", "terms": ["12"]}
+{"fn": "isLookup", "id": "i155", "terms": ["123"]}
+{"fn": "isLookup", "id": "i156", "terms": ["1234"]}
+{"fn": "isLookup", "id": "i157", "terms": ["k7q", "lm"]}
+{"fn": "isLookup", "id": "i158", "terms": ["\u09e7\u09e8"]}
+{"fn": "isLookup", "id": "i159", "terms": ["\u09e7\u09e8\u09e9\u09ea"]}
+{"fn": "isLookup", "id": "i160", "terms": ["\u2167"]}
+{"fn": "isLookup", "id": "i161", "terms": ["\u2167x"]}
+{"fn": "isLookup", "id": "i162", "terms": ["\u00b21"]}
+{"fn": "isLookup", "id": "i163", "terms": []}
+{"fn": "isLookup", "id": "i164", "terms": ["x9y"]}
+{"fn": "isLookup", "id": "i165", "terms": ["0x1f"]}
+{"fn": "isLookup", "id": "i166", "terms": ["TRX50"]}
+{"fn": "nameQuery", "id": "n167", "query": "name: foo"}
+{"fn": "nameQuery", "id": "n168", "query": "NAME:"}
+{"fn": "nameQuery", "id": "n169", "query": "  name:  a b  "}
+{"fn": "nameQuery", "id": "n170", "query": "nam"}
+{"fn": "nameQuery", "id": "n171", "query": "name"}
+{"fn": "nameQuery", "id": "n172", "query": "name:  "}
+{"fn": "nameQuery", "id": "n173", "query": "name:\u00a0x\u00a0"}
+{"fn": "nameQuery", "id": "n174", "query": "name:x\n"}
+{"fn": "nameQuery", "id": "n175", "query": "nAmE:x"}
+{"fn": "nameQuery", "id": "n176", "query": "namex"}
+{"fn": "nameQuery", "id": "n177", "query": "name::"}
+{"fn": "nameQuery", "id": "n178", "query": "name:a\u200db"}
+{"fn": "nameQuery", "id": "n179", "query": "name:  \u2028  "}
+{"fn": "nameQuery", "id": "n180", "query": "name:\u000b x \f"}
+{"fn": "nameQuery", "id": "n181", "query": " \u00a0name: x"}
+{"fn": "nameQuery", "id": "n182", "query": "name: \u2028\u0301x"}
+{"fn": "nameQuery", "id": "n183", "query": "name:\u0301x"}
+{"fn": "nameQuery", "id": "n184", "query": "name:x\u0301"}
