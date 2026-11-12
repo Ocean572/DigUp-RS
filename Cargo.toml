@@ -63,3 +63,8 @@ hex = "0.4"
 bindgen = { version = "0.73", features = ["runtime"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Phase 4 (the axum server): the HTTP layer the FastAPI wrapper is replaced by. tokio is the
+# runtime the axum handlers run on; the JSON-lines helper client blocks on pipes, so its calls
+# run through `spawn_blocking` — the helper processes are the engine's, unchanged.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }

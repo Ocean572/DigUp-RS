@@ -95,6 +95,14 @@ fn main() {
         digup_runtime::set_cpu_only(true);
     }
     match command {
+        Some("status") => {
+            // `status(...)` (main.swift:398): the engine's own words — the server
+            // parses these lines, so the shape is the contract.
+            if let Err(e) = status(&args) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("speed") => {
             if let Err(e) = speed(&args) {
                 eprintln!("error: {e}");
@@ -174,6 +182,8 @@ fn main() {
         _ => selftest(&args),
     }
 }
+
+mod formats;
 
 fn parse(argv: &[String]) -> Result<Arguments, String> {
     let mut flags = Vec::new();
@@ -627,6 +637,72 @@ fn model_speed(args: &Arguments) -> Result<(), String> {
 /// `estimate` (main.swift:212-300): what indexing these folders will cost here, from
 /// metadata alone. Costs come from what indexing has measured on this machine
 /// (`MeasuredCosts`); until then the M4 Pro's fixed numbers, scaled by the speed check.
+/// `status(_:)` (main.swift:398): the CLI's own status text — the index path,
+/// vector + segment counts, the per-kind table, the fingerprint, this build's
+/// tag, the bytes on disk. `formats.rs` pins the exact shapes; the server
+/// parses these lines and shows the engine's words, so a line this port
+/// cannot produce is a line the server must not fake.
+fn status(args: &Arguments) -> digup_core::db::Result<()> {
+    use digup_core::model::FileKind;
+    let store = digup_core::IndexStore::open(&args.index_folder(), digup_core::MAIN_FILE)?;
+    let counts = store.counts()?;
+    let home = std::env::var("HOME").unwrap_or_default();
+    println!(
+        "index: {}",
+        formats::tilde(&store.file.to_string_lossy(), &home)
+    );
+    println!(
+        "vectors: {} in {} segments",
+        formats::number(counts.vectors),
+        formats::number(counts.segments)
+    );
+    for kind in [
+        FileKind::Screenshot,
+        FileKind::Image,
+        FileKind::Pdf,
+        FileKind::Doc,
+        FileKind::Audio,
+        FileKind::Video,
+        FileKind::Code,
+    ] {
+        let Some(states) = counts.by_kind_and_state.get(kind.as_str()) else {
+            continue; // a kind with no rows prints no line (Swift's `guard let … else continue`)
+        };
+        let total: i64 = states.values().sum();
+        println!(
+            "  {} {}   {}",
+            formats::pad(kind.as_str(), 11),
+            formats::lpad(&formats::number(total), 6),
+            formats::states_line(states)
+        );
+    }
+    if counts.unfinished > 0 {
+        println!(
+            "long files still being read: {} ({} pages and chunks left)",
+            formats::number(counts.unfinished),
+            formats::number(counts.left)
+        );
+    }
+    if let Some(fingerprint) = store.meta("fingerprint")? {
+        println!("built with: {fingerprint}");
+    }
+    println!(
+        "this digup: llama.cpp {}, vectors {}",
+        digup_runtime::build_tag(),
+        digup_runtime::VECTOR_VERSION
+    );
+    // `IndexStore.size(of:)`: the database and its write-ahead log.
+    let mut size = 0i64;
+    for path in [
+        store.file.clone(),
+        std::path::PathBuf::from(format!("{}-wal", store.file.to_string_lossy())),
+    ] {
+        size += std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+    }
+    println!("size: {}", formats::file_size(size));
+    Ok(())
+}
+
 fn estimate(args: &Arguments) -> Result<(), String> {
     if args.positional.len() < 2 {
         return Err("which folders? e.g. digup estimate ~/Documents".to_string());
