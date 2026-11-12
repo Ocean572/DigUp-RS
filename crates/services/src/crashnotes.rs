@@ -69,7 +69,7 @@ pub fn install(folder: &Path) {
         libc::SIGSEGV,
         libc::SIGTRAP,
     ] {
-        unsafe { libc::signal(sig, crash_note_and_reraise as libc::sighandler_t) };
+        unsafe { libc::signal(sig, crash_note_and_reraise as *const () as libc::sighandler_t) };
     }
 }
 

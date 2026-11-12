@@ -14,6 +14,7 @@ pub mod db;
 pub mod doc;
 pub mod estimator;
 pub mod extract;
+pub mod folder_selection;
 pub mod index_store;
 pub mod jsonline;
 pub mod mail;

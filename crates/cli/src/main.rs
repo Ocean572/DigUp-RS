@@ -111,6 +111,23 @@ fn main() {
             let text_only = args.flags.iter().any(|flag| flag == "--text-only");
             std::process::exit(digup_services::worker::worker_service(text_only));
         }
+        Some("search-service") => {
+            // searchService(_:) (SearchService.swift:379): the folders as the
+            // daemon sees them, the idle seconds as the shell asked (`--encoder-idle`).
+            let config = digup_services::search_service::SearchConfig {
+                index: args.index_folder(),
+                roots: args.positional[1..].iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
+                skipped: args.list("--exclude").iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
+                types: digup_core::options::IndexOptions::extensions(&args.list("--exclude-ext").join(",")),
+                code_roots: args.list("--code-root").iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
+                code_skipped: args.list("--code-exclude").iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
+                idle_seconds: args
+                    .value("--encoder-idle")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(300.0),
+            };
+            std::process::exit(digup_services::search_service::serve(config));
+        }
         _ => selftest(&args),
     }
 }

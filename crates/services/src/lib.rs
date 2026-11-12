@@ -34,6 +34,7 @@ pub mod costs;
 pub mod crashnotes;
 pub mod emit;
 pub mod parentwatch;
+pub mod search_service;
 pub mod sharedembedder;
 pub mod speed;
 pub mod system_load;
