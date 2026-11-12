@@ -182,3 +182,132 @@
 {"fn": "nameQuery", "id": "n182", "query": "name: \u2028\u0301x"}
 {"fn": "nameQuery", "id": "n183", "query": "name:\u0301x"}
 {"fn": "nameQuery", "id": "n184", "query": "name:x\u0301"}
+{"fn": "identifier", "id": "i185", "query": "quantize_row_q8_0_ref"}
+{"fn": "identifier", "id": "i186", "query": "K7Q2LM"}
+{"fn": "identifier", "id": "i187", "query": "retry"}
+{"fn": "identifier", "id": "i188", "query": "Renamer"}
+{"fn": "identifier", "id": "i189", "query": "UIView"}
+{"fn": "identifier", "id": "i190", "query": "viewDidLoad"}
+{"fn": "identifier", "id": "i191", "query": "NSLayoutConstraint"}
+{"fn": "identifier", "id": "i192", "query": "ObjC.msgSend"}
+{"fn": "identifier", "id": "i193", "query": "a::b"}
+{"fn": "identifier", "id": "i194", "query": "a->b"}
+{"fn": "identifier", "id": "i195", "query": "a#b"}
+{"fn": "identifier", "id": "i196", "query": "foo()"}
+{"fn": "identifier", "id": "i197", "query": "Foo()"}
+{"fn": "identifier", "id": "i198", "query": "foo.bar"}
+{"fn": "identifier", "id": "i199", "query": "TRX-50"}
+{"fn": "identifier", "id": "i200", "query": "4815162342"}
+{"fn": "identifier", "id": "i201", "query": "$var"}
+{"fn": "identifier", "id": "i202", "query": "_x"}
+{"fn": "identifier", "id": "i203", "query": "a1"}
+{"fn": "identifier", "id": "i204", "query": "x"}
+{"fn": "identifier", "id": "i205", "query": "MyVar()"}
+{"fn": "identifier", "id": "i206", "query": "ABC"}
+{"fn": "identifier", "id": "i207", "query": "\u0130stemci"}
+{"fn": "identifier", "id": "i208", "query": "Get\u0130stemci"}
+{"fn": "identifier", "id": "i209", "query": "  foo_bar  \n"}
+{"fn": "identifier", "id": "i210", "query": "foo() bar"}
+{"fn": "identifier", "id": "i211", "query": "a_b()"}
+{"fn": "identifier", "id": "i212", "query": "foo(1)"}
+{"fn": "identifier", "id": "i213", "query": "::foo"}
+{"fn": "identifier", "id": "i214", "query": "foo::"}
+{"fn": "identifier", "id": "i215", "query": "Foo::Bar::baz"}
+{"fn": "identifier", "id": "i216", "query": "obj.method()->x"}
+{"fn": "identifier", "id": "i217", "query": "()"}
+{"fn": "identifier", "id": "i218", "query": ""}
+{"fn": "identifier", "id": "i219", "query": "  "}
+{"fn": "identifier", "id": "i220", "query": "a*b"}
+{"fn": "identifier", "id": "i221", "query": ".foo"}
+{"fn": "identifier", "id": "i222", "query": "ggml-cuda"}
+{"fn": "identifier", "id": "i223", "query": "Foo.bar()"}
+{"fn": "identifier", "id": "i224", "query": "get8"}
+{"fn": "identifier", "id": "i225", "query": "1a"}
+{"fn": "identifier", "id": "i226", "query": "std::vector<int>"}
+{"fn": "identifier", "id": "i227", "query": "#define"}
+{"fn": "identifier", "id": "i228", "query": "x\u0661\u0662"}
+{"fn": "identifier", "id": "i229", "query": "ggml_llama_model_free"}
+{"fn": "identifier", "id": "i230", "query": "llama_model_load()"}
+{"fn": "identifier", "id": "i231", "query": "\u91cf\u5316"}
+{"fn": "identifier", "id": "i232", "query": "foo\n"}
+{"fn": "identifier", "id": "i233", "query": "foo\u00a0"}
+{"fn": "identifier", "id": "i234", "query": "foo bar"}
+{"fn": "phrase", "id": "p235", "words": ["quantize", "row", "q8", "0", "ref"]}
+{"fn": "phrase", "id": "p236", "words": []}
+{"fn": "phrase", "id": "p237", "words": ["a"]}
+{"fn": "definesSomething", "id": "d238", "word": "def"}
+{"fn": "definesSomething", "id": "d239", "word": "let"}
+{"fn": "definesSomething", "id": "d240", "word": "var"}
+{"fn": "definesSomething", "id": "d241", "word": "const"}
+{"fn": "definesSomething", "id": "d242", "word": "val"}
+{"fn": "definesSomething", "id": "d243", "word": "#define"}
+{"fn": "definesSomething", "id": "d244", "word": "function*"}
+{"fn": "definesSomething", "id": "d245", "word": "@implementation"}
+{"fn": "definesSomething", "id": "d246", "word": "retry"}
+{"fn": "definesSomething", "id": "d247", "word": "DEF"}
+{"fn": "definesSomething", "id": "d248", "word": "Def"}
+{"fn": "definesSomething", "id": "d249", "word": ""}
+{"fn": "definesSomething", "id": "d250", "word": "func"}
+{"fn": "definesSomething", "id": "d251", "word": "class"}
+{"fn": "definesSomething", "id": "d252", "word": "@interface"}
+{"fn": "definesSomething", "id": "d253", "word": "struct"}
+{"first": 10, "fn": "definition", "id": "d254", "name": "ctx", "text": "static int gguf_add_ctx(struct gguf_context * ctx) {"}
+{"first": 10, "fn": "definition", "id": "d255", "name": "add", "text": "int add(int a) {"}
+{"first": 10, "fn": "definition", "id": "d256", "name": "add", "text": "int add(int a);"}
+{"first": 10, "fn": "definition", "id": "d257", "name": "retry_with_backoff", "text": "def retry_with_backoff(retries):"}
+{"first": 10, "fn": "definition", "id": "d258", "name": "quantize", "text": "func quantize() {"}
+{"first": 10, "fn": "definition", "id": "d259", "name": "foo", "text": "let foo = 1"}
+{"first": 10, "fn": "definition", "id": "d260", "name": "foo", "text": "return foo()"}
+{"first": 10, "fn": "definition", "id": "d261", "name": "foo", "text": "foo();"}
+{"first": 10, "fn": "definition", "id": "d262", "name": "name", "text": "p->name(x)"}
+{"first": 10, "fn": "definition", "id": "d263", "name": "name", "text": "x = name(1)"}
+{"first": 10, "fn": "definition", "id": "d264", "name": "name", "text": "obj.name(x)"}
+{"first": 10, "fn": "definition", "id": "d265", "name": "name", "text": "int name(void);"}
+{"first": 10, "fn": "definition", "id": "d266", "name": "name", "text": "int name(void) { return 1; }"}
+{"first": 10, "fn": "definition", "id": "d267", "name": "quantize", "text": "func (t *T) quantize() {"}
+{"first": 10, "fn": "definition", "id": "d268", "name": "name", "text": "- (void)name {"}
+{"first": 10, "fn": "definition", "id": "d269", "name": "name", "text": "- (void)name;"}
+{"first": 10, "fn": "definition", "id": "d270", "name": "name", "text": "- (void)name:"}
+{"first": 10, "fn": "definition", "id": "d271", "name": "name", "text": "- (void)name = 1"}
+{"first": 10, "fn": "definition", "id": "d272", "name": "name", "text": "+ (int)name(void)"}
+{"first": 10, "fn": "definition", "id": "d273", "name": "foo", "text": "foo(1);\ndef foo(a):"}
+{"first": 10, "fn": "definition", "id": "d274", "name": "foo", "text": "int foo(x);\nfoo(y);"}
+{"first": 10, "fn": "definition", "id": "d275", "name": "foo", "text": "Foo(int a) {"}
+{"first": 10, "fn": "definition", "id": "d276", "name": "foo", "text": "food(x)"}
+{"first": 10, "fn": "definition", "id": "d277", "name": "foo", "text": "foo_bar(x)"}
+{"first": 10, "fn": "definition", "id": "d278", "name": "foo", "text": "foo$bar(x)"}
+{"first": 10, "fn": "definition", "id": "d279", "name": "foo", "text": "foo(bar)"}
+{"first": 10, "fn": "definition", "id": "d280", "name": "foo", "text": "x foo(bar)"}
+{"first": 10, "fn": "definition", "id": "d281", "name": "foo", "text": "x foo(bar);"}
+{"first": 10, "fn": "definition", "id": "d282", "name": "\u0995\u09c1\u09ae\u09bf\u09b0", "text": "\u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0 \u09aa\u09be\u09a8\u09bf"}
+{"first": 10, "fn": "definition", "id": "d283", "name": "\u0995\u09c1\u09ae\u09bf\u09b0", "text": "int \u0995\u09c1\u09ae\u09bf\u09b0(int a) {"}
+{"first": 10, "fn": "definition", "id": "d284", "name": "gguf_free", "text": "\n\ngguf_free(g);\n"}
+{"first": 10, "fn": "definition", "id": "d285", "name": "foo", "text": "int foo(x);\rdef bar(y) {"}
+{"first": 10, "fn": "definition", "id": "d286", "name": "foo", "text": "int foo"}
+{"first": 10, "fn": "definition", "id": "d287", "name": "foo", "text": "a\r\nint foo(x);"}
+{"first": 10, "fn": "definition", "id": "d288", "name": "foo", "text": ""}
+{"first": 10, "fn": "definition", "id": "d289", "name": "FOO", "text": "#define FOO 1"}
+{"first": 10, "fn": "definition", "id": "d290", "name": "bar", "text": "@implementation Foo\n- (void)bar {"}
+{"first": 10, "fn": "firstLine", "id": "f291", "text": "// retry with backoff\ndef retry_with_backoff(r):\n", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f292", "text": "# retry me\n# retry you", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f293", "text": "x = retry(a)\n# retry", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f294", "text": "x y z w retry", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f295", "text": "def a retry(a)", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f296", "text": "getRetry()", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f297", "text": "retry", "words": ["re"]}
+{"first": 10, "fn": "firstLine", "id": "f298", "text": "quantize_row_q8_0_ref(a) {", "words": ["q8", "ref"]}
+{"first": 10, "fn": "firstLine", "id": "f299", "text": "\u0995\u09c1\u09ae\u09bf\u09b0\u09c7\u09b0 \u09aa\u09be\u09a8\u09bf", "words": ["\u0995\u09c1\u09ae\u09bf\u09b0"]}
+{"first": 10, "fn": "firstLine", "id": "f300", "text": "category", "words": ["cat"]}
+{"first": 10, "fn": "firstLine", "id": "f301", "text": "\tdef retry() {", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f302", "text": "def\u00a0retry(a)", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f303", "text": "x1", "words": ["x1"]}
+{"first": 10, "fn": "firstLine", "id": "f304", "text": "retry\n\nretry", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f305", "text": "go()", "words": ["go"]}
+{"first": 10, "fn": "firstLine", "id": "f306", "text": "x = go()", "words": ["go"]}
+{"first": 10, "fn": "firstLine", "id": "f307", "text": "/* retry */\ndef retry()", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f308", "text": "bb\na", "words": ["a", "bb"]}
+{"first": 10, "fn": "firstLine", "id": "f309", "text": "let retry = 1", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f310", "text": "retrying work", "words": ["retry"]}
+{"first": 10, "fn": "firstLine", "id": "f311", "text": "retrying work", "words": ["ing"]}
+{"first": 10, "fn": "firstLine", "id": "f312", "text": "Get\u0130stemci", "words": ["\u0130"]}
+{"first": 10, "fn": "firstLine", "id": "f313", "text": "Get\u0130stemci", "words": ["istemci"]}

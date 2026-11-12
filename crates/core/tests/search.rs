@@ -1,11 +1,13 @@
-//! ⑩a pinned suite: the query-side statics — `SearchText.matches`/`snippet`, the
-//! `Folded` origins, `Searcher.terms`/`patterns`/`ftsQuery`/`kindHints`/`isLookup` and
-//! `NameQuery.text` — replayed against the Swift engine's own answers
+//! ⑩a+⑩b pinned suite: the query-side statics — `SearchText.matches`/`snippet`, the
+//! `Folded` origins, `Searcher.terms`/`patterns`/`ftsQuery`/`kindHints`/`isLookup`,
+//! `NameQuery.text` and the `CodeLookup` family (`identifier`/`phrase`/`definesSomething`/
+//! `definition`/`firstLine`) — replayed against the Swift engine's own answers
 //! (`fixtures/search-expected.jsonl`), measured host-to-host on the ⑩a cross-check probe
 //! (`/tmp/opencode/searchcheck`, the same swift-6.4.0 toolchain the container runs) over
-//! `fixtures/search-scenarios.jsonl` (184 scenarios: Bengali, Arabic, Greek, Turkish,
+//! `fixtures/search-scenarios.jsonl` (313 scenarios: Bengali, Arabic, Greek, Turkish,
 //! ligatures, ZWJ-joined graphemes, variation selectors, combining marks, the 500-match
-//! cap, codes and IDs, NBSP/ideographic/thin spaces, line controls).
+//! cap, codes and IDs, NBSP/ideographic/thin spaces, line controls, and the code shapes
+//! `CodeLookup` reads: C/Go/ObjC/Python/Swift definition lines, comments, camel words).
 //!
 //! The `facts-*` scenarios pin the Foundation semantics the port's predicates model —
 //! measured on corelibs 6.4 (Linux), they are the engine's ground truth for:
@@ -18,14 +20,21 @@
 //! "  ́x"→"́x"), and `.whitespacesAndNewlines` = the Zs separators + tab + the line
 //! controls (NBSP in, ZWSP not).
 //!
+//! The ⑩b scenarios pin the code lookup and its search's unit semantics: swift-corelibs
+//! `String.range(of:)` (plain and `.caseInsensitive`) searches UTF-16 SCALAR windows and
+//! bridges a hit to Character (grapheme) boundaries moving UP to the end of the
+//! containing grapheme — measured on "কুমির" in "কুমিরের" (whose graphemes split
+//! ক|ু|ম|ি|রে): the scalar window matches where a grapheme window would not.
+//!
 //! Numbers compare by value (Swift's JSONSerialization writes whole Doubles as integers,
 //! serde_json keeps `.0` — every number reads as an f64 before comparing, the equality
-//! the measured gate used). The gate is 0 differing lines out of 184.
+//! the measured gate used). The gate is 0 differing lines out of 313.
 
 use std::collections::BTreeSet;
 
+use digup_core::code_lookup;
 use digup_core::model::{FileKind, NameQuery};
-use digup_core::search_text::{self as st, is_alphanumeric_scalar};
+use digup_core::search_text::{self as st, is_alphanumeric_scalar, is_letter_character};
 use digup_core::searcher;
 use serde_json::{json, Value};
 use unicode_general_category::{get_general_category, GeneralCategory};
@@ -163,6 +172,26 @@ fn answer(sc: &Value) -> Value {
         }
         "isLookup" => json!({"out": searcher::is_lookup(&strings_of(sc, "terms"))}),
         "nameQuery" => json!({"out": NameQuery::text_of(&string_of(sc, "query"))}),
+        "identifier" => json!({"words": code_lookup::identifier(&string_of(sc, "query"))}),
+        "phrase" => json!({"out": code_lookup::phrase(&strings_of(sc, "words"))}),
+        "definesSomething" => {
+            json!({"out": code_lookup::defines_something(&string_of(sc, "word"))})
+        }
+        "definition" => match code_lookup::definition(
+            &string_of(sc, "name"),
+            &string_of(sc, "text"),
+            sc["first"].as_i64().expect("a first line"),
+        ) {
+            Some((line, strength)) => json!({"out": {"line": line, "strength": strength}}),
+            None => json!({"out": null}),
+        },
+        "firstLine" => json!({
+            "out": code_lookup::first_line(
+                &strings_of(sc, "words"),
+                &string_of(sc, "text"),
+                sc["first"].as_i64().expect("a first line"),
+            ),
+        }),
         "facts-sets" => {
             let chars: Vec<char> = sc["scalars"]
                 .as_array()
@@ -190,7 +219,7 @@ fn answer(sc: &Value) -> Value {
             json!({
                 "ws": firsts.iter().map(|c| c.is_whitespace()).collect::<Vec<bool>>(),
                 "number": firsts.iter().map(|c| is_number_category(*c)).collect::<Vec<bool>>(),
-                "letter": firsts.iter().map(|c| searcher::is_letter_character(*c)).collect::<Vec<bool>>(),
+                "letter": firsts.iter().map(|c| is_letter_character(*c)).collect::<Vec<bool>>(),
                 "count": s.graphemes(true).count(),
                 "graphemes": s.graphemes(true)
                     .map(|g| g.chars().map(|c| c as u32).collect::<Vec<u32>>())

@@ -128,6 +128,105 @@ pub(crate) fn is_letter_mark_number(c: char) -> bool {
     )
 }
 
+/// Foundation's `CharacterSet.letters` membership (`SearchText.hasWords` counts letters):
+/// the Letters and the combining Marks — the Numbers are NOT letters (measured, ⑩a
+/// `facts-sets`).
+pub fn is_letter_mark(c: char) -> bool {
+    matches!(
+        get_general_category(c),
+        GeneralCategory::UppercaseLetter
+            | GeneralCategory::LowercaseLetter
+            | GeneralCategory::TitlecaseLetter
+            | GeneralCategory::ModifierLetter
+            | GeneralCategory::OtherLetter
+            | GeneralCategory::NonspacingMark
+            | GeneralCategory::SpacingMark
+            | GeneralCategory::EnclosingMark
+    )
+}
+
+/// Swift's `Character.isNumber` on a Character's **first scalar** (measured, ⑩a
+/// `facts-grapheme`): Nd ∪ Nl ∪ No.
+pub fn is_number_character(c: char) -> bool {
+    matches!(
+        get_general_category(c),
+        GeneralCategory::DecimalNumber
+            | GeneralCategory::LetterNumber
+            | GeneralCategory::OtherNumber
+    )
+}
+
+/// Swift's `Character.isLetter` on a Character's **first scalar** (measured, ⑩a
+/// `facts-grapheme`): the Letters, the Spacing and Enclosing Marks (a Bengali matra is a
+/// letter) and the Letter Numbers (`Ⅷ`) — NOT the Nd digits, the No symbols, NOT the Mn
+/// combining marks.
+pub fn is_letter_character(c: char) -> bool {
+    matches!(
+        get_general_category(c),
+        GeneralCategory::UppercaseLetter
+            | GeneralCategory::LowercaseLetter
+            | GeneralCategory::TitlecaseLetter
+            | GeneralCategory::ModifierLetter
+            | GeneralCategory::OtherLetter
+            | GeneralCategory::SpacingMark
+            | GeneralCategory::EnclosingMark
+            | GeneralCategory::LetterNumber
+    )
+}
+
+/// Swift's `Character.isUppercase` / `isLowercase` on the first scalar.
+pub fn is_uppercase_character(c: char) -> bool {
+    get_general_category(c) == GeneralCategory::UppercaseLetter
+}
+
+pub fn is_lowercase_character(c: char) -> bool {
+    get_general_category(c) == GeneralCategory::LowercaseLetter
+}
+
+/// Foundation's `CharacterSet.whitespaces` (measured, ⑩a): the space separators (Zs —
+/// NBSP and the thin/ideographic spaces are in) plus the tab. Newlines are NOT in it.
+pub fn is_whitespace_set(c: char) -> bool {
+    c == '\t' || get_general_category(c) == GeneralCategory::SpaceSeparator
+}
+
+/// Foundation's `CharacterSet.whitespacesAndNewlines`: `.whitespaces` plus the line
+/// controls (LF, VT, FF, CR, NEL, LS, PS) (measured, ⑩a: NBSP IS in, ZWSP is NOT).
+pub fn is_whitespace_newline_set(c: char) -> bool {
+    is_whitespace_set(c)
+        || matches!(
+            c,
+            '\n' | '\u{0B}' | '\u{0C}' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        )
+}
+
+/// Swift's `trimmingCharacters(in:)` (swift-corelibs): the leading and trailing runs of
+/// SCALARS the set contains drop — graphemes do not move as units, a leading combining
+/// mark survives the space that preceded it (measured, ⑩a `facts-trim`).
+fn trim_by(text: &str, in_set: fn(char) -> bool) -> &str {
+    let start = text
+        .char_indices()
+        .find(|(_, c)| !in_set(*c))
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    let end = text
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !in_set(*c))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(start);
+    &text[start..end]
+}
+
+/// `trimmingCharacters(in: .whitespaces)`.
+pub fn trim_whitespaces(text: &str) -> &str {
+    trim_by(text, is_whitespace_set)
+}
+
+/// `trimmingCharacters(in: .whitespacesAndNewlines)`.
+pub fn trim_whitespaces_newlines(text: &str) -> &str {
+    trim_by(text, is_whitespace_newline_set)
+}
+
 /// `String.lowercased()` as Foundation spells it: the per-character lowercase mappings,
 /// context-free — no Greek final-sigma rule (measured: `"ΣΣ".lowercased() == "σσ"`, where
 /// Rust's `str::to_lowercase` writes `"σς"`). The full mappings ride (ß, ﬁ→fi, İ→i + U+0307).

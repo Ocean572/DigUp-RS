@@ -10,38 +10,13 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::OnceLock;
 
-use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::model::FileKind;
-use crate::search_text::{inflects, is_alphanumeric_scalar, normalized, simple_lowercase};
-
-fn is_number_category(c: char) -> bool {
-    matches!(
-        get_general_category(c),
-        GeneralCategory::DecimalNumber
-            | GeneralCategory::LetterNumber
-            | GeneralCategory::OtherNumber
-    )
-}
-
-/// Swift's `Character.isLetter` as measured (⑩a `facts-grapheme`): the Letters, the
-/// Spacing and Enclosing Marks (the Bengali matra is a letter) and the Letter Numbers
-/// (`Ⅷ`) — NOT the Nd digits, the No symbols, NOT the Mn combining marks. Apply it to
-/// the first scalar of a Character; `Character.isNumber` is `is_number_category`.
-pub fn is_letter_character(c: char) -> bool {
-    matches!(
-        get_general_category(c),
-        GeneralCategory::UppercaseLetter
-            | GeneralCategory::LowercaseLetter
-            | GeneralCategory::TitlecaseLetter
-            | GeneralCategory::ModifierLetter
-            | GeneralCategory::OtherLetter
-            | GeneralCategory::SpacingMark
-            | GeneralCategory::EnclosingMark
-            | GeneralCategory::LetterNumber
-    )
-}
+use crate::search_text::{
+    inflects, is_alphanumeric_scalar, is_letter_character, is_number_character, normalized,
+    simple_lowercase,
+};
 
 fn stopwords() -> &'static HashSet<&'static str> {
     static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
@@ -274,7 +249,7 @@ pub fn is_lookup(terms: &[String]) -> bool {
                 .graphemes(true)
                 .filter_map(|g| g.chars().next())
                 .collect();
-            let has_number = firsts.iter().any(|c| is_number_category(*c));
+            let has_number = firsts.iter().any(|&c| is_number_character(c));
             if !has_number {
                 return false;
             }

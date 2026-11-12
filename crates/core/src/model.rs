@@ -12,6 +12,8 @@ use std::path::Path;
 
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::search_text::trim_whitespaces_newlines;
+
 /// What a file is, for indexing and grouping (Model.swift:4). Raw value == the `kind` column text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FileKind {
@@ -245,32 +247,10 @@ pub fn bucket_ranges(under: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Foundation's `.whitespacesAndNewlines` as measured on the ⑩a probe: `.whitespaces`
-/// (the Unicode space separators Zs — NBSP, ideographic space, the thin spaces — plus the
-/// tab) union the line controls (LF, VT, FF, CR, NEL, LS, PS). NBSP IS in it (scenario
-/// `n161`), U+200B (ZWSP) is not.
-fn is_ws_newline(c: char) -> bool {
-    matches!(
-        c,
-        ' ' | '\t' | '\u{A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\n'
-                | '\u{0B}'
-                | '\u{0C}'
-                | '\r'
-                | '\u{85}'
-    )
-}
-
 /// What's typed after "name:" ("" for "name:" alone), nil for a search that isn't one of
 /// names (Model.swift:124). The leading trim runs on `Character.isWhitespace` — the first
-/// scalar's White_Space; the trailing one on `.whitespacesAndNewlines` — both Character by
-/// Character (graphemes).
+/// scalar's White_Space, dropped Character by Character (graphemes); the trailing one is
+/// `trimmingCharacters(in: .whitespacesAndNewlines)` (scalar runs — `SearchText`'s trim).
 pub enum NameQuery {}
 
 impl NameQuery {
@@ -295,18 +275,6 @@ impl NameQuery {
             return None;
         }
         let body: String = rest.graphemes(true).skip(5).collect();
-        // `trimmingCharacters(in:)` (swift-corelibs) drops the leading and trailing runs of
-        // SCALARS in the set — graphemes do not move as units (measured, ⑩a `facts-trim`
-        // f049: "  ́x" → "́x": the space strips and the combining mark stays).
-        let chars: Vec<char> = body.chars().collect();
-        let mut i = 0;
-        let mut j = chars.len();
-        while i < j && is_ws_newline(chars[i]) {
-            i += 1;
-        }
-        while j > i && is_ws_newline(chars[j - 1]) {
-            j -= 1;
-        }
-        Some(chars[i..j].iter().collect())
+        Some(trim_whitespaces_newlines(&body).to_string())
     }
 }
