@@ -1,0 +1,417 @@
+//! Audio and video through ffmpeg/ffprobe — `Platform/Portable/Media+Portable.swift`'s Rust
+//! side: `MediaInfo.duration/streams`, `AudioExtractor.windows`, `VideoExtractor.keyframes`
+//! and `VideoExtractor.frame(at:of:pixels:to:)`.
+//!
+//! The tools are the engine's: `crates/native/src/ffmpeg.rs` found them (`$DIGUP_FFMPEG`,
+//! beside the executable, PATH) and runs them the engine's way (argv arrays, stderr to the
+//! null device, 64 KB reads, the reader's refusal ends the tool). Decoding is ffmpeg's, never
+//! a Rust codec's: the windows the model embeds and the frames it sees must be the exact
+//! bytes the engine writes.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use digup_core::extract::ExtractError;
+use digup_core::jsonline;
+use digup_core::rules;
+use digup_core::uuid::uuid_string;
+
+use crate::ffmpeg;
+use crate::rgb::RgbImage;
+
+/// `AudioExtractor.sampleRate` — everything the model hears is 16 kHz mono.
+pub const SAMPLE_RATE: f64 = 16_000.0;
+
+/// `MediaPiece`: a stretch of audio written to a temporary WAV for the model, or a video
+/// frame written to a JPEG.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaPiece {
+    pub path: PathBuf,
+    pub start: f64,
+    pub end: f64,
+}
+
+/// Foundation spells a double in a string interpolation the way `jsonline` spells it in JSON,
+/// keeping the `.0` on a whole value ("3.0", "0.0") that JSON drops. Refusal texts carry
+/// interpolated seconds, so they get this form.
+fn swift_interpolated(value: f64) -> String {
+    match jsonline::swift_double(value) {
+        Some(text) if text.contains('.') || text.contains('e') => text,
+        Some(text) => format!("{text}.0"),
+        None => format!("{value}"), // nan/±∞: Foundation spells them "nan"/"inf"; Rust's own spelling stands in
+    }
+}
+
+/// `MediaInfo.duration(of:)`: ffprobe's format duration; nil when it can't say a finite
+/// positive number.
+pub fn duration_of(url: &Path) -> Option<f64> {
+    let text = ffmpeg::output(
+        ffmpeg::ffprobe().as_deref(),
+        &[
+            "-v".into(),
+            "error".into(),
+            "-show_entries".into(),
+            "format=duration".into(),
+            "-of".into(),
+            "default=noprint_wrappers=1:nokey=1".into(),
+            url.to_string_lossy().into_owned(),
+        ],
+    )
+    .ok()?;
+    let seconds: f64 = text.trim().parse().ok()?;
+    (seconds.is_finite() && seconds > 0.0).then_some(seconds)
+}
+
+/// `Estimator.duration(of:)`: the estimate's media measure, 0 when ffprobe can't say.
+pub fn media_duration(path: &Path) -> f64 {
+    duration_of(path).unwrap_or(0.0)
+}
+
+/// `MediaInfo.streams(of:)`: which kinds of streams the file has.
+pub fn streams_of(url: &Path) -> (bool, bool) {
+    let Ok(text) = ffmpeg::output(
+        ffmpeg::ffprobe().as_deref(),
+        &[
+            "-v".into(),
+            "error".into(),
+            "-show_entries".into(),
+            "stream=codec_type".into(),
+            "-of".into(),
+            "default=noprint_wrappers=1:nokey=1".into(),
+            url.to_string_lossy().into_owned(),
+        ],
+    ) else {
+        return (false, false);
+    };
+    (text.contains("audio"), text.contains("video"))
+}
+
+/// `AudioExtractor.rms`: the window's loudness; > 0.003 is ≈ −50 dBFS.
+pub fn rms(samples: &[i16]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mut sum = 0.0f64;
+    for sample in samples {
+        let value = f64::from(*sample) / 32768.0;
+        sum += value * value;
+    }
+    (sum / samples.len() as f64).sqrt()
+}
+
+/// `AudioExtractor.writeWAV`: the 44-byte canonical header and the Int16 samples,
+/// little-endian (`samples.withUnsafeBytes` over the Int16 buffer).
+pub fn write_wav(samples: &[i16], url: &Path) -> Result<(), ExtractError> {
+    let name = || {
+        url.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let mut data: Vec<u8> = Vec::with_capacity(44 + samples.len() * 2);
+    let rate = SAMPLE_RATE as u32;
+    data.extend(b"RIFF");
+    data.extend((36u32 + samples.len() as u32 * 2).to_le_bytes());
+    data.extend(b"WAVEfmt ");
+    data.extend(16u32.to_le_bytes());
+    data.extend(1u16.to_le_bytes()); // PCM
+    data.extend(1u16.to_le_bytes()); // mono
+    data.extend(rate.to_le_bytes());
+    data.extend((rate * 2).to_le_bytes());
+    data.extend(2u16.to_le_bytes());
+    data.extend(16u16.to_le_bytes());
+    data.extend(b"data");
+    data.extend((samples.len() as u32 * 2).to_le_bytes());
+    for sample in samples {
+        data.extend(sample.to_le_bytes());
+    }
+    let file = std::fs::File::create(url);
+    let written = file.and_then(|mut file| file.write_all(&data));
+    written.map_err(|_| ExtractError::Unreadable {
+        why: format!("can't write {}", name()),
+    })
+}
+
+/// The streaming state of `AudioExtractor.windows`: the sample buffer with the head index of
+/// the engine's `removeFirst(hopSamples)` (its ArraySlice window), the odd byte carried
+/// between reads, the sample offset of the buffer's first sample.
+struct Windows {
+    buffer: Vec<i16>,
+    head: usize,
+    offset: i64,
+    window_samples: usize,
+    hop_samples: usize,
+    pieces: Vec<MediaPiece>,
+    odd: Option<u8>,
+}
+
+impl Windows {
+    fn emit(&mut self, count: usize, folder: &Path) -> Result<(), ExtractError> {
+        let slice = &self.buffer[self.head..self.head + count];
+        // The negated form is the Swift text (`guard !(rms > 0.003)`): true for NaN too,
+        // which `rms <= 0.003` would not be.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(rms(slice) > 0.003) {
+            return Ok(()); // ≈ −50 dBFS: silence isn't worth a vector
+        }
+        let out = folder.join(format!("{}.wav", uuid_string()));
+        write_wav(slice, &out)?;
+        self.pieces.push(MediaPiece {
+            path: out,
+            start: self.offset as f64 / SAMPLE_RATE,
+            end: (self.offset + count as i64) as f64 / SAMPLE_RATE,
+        });
+        Ok(())
+    }
+
+    /// The read callback: carry the odd byte, spell the pairs as little-endian Int16, and cut
+    /// every whole window the buffer now holds.
+    fn feed(&mut self, data: &[u8], folder: &Path) -> Result<(), ExtractError> {
+        let mut bytes: Vec<u8> = Vec::with_capacity(data.len() + 1);
+        if let Some(first) = self.odd.take() {
+            bytes.push(first);
+        }
+        bytes.extend_from_slice(data);
+        if bytes.len() % 2 == 1 {
+            self.odd = bytes.pop();
+        }
+        self.buffer.reserve(bytes.len() / 2);
+        for pair in bytes.chunks_exact(2) {
+            self.buffer.push(i16::from_le_bytes([pair[0], pair[1]]));
+        }
+        while self.buffer.len() - self.head >= self.window_samples {
+            self.emit(self.window_samples, folder)?;
+            self.head += self.hop_samples;
+            self.offset += self.hop_samples as i64;
+        }
+        Ok(())
+    }
+}
+
+/// `AudioExtractor.windows` (`Media+Portable.swift:91-131`): decode a file's (or a video's
+/// soundtrack) audio to 16 kHz mono through ffmpeg, write `window`-second WAV pieces `hop`
+/// seconds apart, skipping silent ones; memory stays at one window even for a 3-hour
+/// podcast. The tail covers new audio past the previous window's overlap, the whole file if
+/// it was shorter than a window.
+pub fn windows(
+    url: &Path,
+    window: f64,
+    hop: f64,
+    minimum: f64,
+    folder: &Path,
+) -> Result<(Vec<MediaPiece>, f64), ExtractError> {
+    if !streams_of(url).0 {
+        return Ok((Vec::new(), 0.0));
+    }
+    let duration = duration_of(url).unwrap_or(0.0);
+    let mut state = Windows {
+        buffer: Vec::new(),
+        head: 0,
+        offset: 0,
+        window_samples: (window * SAMPLE_RATE) as usize,
+        hop_samples: (hop * SAMPLE_RATE) as usize,
+        pieces: Vec::new(),
+        odd: None,
+    };
+    let arguments: Vec<String> = [
+        "-v".to_string(),
+        "error".into(),
+        "-nostdin".into(),
+        "-i".into(),
+        url.to_string_lossy().into_owned(),
+        "-vn".into(),
+        "-ac".into(),
+        "1".into(),
+        "-ar".into(),
+        (SAMPLE_RATE as i32).to_string(),
+        "-f".into(),
+        "s16le".into(),
+        "-".into(),
+    ]
+    .to_vec();
+    ffmpeg::run(ffmpeg::ffmpeg().as_deref(), &arguments, &mut |data| {
+        state.feed(data, folder)
+    })
+    .map_err(|error| error.extract())?;
+    // The tail: new audio beyond the previous window's overlap, or the whole file if it was
+    // shorter than a window.
+    let count = state.buffer.len() - state.head;
+    let already_covered: i64 = if state.offset == 0 {
+        0
+    } else {
+        (state.window_samples - state.hop_samples) as i64
+    };
+    if count as i64 - already_covered >= (minimum * SAMPLE_RATE) as i64 {
+        state.emit(count, folder)?;
+    }
+    Ok((
+        state.pieces,
+        if duration > 0.0 {
+            duration
+        } else {
+            (state.offset + count as i64) as f64 / SAMPLE_RATE
+        },
+    ))
+}
+
+/// `VideoExtractor.keyframes` (`Media+Portable.swift:137-176`): sample a frame every
+/// `interval` seconds through ffmpeg (`fps=…:round=up` gives each slot the last frame at or
+/// before it) and keep one per shot — a frame whose 8×8 average hash is within 4 bits of the
+/// last kept one only extends it, and its file goes. Slots past the end go too. Each kept
+/// frame ends where the next kept frame starts.
+pub fn keyframes(
+    url: &Path,
+    interval: f64,
+    max_pixel: usize,
+    max_frames: usize,
+    folder: &Path,
+) -> Result<(Vec<MediaPiece>, f64, bool), ExtractError> {
+    let streams = streams_of(url);
+    let duration = duration_of(url).unwrap_or(0.0);
+    if !(duration > 0.0 && streams.1) {
+        return Ok((Vec::new(), duration, streams.0));
+    }
+    let step = interval.max(duration / max_frames as f64);
+    let first = 0.5f64.min(duration / 2.0);
+    let prefix = format!("frame-{}-", uuid_string());
+    // Every frame is decoded anyway: reading from the start costs nothing over seeking, and
+    // an MPEG-TS has no index for a seek.
+    let filter = format!(
+        "fps=fps={}:start_time={}:round=up,scale={}:{}:force_original_aspect_ratio=decrease",
+        swift_interpolated(1.0 / step),
+        swift_interpolated(first),
+        max_pixel,
+        max_pixel
+    );
+    let arguments: Vec<String> = [
+        "-v".to_string(),
+        "error".into(),
+        "-nostdin".into(),
+        "-i".into(),
+        url.to_string_lossy().into_owned(),
+        "-an".into(),
+        "-vf".into(),
+        filter,
+        "-q:v".into(),
+        "3".into(),
+        "-f".into(),
+        "image2".into(),
+        folder
+            .join(format!("{prefix}%06d.jpg"))
+            .to_string_lossy()
+            .into_owned(),
+    ]
+    .to_vec();
+    ffmpeg::run(ffmpeg::ffmpeg().as_deref(), &arguments, &mut |_| Ok(()))
+        .map_err(|error| error.extract())?;
+    let mut names: Vec<String> = std::fs::read_dir(folder)
+        .map_err(|_| ExtractError::Unreadable {
+            why: "can't list the frame folder".into(),
+        })?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(&prefix))
+        .collect();
+    names.sort();
+    let mut frames: Vec<MediaPiece> = Vec::new();
+    let mut last_hash: Option<u64> = None;
+    for (index, name) in names.iter().enumerate() {
+        let path = folder.join(name);
+        let start = first + index as f64 * step;
+        // The negated form is the Swift text (`guard !(start < duration)`): true for NaN
+        // too, which `start >= duration` would not be.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(start < duration) {
+            // fps can fill a slot past the end.
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        if let Some(image) = RgbImage::load(&path) {
+            let hash = image.average_hash();
+            if let Some(last) = last_hash {
+                if (hash ^ last).count_ones() <= 4 {
+                    let _ = std::fs::remove_file(&path);
+                    continue;
+                }
+            }
+            last_hash = Some(hash);
+        }
+        frames.push(MediaPiece {
+            path,
+            start,
+            end: duration,
+        });
+    }
+    // Each kept frame stands for the stretch until the next kept frame.
+    for index in 0..frames.len().saturating_sub(1) {
+        frames[index].end = frames[index + 1].start;
+    }
+    Ok((frames, duration, streams.0))
+}
+
+/// `VideoExtractor.frame(at:of:pixels:to:)` (`Media+Portable.swift:179-198`): the frame shown
+/// at `seconds` as a JPEG preview, long side at most `pixels`. Seeking before reading starts
+/// at the keyframe before the moment; an MPEG-TS has no index, so its seek lands ON the
+/// moment and decodes late — seek to a while before (the lead) and read on, and a run that
+/// ends in an error is swallowed (`try?`) because the frame it wrote is the right one. When
+/// nothing was written, read from the start to the moment; still nothing is "no frame at X s".
+pub fn frame_at(seconds: f64, url: &Path, pixels: usize, out: &Path) -> Result<(), ExtractError> {
+    let at = if seconds > 0.0 { seconds } else { 0.0 }; // `max(0, seconds)`
+    let rest: Vec<String> = [
+        "-frames:v".to_string(),
+        "1".into(),
+        "-vf".into(),
+        format!("scale='min(iw,{pixels})':'min(ih,{pixels})':force_original_aspect_ratio=decrease"),
+        "-q:v".into(),
+        "3".into(),
+        "-y".into(),
+        out.to_string_lossy().into_owned(),
+    ]
+    .to_vec();
+    let lead = if rules::is_mpeg_transport_stream(&url.to_string_lossy()) {
+        at.min(12.0) // x264 keeps up to 250 frames between keyframes
+    } else {
+        0.0
+    };
+    let mut arguments: Vec<String> = [
+        "-v".to_string(),
+        "error".into(),
+        "-nostdin".into(),
+        "-ss".into(),
+        swift_interpolated(at - lead),
+        "-i".into(),
+        url.to_string_lossy().into_owned(),
+    ]
+    .to_vec();
+    if lead > 0.0 {
+        arguments.push("-ss".into());
+        arguments.push(swift_interpolated(lead));
+    }
+    arguments.extend(rest.clone());
+    let _ = ffmpeg::run(ffmpeg::ffmpeg().as_deref(), &arguments, &mut |_| Ok(())); // `try?`
+    if !out.exists() {
+        // Nothing written: read from the start to the moment.
+        ffmpeg::run(
+            ffmpeg::ffmpeg().as_deref(),
+            &[
+                "-v".into(),
+                "error".into(),
+                "-nostdin".into(),
+                "-i".into(),
+                url.to_string_lossy().into_owned(),
+                "-ss".into(),
+                swift_interpolated(at),
+            ]
+            .into_iter()
+            .chain(rest)
+            .collect::<Vec<String>>(),
+            &mut |_| Ok(()),
+        )
+        .map_err(|error| error.extract())?;
+    }
+    if !out.exists() {
+        return Err(ExtractError::Unreadable {
+            why: format!("no frame at {} s", swift_interpolated(seconds)),
+        });
+    }
+    Ok(())
+}

@@ -1,0 +1,143 @@
+{"fixture":"media-audioonly.mp4","ok":true,"scenario":"dur","seconds":6}
+{"audio":true,"fixture":"media-audioonly.mp4","ok":true,"scenario":"streams","video":false}
+{"duration":6,"fixture":"media-audioonly.mp4","ok":true,"pieces":[{"end":6.014,"file":"U.wav","sha":"ed048cbe92dba1effa6869ceaaf78ee135c77d6cfca53823d5614be063070e21","start":0}],"scenario":"w10_10"}
+{"duration":6,"fixture":"media-audioonly.mp4","ok":true,"pieces":[{"end":5,"file":"U.wav","sha":"d12ab44312c761f903c254d08a97a627bf068272c45ec549eb877a95b10f478b","start":0}],"scenario":"w5_3"}
+{"duration":6,"fixture":"media-audioonly.mp4","ok":true,"pieces":[{"end":1,"file":"U.wav","sha":"a4a2e7dac654d6e36b684716011556153f362eea972489ebc3b14cbd55290c67","start":0},{"end":2,"file":"U.wav","sha":"9dcec1505ec491e106e9808a9de5542f2e4924a3eea2c33172c7b016911e0712","start":1},{"end":3,"file":"U.wav","sha":"ad72d9080fd992680e71e286ae79e39f30c4054e8971279e2f287066e6a3d999","start":2},{"end":4,"file":"U.wav","sha":"6f4d27a971c4d312b34b1e4112b718dfe2974ab12054437a3fe1f345c51b947b","start":3},{"end":5,"file":"U.wav","sha":"07867134b2ee72347508273bb8df10ab93f758c89b050e81f67df7fdf308c70f","start":4},{"end":6,"file":"U.wav","sha":"d31e13fe1b00b76bb32d5669be89852832f3d96ccd34620e4998e276b12f19bc","start":5}],"scenario":"w1_1"}
+{"duration":6,"fixture":"media-audioonly.mp4","frames":[],"hasAudio":true,"ok":true,"scenario":"k2_240"}
+{"duration":6,"fixture":"media-audioonly.mp4","frames":[],"hasAudio":true,"ok":true,"scenario":"k05_96"}
+{"duration":6,"fixture":"media-audioonly.mp4","frames":[],"hasAudio":true,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-audioonly.mp4","ok":false,"scenario":"f0","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-audioonly.mp4","ok":false,"scenario":"f5_5","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-audioonly.mp4","ok":false,"scenario":"f600","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-broken.mp4","ok":true,"scenario":"dur","seconds":null}
+{"audio":false,"fixture":"media-broken.mp4","ok":true,"scenario":"streams","video":false}
+{"duration":0,"fixture":"media-broken.mp4","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-broken.mp4","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-broken.mp4","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":0,"fixture":"media-broken.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":0,"fixture":"media-broken.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":0,"fixture":"media-broken.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-broken.mp4","ok":false,"scenario":"f0","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-broken.mp4","ok":false,"scenario":"f5_5","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-broken.mp4","ok":false,"scenario":"f600","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-broken2.mp4","ok":true,"scenario":"dur","seconds":30}
+{"audio":false,"fixture":"media-broken2.mp4","ok":true,"scenario":"streams","video":true}
+{"duration":0,"fixture":"media-broken2.mp4","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-broken2.mp4","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-broken2.mp4","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":30,"fixture":"media-broken2.mp4","frames":[{"end":30,"file":"frame-U-000001.jpg","sha":"c52e30eea03efdff5fb78826f0899cb0de66d160c5f589d46c531c78a3c25e94","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":30,"fixture":"media-broken2.mp4","frames":[{"end":30,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":30,"fixture":"media-broken2.mp4","frames":[{"end":30,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-broken2.mp4","ok":true,"scenario":"f0","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-broken2.mp4","ok":true,"scenario":"f5_5","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-broken2.mp4","ok":false,"scenario":"f600","why":"unreadable: no frame at 600.0 s"}
+{"fixture":"media-empty.mp4","ok":true,"scenario":"dur","seconds":null}
+{"audio":false,"fixture":"media-empty.mp4","ok":true,"scenario":"streams","video":false}
+{"duration":0,"fixture":"media-empty.mp4","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-empty.mp4","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-empty.mp4","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":0,"fixture":"media-empty.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":0,"fixture":"media-empty.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":0,"fixture":"media-empty.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-empty.mp4","ok":false,"scenario":"f0","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-empty.mp4","ok":false,"scenario":"f5_5","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-empty.mp4","ok":false,"scenario":"f600","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-junk.mp4","ok":true,"scenario":"dur","seconds":null}
+{"audio":false,"fixture":"media-junk.mp4","ok":true,"scenario":"streams","video":false}
+{"duration":0,"fixture":"media-junk.mp4","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-junk.mp4","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-junk.mp4","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":0,"fixture":"media-junk.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":0,"fixture":"media-junk.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":0,"fixture":"media-junk.mp4","frames":[],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-junk.mp4","ok":false,"scenario":"f0","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-junk.mp4","ok":false,"scenario":"f5_5","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-junk.mp4","ok":false,"scenario":"f600","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-noaudio.mp4","ok":true,"scenario":"dur","seconds":8}
+{"audio":false,"fixture":"media-noaudio.mp4","ok":true,"scenario":"streams","video":true}
+{"duration":0,"fixture":"media-noaudio.mp4","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-noaudio.mp4","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-noaudio.mp4","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":8,"fixture":"media-noaudio.mp4","frames":[{"end":8,"file":"frame-U-000001.jpg","sha":"c52e30eea03efdff5fb78826f0899cb0de66d160c5f589d46c531c78a3c25e94","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":8,"fixture":"media-noaudio.mp4","frames":[{"end":8,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":8,"fixture":"media-noaudio.mp4","frames":[{"end":8,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-noaudio.mp4","ok":true,"scenario":"f0","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-noaudio.mp4","ok":true,"scenario":"f5_5","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-noaudio.mp4","ok":false,"scenario":"f600","why":"unreadable: no frame at 600.0 s"}
+{"fixture":"media-quiet.wav","ok":true,"scenario":"dur","seconds":12}
+{"audio":true,"fixture":"media-quiet.wav","ok":true,"scenario":"streams","video":false}
+{"duration":12,"fixture":"media-quiet.wav","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":12,"fixture":"media-quiet.wav","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":12,"fixture":"media-quiet.wav","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":12,"fixture":"media-quiet.wav","frames":[],"hasAudio":true,"ok":true,"scenario":"k2_240"}
+{"duration":12,"fixture":"media-quiet.wav","frames":[],"hasAudio":true,"ok":true,"scenario":"k05_96"}
+{"duration":12,"fixture":"media-quiet.wav","frames":[],"hasAudio":true,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-quiet.wav","ok":false,"scenario":"f0","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-quiet.wav","ok":false,"scenario":"f5_5","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-quiet.wav","ok":false,"scenario":"f600","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-scenes.mp4","ok":true,"scenario":"dur","seconds":30}
+{"audio":false,"fixture":"media-scenes.mp4","ok":true,"scenario":"streams","video":true}
+{"duration":0,"fixture":"media-scenes.mp4","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-scenes.mp4","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-scenes.mp4","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":30,"fixture":"media-scenes.mp4","frames":[{"end":20.5,"file":"frame-U-000001.jpg","sha":"c52e30eea03efdff5fb78826f0899cb0de66d160c5f589d46c531c78a3c25e94","start":0.5},{"end":30,"file":"frame-U-000011.jpg","sha":"4bf55001fbeb6ef1eeb6ea5fb57c83f18071ebaadc5c108323abfc1bba0eecff","start":20.5}],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":30,"fixture":"media-scenes.mp4","frames":[{"end":30,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":30,"fixture":"media-scenes.mp4","frames":[{"end":30,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-scenes.mp4","ok":true,"scenario":"f0","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-scenes.mp4","ok":true,"scenario":"f5_5","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-scenes.mp4","ok":false,"scenario":"f600","why":"unreadable: no frame at 600.0 s"}
+{"fixture":"media-scenes.ts","ok":true,"scenario":"dur","seconds":30}
+{"audio":false,"fixture":"media-scenes.ts","ok":true,"scenario":"streams","video":true}
+{"duration":0,"fixture":"media-scenes.ts","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-scenes.ts","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-scenes.ts","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":30,"fixture":"media-scenes.ts","frames":[{"end":20.5,"file":"frame-U-000001.jpg","sha":"c52e30eea03efdff5fb78826f0899cb0de66d160c5f589d46c531c78a3c25e94","start":0.5},{"end":30,"file":"frame-U-000011.jpg","sha":"4bf55001fbeb6ef1eeb6ea5fb57c83f18071ebaadc5c108323abfc1bba0eecff","start":20.5}],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":30,"fixture":"media-scenes.ts","frames":[{"end":30,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":30,"fixture":"media-scenes.ts","frames":[{"end":30,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-scenes.ts","ok":true,"scenario":"f0","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-scenes.ts","ok":true,"scenario":"f5_5","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-scenes.ts","ok":false,"scenario":"f600","why":"unreadable: no frame at 600.0 s"}
+{"fixture":"media-scenesaudio.mp4","ok":true,"scenario":"dur","seconds":18.28}
+{"audio":true,"fixture":"media-scenesaudio.mp4","ok":true,"scenario":"streams","video":true}
+{"duration":18.28,"fixture":"media-scenesaudio.mp4","ok":true,"pieces":[{"end":10,"file":"U.wav","sha":"3e30b75649c89b11d544e911f688d4b8cf0af8c398e39204a0f43ec992d167f1","start":0},{"end":18.0186875,"file":"U.wav","sha":"13f289ac11b13e031461a0eae6a14d805a111b16b610e0b015671e0a1e9162a5","start":10}],"scenario":"w10_10"}
+{"duration":18.28,"fixture":"media-scenesaudio.mp4","ok":true,"pieces":[{"end":5,"file":"U.wav","sha":"b173cb91240198e6f40b604789e73ebdbb82ca1474c2badd97d5184ab3bc80a0","start":0},{"end":8,"file":"U.wav","sha":"1e13ec917e30a5103798d0b10a574d4d2c86e76a4ca17632daf46fda2cf02964","start":3},{"end":11,"file":"U.wav","sha":"6d42b71c876bee27122805721412be1a24f9bdc0da9c3096f1c9cc5b960d2ba0","start":6},{"end":14,"file":"U.wav","sha":"be2a152c0b92efe66461201cbf95a06308de314a75d33fe8533ccbd5198912a8","start":9},{"end":17,"file":"U.wav","sha":"44f2baba2a53b303df176556e290c6278f7c51119887983a69286bfda1de258b","start":12}],"scenario":"w5_3"}
+{"duration":18.28,"fixture":"media-scenesaudio.mp4","ok":true,"pieces":[{"end":1,"file":"U.wav","sha":"ab57910e36733be47765e8335f846ecc6589cb1bb5abdfdacd4c07e8d53a1001","start":0},{"end":2,"file":"U.wav","sha":"627241813d9a7841bb2613d91f603448e5b920fffe35ddbd0426b5c3f9e38a34","start":1},{"end":3,"file":"U.wav","sha":"19065b4c168c8c3f14ac7c979058a7c66483f8dbea7c8617bc77357b66abcc31","start":2},{"end":4,"file":"U.wav","sha":"f09838cff745e567ca3f54e95893c64e6aab62aa071cc4044c966260c2859845","start":3},{"end":5,"file":"U.wav","sha":"b8bf57feb73b11ada601c3819ddbe3e6b4bbc47fb95bb54a53119968487c5109","start":4},{"end":6,"file":"U.wav","sha":"47b42ef331b75a897f05144c1484488692fa0a415386d8cd0143e4155b61f969","start":5},{"end":7,"file":"U.wav","sha":"361f80f8f199e31392a156a6465fa8c1ccc5338535957a4df097e5dd3169db32","start":6},{"end":8,"file":"U.wav","sha":"fe144d302997cdb9cb889b2e912340bc090c66d5718ace6b1c506ab2b6c0bdf8","start":7},{"end":9,"file":"U.wav","sha":"d5c5812aab8c1a83ce07f1ca957a5d538f3dd53a9a8530648a1aec5b7aacf348","start":8},{"end":10,"file":"U.wav","sha":"40b0ab064cd09004c998f70291d8c7d52c01858567e0e93ee32ecbb3a46c8c9d","start":9},{"end":11,"file":"U.wav","sha":"97a05029292617c98d662f1b272d4ff99a6a941adf792652cfa4770a41ee753e","start":10},{"end":12,"file":"U.wav","sha":"98e88b1d7491492bc1dc04b33b02f812f92df27b500e461b326f58b3c362498a","start":11},{"end":13,"file":"U.wav","sha":"bf64dbece6497131423ade776dd92759ab9476ae3edd3eee37bca6940480651a","start":12},{"end":14,"file":"U.wav","sha":"779a5396f95f2a20e9a4eec530e49e283f09a3f0b8b832f23bb95082161dd316","start":13},{"end":15,"file":"U.wav","sha":"a1ece6e1d4678c10ad13e3b5015f9da0baa1ba47b07a2063ee4eb5b503628fbf","start":14},{"end":16,"file":"U.wav","sha":"e9000334905b30f5a7cefdc42bbbf3a6b41f79fe0363cbd2386d5734b164fc7e","start":15},{"end":17,"file":"U.wav","sha":"5cd29eff5220a41e5a922a65819aad1f8f8bf8d55d8acb9603370c5b0a628a4e","start":16},{"end":18,"file":"U.wav","sha":"65f3ddfeb8d0111a064c6085fd7f845a84f9f5d2423d811e3950c6e4d1c6c447","start":17}],"scenario":"w1_1"}
+{"duration":18.28,"fixture":"media-scenesaudio.mp4","frames":[{"end":18.28,"file":"frame-U-000001.jpg","sha":"c52e30eea03efdff5fb78826f0899cb0de66d160c5f589d46c531c78a3c25e94","start":0.5}],"hasAudio":true,"ok":true,"scenario":"k2_240"}
+{"duration":18.28,"fixture":"media-scenesaudio.mp4","frames":[{"end":18.28,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":true,"ok":true,"scenario":"k05_96"}
+{"duration":18.28,"fixture":"media-scenesaudio.mp4","frames":[{"end":18.28,"file":"frame-U-000001.jpg","sha":"68203a60b132f543a40002c28917cd323b1870991e9689bbcbf778cbcb65abe2","start":0.5}],"hasAudio":true,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-scenesaudio.mp4","ok":true,"scenario":"f0","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-scenesaudio.mp4","ok":true,"scenario":"f5_5","sha":"88c54813f81816dd70d30aff9d80b0bb13e553fa3b3253a18e6e616529681805","wrote":true}
+{"fixture":"media-scenesaudio.mp4","ok":false,"scenario":"f600","why":"unreadable: no frame at 600.0 s"}
+{"fixture":"media-short.mp4","ok":true,"scenario":"dur","seconds":1.2}
+{"audio":false,"fixture":"media-short.mp4","ok":true,"scenario":"streams","video":true}
+{"duration":0,"fixture":"media-short.mp4","ok":true,"pieces":[],"scenario":"w10_10"}
+{"duration":0,"fixture":"media-short.mp4","ok":true,"pieces":[],"scenario":"w5_3"}
+{"duration":0,"fixture":"media-short.mp4","ok":true,"pieces":[],"scenario":"w1_1"}
+{"duration":1.2,"fixture":"media-short.mp4","frames":[{"end":1.2,"file":"frame-U-000001.jpg","sha":"9cab74c68f2e0bf7a5831cb4696fb0e073fb1eb47b37eb1e6f23295f7a70226a","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k2_240"}
+{"duration":1.2,"fixture":"media-short.mp4","frames":[{"end":1.2,"file":"frame-U-000001.jpg","sha":"e638bc300c069b42a948ebc3fbde3e64240c19f1a60667316ddd9554aa13f1c6","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k05_96"}
+{"duration":1.2,"fixture":"media-short.mp4","frames":[{"end":1.2,"file":"frame-U-000001.jpg","sha":"e638bc300c069b42a948ebc3fbde3e64240c19f1a60667316ddd9554aa13f1c6","start":0.5}],"hasAudio":false,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-short.mp4","ok":true,"scenario":"f0","sha":"e783e322cc0f98726e2d4708c12bdb79503d4e7e4c28ad6cdce079520eda93f0","wrote":true}
+{"fixture":"media-short.mp4","ok":false,"scenario":"f5_5","why":"unreadable: no frame at 5.5 s"}
+{"fixture":"media-short.mp4","ok":false,"scenario":"f600","why":"unreadable: no frame at 600.0 s"}
+{"fixture":"media-tone.wav","ok":true,"scenario":"dur","seconds":12}
+{"audio":true,"fixture":"media-tone.wav","ok":true,"scenario":"streams","video":false}
+{"duration":12,"fixture":"media-tone.wav","ok":true,"pieces":[{"end":10,"file":"U.wav","sha":"e4759407e6b269c1bb68b3f94b2936af499eaba904f6a805d19cacbde3fc7efe","start":0},{"end":12,"file":"U.wav","sha":"84ec2b54692d31e9af49f858be534e0fb14eb0b8cc6d858316401b8954959c93","start":10}],"scenario":"w10_10"}
+{"duration":12,"fixture":"media-tone.wav","ok":true,"pieces":[{"end":5,"file":"U.wav","sha":"f644374bc96bcbbf5aea0deb59260be5b9da12ebadaf5fe79ff3258f172821d1","start":0},{"end":8,"file":"U.wav","sha":"20636bfb091e042240976fa7e54649a1026805575eb021d12f88d0a776463fe4","start":3},{"end":11,"file":"U.wav","sha":"5bd755c2966fbbc5b138a30ee68e5a0a56fab6bf191f2cfa30854a2637da5aab","start":6}],"scenario":"w5_3"}
+{"duration":12,"fixture":"media-tone.wav","ok":true,"pieces":[{"end":1,"file":"U.wav","sha":"1831bb7feab0da7f8c3e1ac0a1c5c62cc7690a17f901f99c02e3d7fe3dadf082","start":0},{"end":2,"file":"U.wav","sha":"344b26893a0a02a43a43ef0bd508c8665583b0ac86feeda844bcbb1a5568ae9d","start":1},{"end":3,"file":"U.wav","sha":"344b26893a0a02a43a43ef0bd508c8665583b0ac86feeda844bcbb1a5568ae9d","start":2},{"end":4,"file":"U.wav","sha":"344b26893a0a02a43a43ef0bd508c8665583b0ac86feeda844bcbb1a5568ae9d","start":3},{"end":5,"file":"U.wav","sha":"344b26893a0a02a43a43ef0bd508c8665583b0ac86feeda844bcbb1a5568ae9d","start":4},{"end":6,"file":"U.wav","sha":"6d05b0a26fc6c8529fab2cf5b1601c08e8bb32f303cfdc0bd1f73b964dbbcd35","start":5},{"end":9,"file":"U.wav","sha":"db9cbb663c0c36d77e0f8f03a9de59d94c0d920d1045194087dce759b28bd52c","start":8},{"end":10,"file":"U.wav","sha":"ae59a92fdb2c54e34c8a8b31c957705866b76dd3ad69e6dcecadc254260f8f4c","start":9},{"end":11,"file":"U.wav","sha":"ae59a92fdb2c54e34c8a8b31c957705866b76dd3ad69e6dcecadc254260f8f4c","start":10},{"end":12,"file":"U.wav","sha":"4a0ea76f0e7336fdbaf9e189a5fe9bd2930719bcdc59a02f49fbc55cfa18c9c6","start":11}],"scenario":"w1_1"}
+{"duration":12,"fixture":"media-tone.wav","frames":[],"hasAudio":true,"ok":true,"scenario":"k2_240"}
+{"duration":12,"fixture":"media-tone.wav","frames":[],"hasAudio":true,"ok":true,"scenario":"k05_96"}
+{"duration":12,"fixture":"media-tone.wav","frames":[],"hasAudio":true,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-tone.wav","ok":false,"scenario":"f0","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-tone.wav","ok":false,"scenario":"f5_5","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-tone.wav","ok":false,"scenario":"f600","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-voice.m4a","ok":true,"scenario":"dur","seconds":25.4}
+{"audio":true,"fixture":"media-voice.m4a","ok":true,"scenario":"streams","video":false}
+{"duration":25.4,"fixture":"media-voice.m4a","ok":true,"pieces":[{"end":10,"file":"U.wav","sha":"7c6a7de7b90352658879f7ae803f6e9f2c3a3f9d1e67af41f242afdb534b5a60","start":0},{"end":20,"file":"U.wav","sha":"ac46a5af72c7167536033f45349034a3d731f9dd87ea5b8b0c830844e841b937","start":10},{"end":25.402625,"file":"U.wav","sha":"b06680c12fcd986e024316aa0d994005a1558b45b8fc5b22b94bc4b9b462c26a","start":20}],"scenario":"w10_10"}
+{"duration":25.4,"fixture":"media-voice.m4a","ok":true,"pieces":[{"end":5,"file":"U.wav","sha":"3ee7c672c7e0ee190c153c1f34a1279acdadf576bc2c6dbc971f3554e412d878","start":0},{"end":8,"file":"U.wav","sha":"b77d685b071de3b83b4c77ed1f047dd93605488e4e9c1f73a218e85341c9586a","start":3},{"end":11,"file":"U.wav","sha":"f9a4c3335f1f5838d3ffd16e0d534781cab932dea253cff7e288b20b0d8b88e1","start":6},{"end":14,"file":"U.wav","sha":"d5dc765a017925a32810b887a5361eb00985829791067096c5541c33d93d0cc3","start":9},{"end":17,"file":"U.wav","sha":"5343c6f1a97b521059aafec3a32b95a8d6731c670179b984059329fefbc149dd","start":12},{"end":20,"file":"U.wav","sha":"3de80910e96391aa1ce0f5e1881c7d3cf67021f6c296bb97b1a11755defb7677","start":15},{"end":23,"file":"U.wav","sha":"7110a6f311bb4aec31b7e2e1bfbe65ae8462a5836c59b296c0f3bdabe86f7654","start":18},{"end":25.402625,"file":"U.wav","sha":"319747ae37972db2b48d5b8ad6314187a853701e7d6f53891252f2eb3be51a78","start":21}],"scenario":"w5_3"}
+{"duration":25.4,"fixture":"media-voice.m4a","ok":true,"pieces":[{"end":1,"file":"U.wav","sha":"f119bbfc0647434635648c4f4f0eb260c66204e5e2beca5ed90129a1b1505ce1","start":0},{"end":2,"file":"U.wav","sha":"96e977c1bd572f455655dd9944e3df5804764d4133407a93dda65fd720039ed0","start":1},{"end":3,"file":"U.wav","sha":"ffdc306df196fc8ca3e49422ad37b1c59cc03020cd5cb42c24ab246f7df8dd4a","start":2},{"end":4,"file":"U.wav","sha":"d8bc7925533e6c5579c5fa8f8ec7a0b01db6d6a1860ea1d7860e9a6341a230e9","start":3},{"end":5,"file":"U.wav","sha":"46ab02d0bcf049e48d5eef5aab87b5cbf71e9bd180513c1cbb23326d20d5ea2e","start":4},{"end":6,"file":"U.wav","sha":"d43832bd598cb30b28f15856c771e454b516b6bd5c175af714cefabe8f2f0180","start":5},{"end":7,"file":"U.wav","sha":"39734450e80e8bea65371a76da5468f858ae2429d065d17dc1e9dbbafdbf165a","start":6},{"end":8,"file":"U.wav","sha":"7f8dd4d0e72df9e6097fd78b5ec6691ade0d192c2a6afe5063bd834e9c9695a2","start":7},{"end":9,"file":"U.wav","sha":"3236bef1d11123c428ab3d5fc75d67a5516d83974797ef7f6eb34a0d392a9b5e","start":8},{"end":10,"file":"U.wav","sha":"7cce71f7867b3c1d8b3df26b19ce0090ecc200280de9d78a1bba04d25483ed99","start":9},{"end":11,"file":"U.wav","sha":"0d3d51f25f75295be05f3da3b519be6f14b7ee04fb755cd179b09b58f65dd558","start":10},{"end":12,"file":"U.wav","sha":"d9f032bf310677bd26ab8692f62d79f3f60b0d0df6aa483a1bf1288a59c33b8a","start":11},{"end":13,"file":"U.wav","sha":"9535236a79f4a297e6b3423453a6e8e08e88be0e349b6d3968660a730cb2be65","start":12},{"end":14,"file":"U.wav","sha":"3cfbd6a3c2e7f17cef1c7e21f4b942800025476fa701df086afd14ee106a5791","start":13},{"end":15,"file":"U.wav","sha":"8fc2bdb7a9bca706375f1299539a70a648d01a19ac7ff6b9b83067aa8e17849b","start":14},{"end":16,"file":"U.wav","sha":"fe3c910d935291a9e17ad4500a5e6d13ec03dd8f2dd45033f3195b3a2c1131fe","start":15},{"end":17,"file":"U.wav","sha":"0dbabf1f1a963d6e1a8cce7a2082652805ac7f89036fd36dcd6eecfc226de880","start":16},{"end":18,"file":"U.wav","sha":"f1bbca147aa9fd7cef388d8b586e230d015e55fb114838faa691260a4a26cbbc","start":17},{"end":19,"file":"U.wav","sha":"9f9709d07637f59f5315e38218da8c35e1eb8b9192f0083b8dfc5db368501347","start":18},{"end":20,"file":"U.wav","sha":"b9871916c452839830a40963b3b5f17e2001dd037543d733701d0c38355db3f7","start":19},{"end":21,"file":"U.wav","sha":"257570961e35e9d77ab92ed05e613b5b1210b18ac25c66fac05ead5bad4964f6","start":20},{"end":22,"file":"U.wav","sha":"2d976501d4a73f50efa2abb164e542b45931379844657583c7ddb4bc3a0b434c","start":21},{"end":23,"file":"U.wav","sha":"cde039d1af76ccd1c42055e6e604afbbfee2cff332b52ce22c20f4175308eadf","start":22},{"end":24,"file":"U.wav","sha":"fbdf9e26c5a8ee234a42f18aad990bd42667805c0f7b8a490cf30f468c541f97","start":23},{"end":25,"file":"U.wav","sha":"b219e23f53a270351f98e912e7affc520b4e37e6f27a47899b8cf6dfb58fc45e","start":24}],"scenario":"w1_1"}
+{"duration":25.4,"fixture":"media-voice.m4a","frames":[],"hasAudio":true,"ok":true,"scenario":"k2_240"}
+{"duration":25.4,"fixture":"media-voice.m4a","frames":[],"hasAudio":true,"ok":true,"scenario":"k05_96"}
+{"duration":25.4,"fixture":"media-voice.m4a","frames":[],"hasAudio":true,"ok":true,"scenario":"k01_96m8"}
+{"fixture":"media-voice.m4a","ok":false,"scenario":"f0","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-voice.m4a","ok":false,"scenario":"f5_5","why":"unreadable: ffmpeg failed (1)"}
+{"fixture":"media-voice.m4a","ok":false,"scenario":"f600","why":"unreadable: ffmpeg failed (1)"}

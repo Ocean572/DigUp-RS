@@ -101,7 +101,7 @@ fn number_string(number: &Number) -> Option<String> {
 /// round-trip decimal, but on a tie it spends one digit more and rounds half away
 /// (`…295.3`), so the port takes Rust's digit count as a starting point, walks it down while a
 /// shorter spelling still reads back, and rounds the last digit itself.
-fn swift_double(value: f64) -> Option<String> {
+pub fn swift_double(value: f64) -> Option<String> {
     if !value.is_finite() {
         return None; // JSONSerialization throws on NaN / ±∞: emit writes nothing
     }
