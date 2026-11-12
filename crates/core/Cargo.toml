@@ -9,6 +9,8 @@ description = "DigUp engine core (Rust port): index store, schema, search primit
 
 [dependencies]
 rusqlite = { workspace = true }
+# `costs.rs` (MeasuredCosts.swift): the costs.json wire contract is derived.
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 unicode-normalization = { workspace = true }

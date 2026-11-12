@@ -206,12 +206,14 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "digup-core",
+ "digup-native",
  "half",
  "hex",
  "serde",
  "serde_json",
  "sha2",
  "thiserror",
+ "unicode-segmentation",
 ]
 
 [[package]]

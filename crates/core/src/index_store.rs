@@ -408,6 +408,27 @@ PRAGMA user_version = 5;"
         Ok(out)
     }
 
+    /// The file changed on disk: drop what was extracted from it and queue it again
+    /// (`requeue(_:as:)`, IndexStore.swift:634) — kind/size/date/inode/device ride the new
+    /// reading; the name row stays.
+    pub fn requeue_as(&self, id: i64, file: &Candidate) -> Result<()> {
+        self.db.transaction(|| {
+            self.delete_segments(id, true)?;
+            self.db.run(
+                "UPDATE files SET kind = ?, size = ?, mtime = ?, inode = ?, device = ?, state = 'pending', detail = NULL,
+                    info = NULL, indexed_at = NULL WHERE id = ?",
+                vec![
+                    Sql::Text(file.kind.as_str().to_string()),
+                    Sql::Int(file.size),
+                    Sql::Double(file.mtime),
+                    Sql::Int(file.inode as i64),
+                    Sql::Int(file.device as i64),
+                    Sql::Int(id),
+                ],
+            )
+        })
+    }
+
     /// The file changed on disk: drop what was extracted and queue it again (keeps the name row).
     pub fn requeue(&self, id: i64) -> Result<()> {
         self.db.transaction(|| {
@@ -461,6 +482,152 @@ PRAGMA user_version = 5;"
             )?;
             self.set_meta("fingerprint", None)
         })
+    }
+
+    /// Files waiting to be embedded, in indexing order; `only` narrows it to some files
+    /// (`pending`, IndexStore.swift:699). An empty `only` answers empty, as Swift does.
+    pub fn pending(
+        &self,
+        limit: Option<i64>,
+        only: Option<&std::collections::HashSet<i64>>,
+    ) -> Result<Vec<FileRecord>> {
+        if let Some(ids) = only {
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+        }
+        let filter = only.map(|ids| {
+            let mut sorted: Vec<i64> = ids.iter().copied().collect();
+            sorted.sort_unstable();
+            format!(
+                " AND id IN ({}))",
+                sorted
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        });
+        let sql = format!(
+            "SELECT {} FROM files WHERE state = 'pending'{}{}
+             ORDER BY {}, mtime DESC LIMIT ?",
+            Self::FILE_COLUMNS,
+            filter.as_deref().unwrap_or(""),
+            self.scope_sql(),
+            FileKind::INDEXING_ORDER_SQL,
+        );
+        let mut out = Vec::new();
+        self.db
+            .query(&sql, vec![Sql::Int(limit.unwrap_or(-1))], |row| {
+                out.push(IndexStore::record(row));
+                Ok(())
+            })?;
+        Ok(out)
+    }
+
+    /// The kinds of the files waiting to be embedded (`pendingKinds`, IndexStore.swift:737):
+    /// the queue's look the shared embedder decides the model's shape from (issue #155) — a run
+    /// of text and code alone never loads the image and audio encoders.
+    pub fn pending_kinds(
+        &self,
+        only: Option<&std::collections::HashSet<i64>>,
+    ) -> Result<std::collections::HashSet<FileKind>> {
+        if let Some(ids) = only {
+            if ids.is_empty() {
+                return Ok(std::collections::HashSet::new());
+            }
+        }
+        let filter = only.map(|ids| {
+            let mut sorted: Vec<i64> = ids.iter().copied().collect();
+            sorted.sort_unstable();
+            format!(
+                " AND id IN ({}))",
+                sorted
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        });
+        let sql = format!(
+            "SELECT DISTINCT kind FROM files WHERE state = 'pending'{}{}",
+            filter.as_deref().unwrap_or(""),
+            self.scope_sql(),
+        );
+        let mut out = std::collections::HashSet::new();
+        self.db.query(&sql, [], |row| {
+            if let Some(kind) = FileKind::parse(&row.text(0).unwrap_or_default()) {
+                out.insert(kind);
+            }
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Long files with pages or chunks still to read after their first step, in indexing order
+    /// (`unfinished`, IndexStore.swift:749).
+    pub fn unfinished(&self) -> Result<Vec<FileRecord>> {
+        let sql = format!(
+            "SELECT {} FROM files WHERE state = 'partial'{} ORDER BY {}, mtime DESC",
+            Self::FILE_COLUMNS,
+            self.scope_sql(),
+            FileKind::INDEXING_ORDER_SQL,
+        );
+        let mut out = Vec::new();
+        self.db.query(&sql, [], |row| {
+            out.push(IndexStore::record(row));
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// What indexing learned about a file (`info(of:)`, IndexStore.swift:780). Swift casts the
+    /// JSON to `[String: String]`: one non-string value fails the cast and the whole info reads
+    /// empty, mirrored here.
+    pub fn info_of(&self, id: i64) -> Result<std::collections::HashMap<String, String>> {
+        let mut info = std::collections::HashMap::new();
+        self.db.query(
+            "SELECT info FROM files WHERE id = ?",
+            vec![Sql::Int(id)],
+            |row| {
+                if let Some(json) = row.text(0) {
+                    if let Ok(serde_json::Value::Object(map)) =
+                        serde_json::from_str::<serde_json::Value>(&json)
+                    {
+                        let strings: std::collections::HashMap<String, String> = map
+                            .iter()
+                            .filter_map(|(key, value)| {
+                                value.as_str().map(|text| (key.clone(), text.to_string()))
+                            })
+                            .collect();
+                        if strings.len() == map.len() {
+                            info = strings;
+                        }
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        Ok(info)
+    }
+
+    /// The last page or chunk stored for a file (`lastPlace(of:)`, IndexStore.swift:791): where a
+    /// long file's reading got to, when its info doesn't say.
+    pub fn last_place(&self, id: i64) -> Result<Option<i64>> {
+        let mut last = None;
+        self.db.query(
+            "SELECT MAX(loc) FROM segments WHERE file = ? AND kind IN ('page', 'page_image', 'chunk')",
+            vec![Sql::Int(id)],
+            |row| {
+                last = if row.is_null(0) {
+                    None
+                } else {
+                    Some(row.double(0) as i64)
+                };
+                Ok(())
+            },
+        )?;
+        Ok(last)
     }
 
     /// What indexing learned about a file (IndexStore.swift:798). `info` is stored as sorted-key

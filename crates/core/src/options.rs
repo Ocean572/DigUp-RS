@@ -96,7 +96,7 @@ impl IndexOptions {
             self.page_budget,
             self.frame_budget,
             swift_seconds(self.frame_interval),
-            self.audio_window,
+            swift_seconds(self.audio_window),
             swift_seconds(self.audio_hop)
         )
     }

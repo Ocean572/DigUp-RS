@@ -157,4 +157,19 @@ fn main() {
     // it). A downstream binary finds the same libraries through LD_LIBRARY_PATH=Vendor/llama/lib,
     // which is how the Swift helper's payload is run too (`Package.swift:31` uses `-Xlinker -rpath`).
     println!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib.display());
+
+    // ⑨ (the Indexer): this crate now links `crates/native` for the prepare stage (stb
+    // pictures, PDFium pages, ffmpeg media). Cargo carries a dylib's *search* through the
+    // rlib graph, not its `-l` line — so this crate names PDFium (and its C++ runtime)
+    // itself, the way crates/cli/build.rs repeats it for the binary, with the same rpath.
+    let root = manifest
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("../.."));
+    let pdfium = root.join("Vendor").join("pdfium").join("lib");
+    println!("cargo::rustc-link-search=native={}", pdfium.display());
+    println!("cargo::rustc-link-lib=dylib=pdfium");
+    println!("cargo::rustc-link-lib=dylib=stdc++");
+    println!("cargo::rustc-link-arg=-Wl,-rpath,{}", pdfium.display());
 }

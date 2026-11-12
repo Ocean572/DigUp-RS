@@ -63,6 +63,26 @@ pub fn has_words(text: &str) -> bool {
     letters > 0 && letters * 4 >= others
 }
 
+/// Enough prose for a vector: `hasWords`, and at least four words with a letter in them. A stub
+/// (`DEBUG=true`, `root = true`, a two-line .gitignore) passes the letters test and then wins
+/// generic queries on meaning alone, since text that short collapses toward the model's generic
+/// centre; its words are still found by keyword (SearchText.swift:48).
+pub fn has_prose(text: &str) -> bool {
+    if !has_words(text) {
+        return false;
+    }
+    let mut words = 0;
+    for word in text.split_whitespace() {
+        if word.chars().any(is_letter) {
+            words += 1;
+            if words >= 4 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// What's wrong with a PDF page's text layer, when it can't be used as read (SearchText.swift:178).
 #[derive(Debug, PartialEq, Eq)]
 pub enum PageTextProblem {

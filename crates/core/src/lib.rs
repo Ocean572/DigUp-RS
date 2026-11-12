@@ -7,6 +7,7 @@
 //! and search land in later phases.
 
 pub mod code;
+pub mod costs;
 pub mod crawler;
 pub mod db;
 pub mod doc;

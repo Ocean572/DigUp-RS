@@ -16,6 +16,7 @@
 //! ```
 
 pub mod image_sizing;
+pub mod indexer;
 pub mod models;
 pub mod prompts;
 pub mod worker;
@@ -56,6 +57,13 @@ pub enum Error {
         path: String,
         source: std::io::Error,
     },
+    /// An index built with another model or other settings, with no reset-on-change set
+    /// (`IndexerError`, Indexer.swift:3): the run stops, its files stay pending.
+    #[error(transparent)]
+    Indexer(#[from] indexer::FingerprintMismatch),
+    /// The store said no (`DatabaseError`): shown verbatim, as Swift's `\(error)` spells it.
+    #[error(transparent)]
+    Core(#[from] digup_core::db::Error),
 }
 
 impl Error {
