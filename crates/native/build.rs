@@ -25,6 +25,10 @@ fn main() {
     // found by search path + rpath exactly as the Swift package's `-L Vendor/pdfium/lib` +
     // runpath settings find it.
     let pdfium = root.join("Vendor/pdfium/lib");
+    // The PDFium flags enter the link only once pdf.rs exists — and the script must re-run
+    // when it appears, so the fingerprint watches the file it tests for.
+    println!("cargo::rerun-if-changed=src/pdf.rs");
+    println!("cargo::rerun-if-changed=tests");
     if Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/pdf.rs")
         .is_file()

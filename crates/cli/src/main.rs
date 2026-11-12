@@ -53,6 +53,9 @@ const REPEATED: [&str; 4] = [
 ];
 
 fn main() {
+    // The engine's Estimator counts PDF pages with PDFium (`PDF+Portable.swift:136`); install
+    // the same library's count before any verb reads a folder.
+    digup_native::pdf::install_pages_hook();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse(&argv) {
         Ok(args) => args,

@@ -221,10 +221,30 @@ pub fn estimates_by_subfolder(
 }
 
 /// `PDFium.pages(of:)` on Linux: FPDF_GetPageCount, 1 when the document can't be read.
-/// The page count is the linearized tree's `/Count`, which a plain read of the trailer
-/// carries; the header scan counts `/Type /Page` objects as the PDFium count would, and an
-/// unreadable file is 1 as PDFium's failure is.
+/// The engine opens the file with PDFium; the port answers through this seam. `crates/native`
+/// installs the PDFium call at startup; until something installs it — a core-only test, a
+/// helper built without the C library — the header scan stands in: the trailer's `/Count` is
+/// the page tree's own number, `/Type /Page` tokens count the same objects, and an unreadable
+/// file is 1 as PDFium's failure is. The seam is a C-ABI pointer so any crate that links
+/// PDFium can hand one over (`crates/native::pdf::install_pages_hook`).
+pub type PagesHook = unsafe extern "C" fn(*const libc::c_char) -> i64;
+static PAGES_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Installs the count function (process start, once); `None` puts the header scan back.
+pub fn set_pages_hook(hook: Option<PagesHook>) {
+    let address = hook.map_or(0, |f| f as usize);
+    PAGES_HOOK.store(address, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn pages_of(path: &str) -> i64 {
+    let address = PAGES_HOOK.load(std::sync::atomic::Ordering::Relaxed);
+    if address != 0 {
+        let hook = unsafe { std::mem::transmute::<usize, PagesHook>(address) };
+        let Ok(name) = std::ffi::CString::new(path) else {
+            return 1; // the engine's `try?` on a name C can't carry
+        };
+        return unsafe { hook(name.as_ptr()) };
+    }
     let Ok(data) = read_tail(path) else {
         return 1;
     };

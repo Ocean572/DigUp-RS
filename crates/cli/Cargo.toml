@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 digup-core = { workspace = true }
+digup-native = { workspace = true }
 digup-runtime = { workspace = true }
 digup-services = { workspace = true }
 digup-platform = { workspace = true }

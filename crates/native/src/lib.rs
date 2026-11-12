@@ -12,5 +12,6 @@
 pub mod exif;
 pub mod ffmpeg;
 pub mod image;
+pub mod pdf;
 pub mod rgb;
 pub mod stb;
