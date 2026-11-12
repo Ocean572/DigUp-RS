@@ -35,6 +35,7 @@ digup-platform = { path = "crates/platform" }
 # `scripts/fetch-vendor.sh` builds into Vendor/sqlite (SQLITE_ENABLE_FTS5). A port that lacks
 # FTS5 cannot create the `fts` virtual table; the schema test proves it is present.
 rusqlite = { version = "0.32", features = ["bundled"] }
+base64 = "0.23.1"
 thiserror = "2"
 unicode-normalization = "0.1"
 unicode-general-category = "1"

@@ -64,9 +64,20 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let command = args.positional.first().map(String::as_str);
+    // An app's helper goes when the app does (main.swift:717): the JSON-lines daemons and
+    // the `--json` estimate watch their parent (ParentWatch); a manual run has a parent
+    // that outlives them.
+    if matches!(
+        command,
+        Some("index-service" | "worker" | "search-service" | "download-model")
+    ) || (command == Some("estimate") && args.flags.iter().any(|f| f == "--json"))
+    {
+        digup_services::parentwatch::start();
+    }
     // Where this machine's speed check found its processor faster than its GPU, the model
     // runs on the processor (main.swift:725).
-    if args.positional.first().map(String::as_str) != Some("speed") {
+    if command != Some("speed") {
         let folder = args.index_folder();
         if digup_services::costs::MeasuredCosts::load(&folder)
             .speed
@@ -77,7 +88,13 @@ fn main() {
             digup_runtime::set_cpu_only(true);
         }
     }
-    match args.positional.first().map(String::as_str) {
+    // Queries are a few words: the processor encodes one in hundredths of a second, and
+    // starts sooner than a GPU (an RTX 4050 laptop: a search from scratch 1.8 s on its i7,
+    // 3.0 s on the GPU under Vulkan). Indexing keeps the GPU (main.swift:728, non-macOS).
+    if command == Some("search-service") {
+        digup_runtime::set_cpu_only(true);
+    }
+    match command {
         Some("speed") => {
             if let Err(e) = speed(&args) {
                 eprintln!("error: {e}");
@@ -89,6 +106,10 @@ fn main() {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
+        }
+        Some("worker") => {
+            let text_only = args.flags.iter().any(|flag| flag == "--text-only");
+            std::process::exit(digup_services::worker::worker_service(text_only));
         }
         _ => selftest(&args),
     }

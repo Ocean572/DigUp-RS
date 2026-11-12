@@ -27,6 +27,12 @@ pub enum FileKind {
 }
 
 impl FileKind {
+    /// Kinds whose indexing asks the model for pictures or sound (issue #155): the
+    /// media encoders stay unloaded in the embedder until a queue holds one of these.
+    pub fn needs_media_encoders(&self) -> bool {
+        matches!(self, Self::Image | Self::Screenshot | Self::Video | Self::Audio)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             FileKind::Screenshot => "screenshot",
@@ -129,6 +135,87 @@ impl Modality {
             "audio" => Modality::Audio,
             _ => return None,
         })
+    }
+}
+
+/// A helper that had to stop on a file leaves this note beside the index (`StoppedFile`,
+/// Model.swift:143). The exit status that says "a file was stopped: start a new helper"
+/// is EX_TEMPFAIL — 75; the watchdog writes the note and dies with it, and the next
+/// helper takes the note (`take` removes it as it reads) and marks that file failed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoppedFile {
+    pub path: Option<String>,
+    pub why: String,
+}
+
+impl StoppedFile {
+    pub const EXIT_CODE: i32 = 75;
+
+    /// The fatal signal that says nothing about a file: SIGKILL. macOS' jetsam and Linux'
+    /// OOM killer pick the process with the biggest footprint — which a helper reading a
+    /// 45 MP RAW is — and SIGKILL cannot be caught, so `CrashNotes` leaves no note for it
+    /// and the mark's only clue is the file the helper last reported reading. The other
+    /// fatal signals arrive *inside* a file's reading and name the file at once.
+    pub const UNTRACEABLE_SIGNAL: i32 = 9;
+
+    /// Whether the helper that died by `signal` names the file it was last reading for
+    /// the next helper. A catchable crash names it. SIGKILL names it only on a repeat —
+    /// the same queue position killed twice, `pending` not moving between the kills; the
+    /// first SIGKILL is a retry of the same file, not an accusation.
+    pub fn names_file(signal: i32, repeated: bool) -> bool {
+        signal != Self::UNTRACEABLE_SIGNAL || repeated
+    }
+
+    pub fn location(folder: &std::path::Path) -> std::path::PathBuf {
+        folder.join("stopped-file.json")
+    }
+
+    /// The JSON bytes as the engine writes them (`JSONEncoder` over the Codable's field
+    /// order): `{"path":…,"why":"…"}`, `path` null when no file is known.
+    pub fn bytes(&self) -> Vec<u8> {
+        #[derive(serde::Serialize)]
+        struct Wire<'a> {
+            path: Option<&'a str>,
+            why: &'a str,
+        }
+        // serde_json sorts map keys; a struct keeps the declared order, as Swift does.
+        serde_json::to_vec(&Wire {
+            path: self.path.as_deref(),
+            why: &self.why,
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn write_to(&self, folder: &std::path::Path) {
+        // `writeReplacing`: a failure leaves no half-written note behind.
+        let path = Self::location(folder);
+        if let Ok(temp) = Self::temp_sibling(&path) {
+            use std::io::Write;
+            if std::fs::File::create(&temp)
+                .and_then(|mut f| f.write_all(&self.bytes()))
+                .is_ok()
+            {
+                let _ = std::fs::rename(&temp, &path);
+            } else {
+                let _ = std::fs::remove_file(&temp);
+            }
+        }
+    }
+
+    fn temp_sibling(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::time::SystemTime::now().hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        Ok(path.with_extension(format!("json.tmp{:x}", hasher.finish())))
+    }
+
+    /// The note an earlier helper left, removed as it's read.
+    pub fn take(folder: &std::path::Path) -> Option<Self> {
+        let path = Self::location(folder);
+        let data = std::fs::read(&path).ok()?;
+        let _ = std::fs::remove_file(&path);
+        serde_json::from_slice(&data).ok()
     }
 }
 

@@ -818,6 +818,124 @@ PRAGMA user_version = 5;"
         Ok((files, left))
     }
 
+    // MARK: What the index services ask of the store (IndexService.swift)
+
+    /// Files under none of the kept folders leave the index — the app's folders taken out
+    /// (`prune(keepingUnder:)`, IndexStore.swift:674). The kept prefixes are `pathRanges`'
+    /// `from` bounds, so a folder under `/var` keeps `/private/var` rows too (the same
+    /// aliasing the scope ranges make). Each gone file is deleted as the store deletes a
+    /// file that moved away.
+    pub fn prune_keeping_under(&self, roots: &[String]) -> Result<i64> {
+        let prefixes: Vec<String> = roots
+            .iter()
+            .flat_map(|root| path_ranges(root))
+            .map(|range| range.0)
+            .collect();
+        let mut gone: Vec<i64> = Vec::new();
+        self.db.query("SELECT id, path FROM files", [], |row| {
+            let path = row.text(1).unwrap_or_default();
+            if !prefixes.iter().any(|p| path.starts_with(p)) {
+                gone.push(row.int(0));
+            }
+            Ok(())
+        })?;
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        self.db.transaction(|| {
+            for id in &gone {
+                self.delete(*id)?;
+            }
+            Ok(())
+        })?;
+        Ok(gone.len() as i64)
+    }
+
+    /// What older indexes couldn't read the first time — a scanned page's words (once OCR
+    /// exists) and a small vector picture (once the system can draw it) — queued once,
+    /// each capability stamped in `meta` so the pass happens only once per index
+    /// (`readAgainOnce`, IndexStore.swift:810). Both capabilities are Apple-only today:
+    /// the portable `OCR.isAvailable` and `ImageExtractor.drawsVectorPictures` are false,
+    /// so on this platform the answer is 0 by the engine's own reading.
+    pub fn read_again_once(&self) -> Result<i64> {
+        let (ocr_available, draws_pictures) = (false, false);
+        let mut files: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut flags: Vec<&str> = Vec::new();
+        if ocr_available && self.meta("scans_ocr")?.is_none() {
+            self.db.query(
+                "SELECT DISTINCT file FROM segments WHERE kind = 'page_image'",
+                [],
+                |row| {
+                    files.insert(row.int(0));
+                    Ok(())
+                },
+            )?;
+            flags.push("scans_ocr");
+        }
+        if draws_pictures && self.meta("pictures_drawn")?.is_none() {
+            // The mark is the engine's own skip detail: "small image w×h" for any w, h.
+            self.db.query(
+                "SELECT id FROM files WHERE kind = 'image' AND state = 'skipped' \
+                 AND detail LIKE 'small image %'",
+                [],
+                |row| {
+                    files.insert(row.int(0));
+                    Ok(())
+                },
+            )?;
+            flags.push("pictures_drawn");
+        }
+        if flags.is_empty() {
+            return Ok(0);
+        }
+        self.db.transaction(|| {
+            for file in &files {
+                self.requeue(*file)?;
+            }
+            for flag in &flags {
+                self.set_meta(flag, Some("1"))?;
+            }
+            Ok(())
+        })?;
+        Ok(files.len() as i64)
+    }
+
+    /// A file the indexing helper had to stop on (reading it ran away): it isn't read
+    /// again until it changes (`markStopped`, IndexStore.swift:832). A long file that was
+    /// being finished keeps what was read of it — `partial` closes to `done` with the
+    /// note; anything else becomes `failed`. False when no file has that path.
+    #[allow(dead_code)] // lands with the index-service daemon (Phase 3)
+    pub fn mark_stopped(&self, path: &str, why: &str) -> Result<bool> {
+        let mut found: Option<(i64, String)> = None;
+        self.db.query(
+            "SELECT id, state FROM files WHERE path = ?",
+            [Sql::Text(path.to_string())],
+            |row| {
+                found = Some((row.int(0), row.text(1).unwrap_or_default()));
+                Ok(())
+            },
+        )?;
+        let Some((id, state)) = found else {
+            return Ok(false);
+        };
+        if state == "partial" {
+            self.finish(
+                id,
+                "done",
+                Some(&format!("The rest couldn't be read: it {why}")),
+                HashMap::new(),
+            )?;
+        } else {
+            self.finish(
+                id,
+                "failed",
+                Some(&format!("It {why}")),
+                HashMap::new(),
+            )?;
+        }
+        Ok(true)
+    }
+
     // MARK: Full aggregation — the oracle (#193 keeps it; the counters tests compare against it)
 
     pub fn full_pending_count(&self) -> Result<i64> {
