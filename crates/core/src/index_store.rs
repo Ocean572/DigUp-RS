@@ -500,7 +500,7 @@ PRAGMA user_version = 5;"
             let mut sorted: Vec<i64> = ids.iter().copied().collect();
             sorted.sort_unstable();
             format!(
-                " AND id IN ({}))",
+                " AND id IN ({})",
                 sorted
                     .iter()
                     .map(|id| id.to_string())
@@ -541,7 +541,7 @@ PRAGMA user_version = 5;"
             let mut sorted: Vec<i64> = ids.iter().copied().collect();
             sorted.sort_unstable();
             format!(
-                " AND id IN ({}))",
+                " AND id IN ({})",
                 sorted
                     .iter()
                     .map(|id| id.to_string())

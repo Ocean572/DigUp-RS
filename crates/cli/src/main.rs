@@ -128,6 +128,49 @@ fn main() {
             };
             std::process::exit(digup_services::search_service::serve(config));
         }
+        Some("index-service") => {
+            // indexService(_:) (main.swift:421): the media options and the code
+            // index's overrides, the watchdog and the crash notes beside the index,
+            // the decode budget the same limit (issue #182).
+            let index = args.index_folder();
+            let mut code_options = args.options();
+            code_options.code = true;
+            code_options.excluded_folders = args
+                .list("--code-exclude")
+                .iter()
+                .map(|p| folder_url(p).to_string_lossy().into_owned())
+                .collect();
+            let config = digup_services::index_service::IndexServiceConfig {
+                index: index.clone(),
+                roots: args.positional[1..].iter().map(|p| folder_url(p)).collect(),
+                code_roots: args.list("--code-root").iter().map(|p| folder_url(p)).collect(),
+                options: args.options(),
+                code_options,
+                prune: args.flag("--prune"),
+                backfill: args.flag("--backfill"),
+                new_files_limit: args
+                    .value("--new-limit")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(50),
+                linger: args.value("--linger").and_then(|v| v.parse().ok()).unwrap_or(60.0),
+            };
+            // `&*` and not `<<`: a --memory-limit above 2^44 MB would overflow-shift
+            // and trap in the helper's own setup (#182 review N1); saturating gives a
+            // limit no file reaches, which is what such an argument means.
+            let memory_limit = args
+                .value("--memory-limit")
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|megabytes| megabytes.wrapping_mul(1 << 20))
+                .unwrap_or_else(digup_services::watchdog::default_memory_limit);
+            let time_limit = args
+                .value("--time-limit")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(digup_services::watchdog::DEFAULT_TIME_LIMIT);
+            digup_services::watchdog::Watchdog::new(&index, memory_limit, time_limit).start();
+            digup_native::image::set_decode_memory_budget(memory_limit);
+            digup_services::crashnotes::install(&index);
+            std::process::exit(digup_services::index_service::index_service(config));
+        }
         _ => selftest(&args),
     }
 }

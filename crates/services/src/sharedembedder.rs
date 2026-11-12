@@ -78,11 +78,18 @@ impl SharedEmbedder {
     }
 
     pub fn embedder(self: &Arc<Self>) -> Result<Box<dyn Embedder>> {
-        let (start, text_only, wants_full) = {
+        let (start, text_only, restart) = {
             let shape = self.lock.lock().expect("the model lock");
-            (shape.model.is_none(), !shape.wants_full, shape.wants_full)
+            let start = shape.model.is_none();
+            (
+                start,
+                !shape.wants_full,
+                // Swift's `let restart = !start && wantsFull && !full` — a full model
+                // serves text calls too (the Kept doc: "text calls run on either
+                // shape"), so a text request on the sticky full model is no restart.
+                !start && shape.wants_full && !shape.full,
+            )
         };
-        let restart = !start && wants_full;
         if restart {
             self.swap()?;
         }
@@ -137,14 +144,18 @@ impl SharedEmbedder {
     }
 
     /// `Kept`'s calls: the live model (media calls bring the encoders in now), or a
-    /// model re-shaped to what `wants_full` decided.
+    /// model re-shaped to what `wants_full` decided. Swift's `use(media:_:)` sets the
+    /// sticky flag only when a media call asks for it — a text call leaves the decision
+    /// of an earlier media call standing ("the encoders are not dropped and paid for
+    /// twice on the next image"), and text runs on either shape.
     fn use_model<T>(
         &self,
         media: bool,
         body: impl FnOnce(&dyn Embedder) -> Result<T>,
     ) -> Result<T> {
-        let wants = shape(&self.lock, |shape| std::mem::replace(&mut shape.wants_full, media));
-        if !wants {
+        let wants = shape(&self.lock, |shape| shape.wants_full);
+        if media && !wants {
+            shape(&self.lock, |shape| shape.wants_full = true);
             self.swap()?; // the first media embed: bring the encoders in now
         }
         let restart = {

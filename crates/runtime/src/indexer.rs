@@ -89,7 +89,7 @@ pub struct Step {
 }
 
 /// The factory of the embedder, made on first use (its failure is the run's failure).
-type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>>>;
+pub type MakeEmbedder = Box<dyn Fn() -> Result<Box<dyn Embedder>>>;
 /// `resetOnModelChange`: hears about an emptied index (the app: a new version brought a new
 /// model); None means a settings mismatch stops indexing.
 type ResetOnModelChange = Option<Box<dyn Fn(&str, &str)>>;

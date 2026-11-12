@@ -33,6 +33,7 @@ pub const INDEX_EVENTS: [&str; 10] = [
 pub mod costs;
 pub mod crashnotes;
 pub mod emit;
+pub mod index_service;
 pub mod parentwatch;
 pub mod search_service;
 pub mod sharedembedder;
