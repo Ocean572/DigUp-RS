@@ -383,6 +383,13 @@ RUN ldd /opt/digup/libggml-cuda.so \
 # scripts): a build that runs both builders pays the C-library compiles once.
 FROM ${BASE_IMAGE} AS rust-engine-builder
 
+# Stage 9's CUDA knobs, the same as engine-builder's above: scripts/build-llama.sh picks the
+# CUDA flavor by finding nvcc on PATH (a CUDA *devel* base) and pins the card with CUDA_ARCHS.
+# Without this ARG/ENV pair the build-arg has no landing place and CMake gets
+# `-gencode=arch=compute_,code=sm_` — the empty arch number is what "Unsupported gpu
+# architecture 'compute_'" means (measured 2026-11-13, this stage's first CUDA run).
+ARG CUDA_ARCHS=native
+ENV CUDA_ARCHS=${CUDA_ARCHS}
 ENV DEBIAN_FRONTEND=noninteractive
 # clang + libclang-dev: `digup-runtime`'s build script runs bindgen over the
 # vendored llama.cpp/PDFium headers, and bindgen IS libclang (measured 2026-11-13:
@@ -419,6 +426,15 @@ RUN --mount=type=cache,target=/src/Vendor \
     if [ -f /ci-vendor/llama/BUILD ]; then cp -a /ci-vendor/. /src/Vendor/; fi; \
     export CC="${CC:-cc}" CXX="${CXX:-c++}"; \
     scripts/fetch-vendor.sh; \
+    # The same flavor guard as engine-builder (line 128's note): a CUDA-flavored Vendor
+    # cache carries Vendor/llama-build/CMakeCache.txt with GGML_CUDA=ON, and a CPU run
+    # reusing it dies at configure with "CUDA Toolkit not found" (measured 2026-11-05).
+    rm -f Vendor/llama-build/CMakeCache.txt; \
+    # The same normalization as engine-builder (measured 2026-11-05, publish run #6):
+    # CUDA_ARCHS reaches CMake as ONE -D value and CMake lists are SEMICOLON-separated, so
+    # "61,70,…" is one invalid arch token and configure dies. Plain numbers, native and
+    # semicolon lists pass through unchanged. scripts/build-llama.sh stays untouched.
+    export CUDA_ARCHS="$(printf %s "${CUDA_ARCHS:-native}" | tr ',' ';')"; \
     # The resolver-retry wrapper mirrors engine-builder: these scripts are stamped and
     # idempotent, so one flaky DNS query must not kill a 20-minute build.
     tries=0; until scripts/build-ffmpeg.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \

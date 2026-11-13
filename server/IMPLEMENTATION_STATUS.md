@@ -40,9 +40,33 @@ payload (Linux)         scripts/rust/package-linux.sh measured here: dist/digup-
 
 Stage 9's CUDA procedure is defined for the Rust engine too (the `server-rust-runtime-cuda`
 stage, same `cuda-libs` glob, same ldd gate, same two build-args + a plain `CUDA_ARCHS`
-number); it is measured on the box with the card, with `gpu-handoff.sh` — CPU winning the
-measurement is a result, and `"GPU NOT MEASURED"` is acceptable where the Swift stages'
-numbers already are.
+number) and is MEASURED on this box, on GPU 0 (the Pascal card, `61`, CUDA 11.8, driver
+580.178.04):
+
+```
+build               server-rust-runtime-cuda exit 0 (BASE_IMAGE 11.8.0-devel,
+                    CUDA_RUNTIME_IMAGE 11.8.0-runtime, CUDA_ARCHS=61)
+speed --model       exit 0; device "gpu"; agreement 0.9997194609668691 (>= 0.999 gate);
+                    steady + settled, not doubtful. GPU s/emb: picture 0.1394, frame 0.0759,
+                    screen 0.3003, sound 0.2077, text 0.0285 (tries 0.384 / 0.376);
+                    CPU: picture 0.5493, frame 0.2992, screen 1.1835, sound 0.9049,
+                    text 0.1266 (tries 1.603 / 1.581) — the card wins by 3.9x on pictures
+costs.json          the engine's own record: speed.device "gpu" + the per-kind factors,
+                    tallies image 1.324 s / 10 units = 0.132 s each = the GPU's rate
+utilization         0.15 s sampling during a real 18-image index job: peak 96% util, model
+                    resident on the card to 1433 MiB, 23 busy samples (the job's embed
+                    window) — gpu-handoff.sh's rule: peak > 20% is the easy pass
+job + stop          files 18 / vectors 18 / searchable 18, pending 0, unfinished 0;
+                    SIGTERM exit 143
+```
+
+Two harness bugs found on the way, both fixed in the Dockerfile's Rust builder: it lacked
+`ARG CUDA_ARCHS` + `ENV` (the build-arg had no landing place and CMake got
+`-gencode=arch=compute_,code=sm_` — "Unsupported gpu architecture 'compute_'") and the
+comma→semicolon normalization engine-builder carries; and `speed --model` needs
+`DIGUP_MODELS` (the server publishes it to its helpers; a bare CLI in a shell looks in the
+app's own folder and dies "no embeddinggemma-2-Q8_0.gguf"). `gpu-handoff.sh` remains the
+Swift procedure; the Rust flavor is gated by its rules, measured here.
 
 ## 2026-11-10 — The shell's own Rust gate finally ran here (and the one warning it found)
 
