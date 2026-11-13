@@ -20,7 +20,8 @@ suites                  workspace cargo test: 0 failed (needs the pinned toolcha
                         models at ModelFiles::installed(), DIGUP_BACKENDS=Vendor/llama/lib,
                         DIGUP_FFMPEG=<4.4.2 folder>; without them the suites measure the
                         wrong ffmpeg); contract suite server-test-rust: 139 passed /
-                        1 deselected / 0 failed / 0 SKIPPED in 230 s (all four mounts)
+                        1 deselected / 0 failed / 0 SKIPPED (230 s, then 184.77 s after the
+                        builder fixes — all four mounts, main-tree corpus, full pytest path)
 digup-rust-runtime:local  server-rust-runtime (tini PID 1 → digup-server → the engine's
                         helpers, non-root uid 990, the Lit bundle baked in, curl
                         healthcheck counting 503 alive, no Python in the image): health 200,
@@ -78,6 +79,13 @@ line 1 (line 2 is blank, so asking for `2p` proves nothing alone) and `test -x /
 Re-measured after the fix: CPU rebuild exit 0 printing `digup: search your files by meaning
 (DigUp developer CLI)` from `/out` (the $ORIGIN shape), and the CUDA flavor rebuilding on the
 same lines.
+
+The cache mounts, measured the hard way: BuildKit runs stages in parallel, and the Rust
+builders mounted the Swift builder's Vendor volume (`target=/src/Vendor`; the id defaults to
+the target), so two `build-llama.sh` runs shared one tree and cmake's compiler-id test died
+on it (`ninja: error: unknown target 'cmTC_…'`). The Rust stages now mount `id=rust-vendor`
+(a distinct volume, the same path, scripts untouched — the attribute is `id`: BuildKit
+rejects `key=`), and the suite rebuilt green on top of it: 139 passed / 0 failed / 0 SKIPPED.
 
 ## 2026-11-10 — The shell's own Rust gate finally ran here (and the one warning it found)
 
