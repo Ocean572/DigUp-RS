@@ -14,7 +14,7 @@
 //! Embedding runs on the service's one loop thread (both parts), so the lock guards
 //! the shape's state.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use digup_runtime::worker::{Embedder, Embedding, WorkerInfo};
 use digup_runtime::Result;
@@ -38,8 +38,10 @@ struct Shape {
     wants_full: bool,
     /// `model` as loaded holds the media encoders.
     full: bool,
-    /// The shape info last handed out; `Kept::info` answers with it.
-    last_info: Option<WorkerInfo>,
+    /// The shape info the last model set leaked (see `info_of`): the value the live
+    /// model answers with, kept standing after a `close` the way Swift's
+    /// `current?.info() ?? lastInfo` keeps it.
+    leaked: Option<&'static WorkerInfo>,
 }
 
 /// The write side of the shape, under one lock. (The reader in `use_model` can't
@@ -47,8 +49,12 @@ struct Shape {
 /// an Arc clone of the live model; a concurrent `close` may leave the old model
 /// loaded for the call's duration, where Swift's lock-for-the-call would free it
 /// the instant the call ends. Single-threaded services never hit this.)
+///
+/// Poisoned locks are recovered (`into_inner`), as the port's pdf.rs:179 does: a panic
+/// somewhere else in the daemon must not become a second panic naming a lock, and the
+/// shape's fields are plain data with no invariant a panic could have left half-written.
 fn shape<T>(lock: &Mutex<Shape>, write: impl FnOnce(&mut Shape) -> T) -> T {
-    let mut shape = lock.lock().expect("the model lock");
+    let mut shape = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     write(&mut shape)
 }
 
@@ -61,7 +67,11 @@ impl SharedEmbedder {
     }
 
     pub fn is_running(&self) -> bool {
-        self.lock.lock().expect("the model lock").model.is_some()
+        self.lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .model
+            .is_some()
     }
 
     /// At a run's start: the queue's verdict, and the running model re-shaped to it
@@ -79,7 +89,10 @@ impl SharedEmbedder {
 
     pub fn embedder(self: &Arc<Self>) -> Result<Box<dyn Embedder>> {
         let (start, text_only, restart) = {
-            let shape = self.lock.lock().expect("the model lock");
+            let shape = self
+                .lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let start = shape.model.is_none();
             (
                 start,
@@ -100,7 +113,9 @@ impl SharedEmbedder {
             shape(&self.lock, |shape| {
                 shape.model = Some(started);
                 shape.full = full;
-                shape.last_info = Some(info);
+                // One leak per model set: `Kept::info` answers by borrow, and this is the
+                // copy that outlives the guard (see `info_of`).
+                shape.leaked = Some(Box::leak(Box::new(info)));
             });
             if !text_only {
                 emit(&serde_json::json!({"event": "model", "full": true}));
@@ -126,7 +141,7 @@ impl SharedEmbedder {
                     shape.model = Some(started);
                     shape.full = true;
                     shape.wants_full = true;
-                    shape.last_info = Some(info);
+                    shape.leaked = Some(Box::leak(Box::new(info)));
                 });
                 emit(&serde_json::json!({"event": "model", "full": true}));
                 Ok(())
@@ -154,21 +169,22 @@ impl SharedEmbedder {
         body: impl FnOnce(&dyn Embedder) -> Result<T>,
     ) -> Result<T> {
         let wants = shape(&self.lock, |shape| shape.wants_full);
-        if media && !wants {
-            shape(&self.lock, |shape| shape.wants_full = true);
-            self.swap()?; // the first media embed: bring the encoders in now
-        }
-        let restart = {
-            let shape = self.lock.lock().expect("the model lock");
-            shape.model.is_some() && shape.wants_full && !shape.full
-        };
-        if restart {
+        // The first media embed: bring the encoders in now. `swap` leaves the model full,
+        // so the restart check below is skipped — one lock round-trip per media embed,
+        // not two (the check only matters when no swap just happened).
+        let just_swapped = media && !wants;
+        if just_swapped {
             self.swap()?;
         }
-        let model = {
-            let shape = self.lock.lock().expect("the model lock");
-            shape.model.clone()
-        };
+        if !just_swapped {
+            let restart = shape(&self.lock, |shape| {
+                shape.model.is_some() && shape.wants_full && !shape.full
+            });
+            if restart {
+                self.swap()?;
+            }
+        }
+        let model = shape(&self.lock, |shape| shape.model.clone());
         // The indexers' `Embedder` is `Arc<dyn Embedder>`: a model made by a factory
         // that shares it is one `Arc` shared by both parts.
         let model = model
@@ -176,40 +192,29 @@ impl SharedEmbedder {
         body(model.as_ref())
     }
 
-    /// `Kept.info`'s answer: the live model's shape, or the last one seen. `embedder()`
-    /// hands out a `Kept` only once a model is set, and every set updates `last_info`,
-    /// so this never panics on a closed model. `Kept::info` must answer by borrow, so
-    /// the answer lives in a process-wide cell updated at every set — the same value
-    /// Swift's computed property returns per call.
-    fn info_now(&self) -> &'static WorkerInfo {
-        let info = {
-            let shape = self.lock.lock().expect("the model lock");
-            shape
-                .model
-                .as_ref()
-                .map(|m| m.info().clone())
-                .or_else(|| shape.last_info.clone())
-                .unwrap_or_else(|| WorkerInfo {
-                    model: "digup".to_string(),
-                    revision: String::new(),
-                    runtime: String::new(),
-                    dtype: String::new(),
-                    dim: 0,
-                    text_only: true,
-                    load_seconds: None,
-                })
-        };
-        let cell = INFO.get_or_init(|| Mutex::new(info.clone()));
-        *cell.lock().expect("the info lock") = info;
-        let guard = cell.lock().expect("the info lock");
-        // Leak per call is a WorkerInfo per embedding call; the indexers copy the
-        // fields they need and drop them. Box::leak keeps `info` a `&'static` borrow
-        // as the trait requires; the cell keeps exactly one copy alive.
-        Box::leak(Box::new(guard.clone()))
+    /// The shape's answer for `Kept::info`: the copy the model SET leaked, one per set —
+    /// the value the live model answers with, which is what Swift's computed property
+    /// returns per call, and which keeps answering after a `close` (Swift's `current ??
+    /// lastInfo`), measured byte-equal 2026-11-13.
+    ///
+    /// `Kept::info` must answer by borrow, and the model lives behind a lock, so the
+    /// borrow needs a place that outlives the guard. At `audit-base` this seam leaked a
+    /// fresh `WorkerInfo` on EVERY call: a 1.8M-file run embeds some 2M times, so a
+    /// daemon meant to sit warm between runs grew a little at every file. The leak
+    /// belongs to the SET (a start, a swap — a handful per run), never to the call.
+    /// Measured, not promised: `tests/sharedembedder.rs` reads this process's resident
+    /// memory across 200 k `info()` calls with `watchdog::footprint` — the tool that
+    /// already ends a runaway helper on this box — and refuses a megabyte of growth.
+    fn info_of(&self) -> &WorkerInfo {
+        let guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard
+            .leaked
+            .expect("a Kept is handed out only after a model set, and every set leaks its info")
     }
 }
-
-static INFO: OnceLock<Mutex<WorkerInfo>> = OnceLock::new();
 
 /// The indexers' view: always the *current* model — media calls upgrade it on the
 /// spot (issue #155: a scanned PDF page from a queue that said text), text calls run
@@ -220,7 +225,7 @@ struct Kept {
 
 impl Embedder for Kept {
     fn info(&self) -> &WorkerInfo {
-        self.owner.info_now()
+        self.owner.info_of()
     }
 
     fn embed_texts(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
