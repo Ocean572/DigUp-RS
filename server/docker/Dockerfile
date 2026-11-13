@@ -420,8 +420,17 @@ COPY .ci-vendor /ci-vendor
 # Same vendor seeding as engine-builder: CI passes a prebuilt Vendor through the context,
 # the scripts land on their stamps (Vendor/VENDOR, ffmpeg/BUILD, llama/BUILD) and skip.
 # bash for pipefail (Ubuntu's /bin/sh is dash, which has no `set -o pipefail`).
+# The Vendor cache mount carries `key=rust-vendor` for a measured reason: BuildKit runs
+# stages in parallel, and the Swift builder shares `/src/Vendor` with this one — two
+# `scripts/build-llama.sh` runs in one tree race (measured 2026-11-13 on the
+# server-test-rust chain: `ninja: error: unknown target 'cmTC_…'` / `loading 'build.ninja':
+# No such file or directory` from cmake's compiler-id test, the Swift stage failing on the
+# Rust stage's half-written build tree). A distinct `id` = a distinct volume (BuildKit
+# v0.34.2 rejects `key=` outright — "unexpected key 'key'"; the attribute is `id`, the name
+# the cache records print: "cached mount /src/Vendor … with id //src/Vendor"). The scripts
+# stay untouched.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN --mount=type=cache,target=/src/Vendor \
+RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
     --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root/.cargo/registry \
     set -euxo pipefail; \
@@ -462,7 +471,7 @@ RUN --mount=type=cache,target=/src/Vendor \
 # which is how `FFmpeg.find` reaches them (beside the executable, then PATH).
 FROM rust-engine-builder AS rust-engine-payload
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN --mount=type=cache,target=/src/Vendor \
+RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
     --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root/.cargo/registry \
     set -euxo pipefail; \
