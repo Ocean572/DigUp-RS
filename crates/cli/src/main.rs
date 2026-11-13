@@ -14,6 +14,11 @@ use std::time::Instant;
 use digup_services::costs::{MeasuredCosts, Speed};
 use digup_services::speed as modelspeed;
 use digup_services::system_load;
+use unicode_segmentation::UnicodeSegmentation;
+
+/// `usage` (main.swift:11-53): the CLI's own words, byte-for-byte (the Swift literal's
+/// 4-space strip is baked into the file; Swift prints it verbatim).
+const USAGE: &str = include_str!("usage.txt");
 
 /// `Arguments` (main.swift:59-95): known valued flags take exactly one value, repeated
 /// ones collect a list, `--*` are bare flags, everything else is positional.
@@ -57,6 +62,15 @@ fn main() {
     // the same library's count before any verb reads a folder.
     digup_native::pdf::install_pages_hook();
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // main.swift:726 — no args, `-h`, `--help`, `help`: the usage text, exit 0. An
+    // unknown command is the same text with exit 2 (the switch's default).
+    match argv.first().map(String::as_str) {
+        None | Some("-h") | Some("--help") | Some("help") => {
+            println!("{USAGE}");
+            return;
+        }
+        _ => {}
+    }
     let args = match parse(&argv) {
         Ok(args) => args,
         Err(e) => {
@@ -121,6 +135,18 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("search") => {
+            if let Err(e) = search(&args) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("eval") => {
+            if let Err(e) = evaluate(&args) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("worker") => {
             let text_only = args.flags.iter().any(|flag| flag == "--text-only");
             std::process::exit(digup_services::worker::worker_service(text_only));
@@ -141,6 +167,11 @@ fn main() {
                     .unwrap_or(300.0),
             };
             std::process::exit(digup_services::search_service::serve(config));
+        }
+        Some("download-model") => {
+            // downloadModel(_:) (DownloadModel.swift): the events are the contract;
+            // it exits 0 on `done`, 1 on `error`.
+            std::process::exit(download_model(&args));
         }
         Some("index-service") => {
             // indexService(_:) (main.swift:421): the media options and the code
@@ -185,7 +216,11 @@ fn main() {
             digup_services::crashnotes::install(&index);
             std::process::exit(digup_services::index_service::index_service(config));
         }
-        _ => selftest(&args),
+        _ => {
+            // main.swift's switch default: the usage text, exit 2.
+            println!("{USAGE}");
+            std::process::exit(2);
+        }
     }
 }
 
@@ -1244,29 +1279,993 @@ fn byte_count(bytes: i64) -> String {
 }
 
 /// The Phase-1 self-test: open a v6 index and report it.
-fn selftest(args: &Arguments) {
-    use digup_core::{IndexStore, MAIN_FILE, SCHEMA_VERSION};
-    let dir = args
-        .positional
-        .get(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("digup-cli-selftest"));
-    match IndexStore::open(Path::new(&dir), MAIN_FILE) {
-        Ok(store) => println!(
-            "index: {}\nuser_version: {}",
-            store.file.display(),
-            SCHEMA_VERSION
-        ),
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
+/// `CodeQuery` (Model.swift:104): the "code:" prefix that routes a query to the
+/// code index. `text(of:)`: what's typed after it ("" for "code:" alone), nil for
+/// anything that isn't a code query.
+fn code_query_text(query: &str) -> Option<String> {
+    const PREFIX: &str = "code:";
+    let trimmed = query.trim_start();
+    let head: String = trimmed.chars().take(PREFIX.chars().count()).collect();
+    if head.to_ascii_lowercase() != PREFIX {
+        return None;
+    }
+    Some(
+        trimmed
+            .chars()
+            .skip(PREFIX.chars().count())
+            .collect::<String>()
+            .trim()
+            .to_string(),
+    )
+}
+
+/// `Arguments.kinds()` (main.swift:145): the `--kind` list, the refusal worded verbatim.
+fn search_kinds(
+    args: &Arguments,
+) -> Result<Option<std::collections::HashSet<digup_core::model::FileKind>>, String> {
+    use digup_core::model::FileKind;
+    match args.value("--kind") {
+        None => Ok(None),
+        Some(list) => {
+            let mut set = std::collections::HashSet::new();
+            for item in list.split(',') {
+                match FileKind::parse(item.trim()) {
+                    Some(kind) => {
+                        set.insert(kind);
+                    }
+                    None => {
+                        return Err(format!(
+                            "unknown kind {item}; use screenshot, image, pdf, doc, audio, video"
+                        ))
+                    }
+                }
+            }
+            Ok(Some(set))
         }
+    }
+}
+
+/// `queryVectors` (main.swift:351): the queries through a text-only worker whose
+/// log rides beside the index; nil when the index has no vectors (keyword-only
+/// search), an error when two pipelines' vectors would meet.
+fn query_vectors(
+    queries: &[String],
+    store: &digup_core::IndexStore,
+    searcher: &digup_core::searcher::Searcher<'_>,
+    prompt: fn(&str) -> String,
+) -> Result<Option<Vec<Vec<f32>>>, String> {
+    use digup_runtime::worker::Embedder;
+    use digup_runtime::{LlamaEmbedder, LlamaModels};
+    if searcher.vector_count() == 0 || queries.is_empty() {
+        return Ok(None);
+    }
+    let models = LlamaModels::locate().map_err(|e| e.to_string())?;
+    let log = store.directory.join("worker-query.log");
+    let embedder = LlamaEmbedder::new(&models, true, None, Some(&log)).map_err(|e| e.to_string())?;
+    if let Some(source) = &searcher.vector_source {
+        let mine = embedder.info().vector_source();
+        if *source != mine {
+            return Err(format!(
+                "index vectors come from {source} but the query encoder is {mine}"
+            ));
+        }
+    }
+    let prompted: Vec<String> = queries.iter().map(|q| prompt(q)).collect();
+    Ok(Some(
+        embedder.embed_texts(&prompted).map_err(|e| e.to_string())?,
+    ))
+}
+
+/// `location(_:)` (main.swift:178): the place a hit points at, in the CLI's words.
+fn location(hit: &digup_core::searcher::SearchHit) -> String {
+    use digup_core::model::SegmentKind;
+    match hit.segment {
+        SegmentKind::Page | SegmentKind::PageImage => hit
+            .loc
+            .map(|loc| format!("p. {}", loc as i64))
+            .unwrap_or_default(),
+        SegmentKind::Audio => hit
+            .loc
+            .map(|loc| format!("at {} (sound)", formats::clock(loc)))
+            .unwrap_or_default(),
+        SegmentKind::Frame => hit
+            .loc
+            .map(|loc| format!("at {}", formats::clock(loc)))
+            .unwrap_or_default(),
+        SegmentKind::Chunk => hit
+            .loc
+            .map(|loc| format!("part {}", loc as i64))
+            .unwrap_or_default(),
+        SegmentKind::Lines => hit
+            .loc
+            .map(|loc| {
+                format!(
+                    "lines {}–{}",
+                    loc as i64,
+                    hit.loc_end.unwrap_or(loc) as i64
+                ) + &hit
+                    .focus
+                    .map(|focus| format!(", opens at {}", focus as i64))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default(),
+        SegmentKind::Cells => hit
+            .loc
+            .map(|loc| {
+                if hit.loc_end == Some(loc) {
+                    format!("cell {}", loc as i64)
+                } else {
+                    format!("cells {}–{}", loc as i64, hit.loc_end.unwrap_or(loc) as i64)
+                }
+            })
+            .unwrap_or_default(),
+        SegmentKind::Ocr => "text in image".to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Foundation's number shape for `JSONSerialization` (probed on this box against
+/// Swift 6.4's writer, digit for digit): shortest round-trip digits — like Rust's
+/// `{:e}` — written in exponent form when the leading digit's power is < -4 or
+/// ≥ 16 ("1e-05", "1e+16"), decimal form otherwise, integral values bare ("3"),
+/// negative zero "-0", exponents signed with at least two digits.
+fn swift_number(value: &serde_json::Number) -> String {
+    if let Some(int) = value.as_i64() {
+        return int.to_string();
+    }
+    if let Some(int) = value.as_u64() {
+        return int.to_string();
+    }
+    let Some(number) = value.as_f64() else {
+        return value.to_string();
+    };
+    if number == 0.0 {
+        return if number.is_sign_negative() { "-0".to_string() } else { "0".to_string() };
+    }
+    let sign = if number.is_sign_negative() { "-" } else { "" };
+    // The shortest decimal Rust's LowerExp prints: "d[.ddd]eE", digits + the power
+    // of the leading digit.
+    let text = format!("{:e}", number.abs());
+    let (digits_part, exp_part) = text.split_once('e').expect("LowerExp prints e");
+    let exponent: i32 = exp_part.parse().expect("LowerExp prints an integer exponent");
+    let digits: String = digits_part.chars().filter(|c| *c != '.').collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    // The leading digit's power: 1.23e15 → 15; 0.0001234 → 1.234e-4 → -4.
+    let leading = exponent;
+    if leading < -4 || leading >= 16 {
+        // "1e+16", "9.9e-05", "-1.5e-10": a signed, two-at-least-digit exponent.
+        let head = &digits[..1];
+        let tail = &digits[1..];
+        let mantissa = if tail.is_empty() {
+            head.to_string()
+        } else {
+            format!("{head}.{tail}")
+        };
+        return format!("{sign}{mantissa}e{:+03}", leading);
+    }
+    // Fixed form: the point sits after the digit at the `leading` power.
+    let len = digits.len() as i32;
+    let out = if leading >= len - 1 {
+        format!("{}{}", digits, "0".repeat((leading - (len - 1)) as usize))
+    } else if leading >= 0 {
+        let split = (leading + 1) as usize; // digits up to and including the point's left side
+        format!("{}.{}", &digits[..split], &digits[split..])
+    } else {
+        format!("0.{}{}", "0".repeat((-leading - 1) as usize), digits)
+    };
+    format!("{sign}{out}")
+}
+
+/// JSONSerialization `[.prettyPrinted, .sortedKeys]` (main.swift:379-381), probed
+/// byte-for-byte against Swift 6.4 on this box: 2-space indents, `"key" : value`
+/// separators, `/` escaped as `\/`, controls as the short escapes with uppercase
+/// `\uXXXX` for the rest, empty containers printed as `[`, a blank line, the
+/// closing indent — serde's Map is a BTreeMap, so `hit_fields` rows arrive sorted.
+fn swift_json(rows: &[serde_json::Value]) -> String {
+    fn esc(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '/' => out.push_str("\\/"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\u{8}' => out.push_str("\\b"),
+                '\u{c}' => out.push_str("\\f"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out
+    }
+    fn write(value: &serde_json::Value, indent: usize, out: &mut String) {
+        use serde_json::Value;
+        match value {
+            Value::Object(map) => {
+                let open = " ".repeat(indent);
+                if map.is_empty() {
+                    out.push_str("{\n\n");
+                    out.push_str(&open);
+                    out.push('}');
+                    return;
+                }
+                out.push_str("{\n");
+                let inner = " ".repeat(indent + 2);
+                // `.sortedKeys`: lexicographic key order (the Map is insertion-ordered
+                // under serde_json's preserve_order — Foundation sorts on writing).
+                let mut entries: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+                entries.sort_by(|(a, _), (b, _)| a.as_bytes().cmp(b.as_bytes()));
+                for (index, (key, item)) in entries.into_iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(",\n");
+                    }
+                    out.push_str(&inner);
+                    out.push('"');
+                    out.push_str(&esc(key));
+                    out.push_str("\" : ");
+                    write(item, indent + 2, out);
+                }
+                out.push('\n');
+                out.push_str(&open);
+                out.push('}');
+            }
+            Value::Array(items) => {
+                let open = " ".repeat(indent);
+                if items.is_empty() {
+                    out.push_str("[\n\n");
+                    out.push_str(&open);
+                    out.push(']');
+                    return;
+                }
+                out.push_str("[\n");
+                let inner = " ".repeat(indent + 2);
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(",\n");
+                    }
+                    out.push_str(&inner);
+                    write(item, indent + 2, out);
+                }
+                out.push('\n');
+                out.push_str(&open);
+                out.push(']');
+            }
+            Value::String(text) => {
+                out.push('"');
+                out.push_str(&esc(text));
+                out.push('"');
+            }
+            Value::Number(number) => out.push_str(&swift_number(number)),
+            Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+            Value::Null => out.push_str("null"),
+        }
+    }
+    let mut out = String::new();
+    write(&serde_json::Value::Array(rows.to_vec()), 0, &mut out);
+    out
+}
+
+/// `search(_:)` (main.swift:362): one query, the store's ranking relayed verbatim.
+/// The human lines and the `--json` rows are the CLI's own contract; the hits'
+/// numbers come from the engine (the daemon's `hit_fields` — the same rows).
+fn search(args: &Arguments) -> Result<(), String> {
+    use digup_core::searcher::{SearchOptions, Searcher};
+    use digup_core::{IndexStore, CODE_FILE, MAIN_FILE};
+    let mut query = args.positional[1..].join(" ");
+    if query.is_empty() {
+        return Err("search for what?".to_string());
+    }
+    let code = code_query_text(&query);
+    if let Some(text) = code.clone() {
+        query = text;
+    }
+    if query.is_empty() {
+        return Err("search the code for what?".to_string());
+    }
+    let store = IndexStore::open(
+        &args.index_folder(),
+        if code.is_none() { MAIN_FILE } else { CODE_FILE },
+    )
+    .map_err(|e| e.to_string())?;
+    let mut searcher = Searcher::new(&store, true).map_err(|e| e.to_string())?;
+    let prompt: fn(&str) -> String = if code.is_none() {
+        digup_runtime::prompts::query
+    } else {
+        digup_runtime::prompts::code_query
+    };
+    let started = Instant::now();
+    let vector = query_vectors(&[query.clone()], &store, &searcher, prompt)?
+        .and_then(|mut groups| groups.pop());
+    let encoded = started.elapsed().as_secs_f64();
+    let kinds = search_kinds(args)?;
+    let opts = SearchOptions {
+        kinds: kinds.as_ref(),
+        limit: args
+            .value("-n")
+            .and_then(|v| v.parse::<i64>().ok())
+            .map(|n| n.max(0) as usize)
+            .unwrap_or(10),
+        z_gate: args
+            .value("--zgate")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2.0),
+        word_weight: args.value("--word-weight").and_then(|v| v.parse().ok()),
+        prefix_last: false,
+    };
+    let hits = searcher
+        .search(&query, vector.as_deref(), &opts)
+        .map_err(|e| e.to_string())?;
+    let searched_ms = (started.elapsed().as_secs_f64() - encoded) * 1000.0;
+    if args.flag("--json") {
+        let rows: Vec<serde_json::Value> = hits
+            .iter()
+            .map(digup_services::search_service::hit_fields)
+            .collect();
+        println!("{}", swift_json(&rows));
+        return Ok(());
+    }
+    if hits.is_empty() {
+        println!("no good matches");
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for (rank, hit) in hits.iter().enumerate() {
+        let mut why: Vec<String> = Vec::new();
+        if let Some(z) = hit.z {
+            why.push(format!("z {:.1}", z));
+        }
+        if let Some(words) = hit.keyword_rank {
+            why.push(format!("words #{words}"));
+        }
+        let place = location(hit);
+        let name = Path::new(&hit.path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| hit.path.clone());
+        println!(
+            "{}. {} {}{}   ({})",
+            formats::lpad(&(rank + 1).to_string(), 2),
+            formats::pad(hit.kind.as_str(), 10),
+            name,
+            if place.is_empty() {
+                String::new()
+            } else {
+                format!("  [{place}]")
+            },
+            why.join(", ")
+        );
+        let folder = Path::new(&hit.path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        println!("      {}", formats::tilde(&folder, &home));
+        if let Some(excerpt) = &hit.excerpt {
+            if !excerpt.is_empty() {
+                let cut: String = excerpt.graphemes(true).take(160).collect();
+                println!("      “{cut}”");
+            }
+        }
+    }
+    println!(
+        "({} vectors · query encoder {:.2} s incl. start-up · search {:.0} ms)",
+        searcher.vector_count(),
+        encoded,
+        searched_ms
+    );
+    Ok(())
+}
+
+/// `evaluate(_:)` (main.swift:611): recall of known answers (evals/*.json). Ranks,
+/// R@1/R@5/R@10, MRR and the weaker-matches fold are the engine's own search, run
+/// through the same knobs (`--zgate`, `--word-weight`, `-n`).
+fn evaluate(args: &Arguments) -> Result<(), String> {
+    use digup_core::model::{FileKind, SegmentKind};
+    use digup_core::searcher::{SearchOptions, Searcher};
+    use digup_core::{IndexStore, CODE_FILE, MAIN_FILE};
+
+    #[derive(Clone, Copy, Default)]
+    struct Row {
+        n: i64,
+        at1: i64,
+        at5: i64,
+        at10: i64,
+        mrr: f64,
+    }
+
+    let file = args.positional.get(1).ok_or("which eval file?")?;
+    let doc: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(expand_tilde(file)).map_err(|e| format!("{file}: {e}"))?,
+    )
+    .map_err(|e| format!("{file}: {e}"))?;
+    let base_raw = doc.get("base").and_then(|b| b.as_str()).ok_or("eval file has no base")?;
+    let queries = doc
+        .get("queries")
+        .and_then(|q| q.as_array())
+        .ok_or("eval file has no queries")?;
+    // The testbed kept elsewhere (another drive on Windows, wherever CI puts it).
+    const TESTBED: &str = "~/DigUpTestbed";
+    let base = match std::env::var("DIGUP_TESTBED") {
+        Ok(testbed) if base_raw.starts_with(TESTBED) => {
+            format!("{}{}", testbed, &base_raw[TESTBED.len()..])
+        }
+        _ => expand_tilde(base_raw).to_string_lossy().into_owned(),
+    };
+    // "code: …" queries search the code index (with its prompt), the others the main one.
+    let texts: Vec<String> = queries
+        .iter()
+        .map(|q| {
+            let text = q.get("q").and_then(|q| q.as_str()).unwrap_or("");
+            code_query_text(text).unwrap_or_else(|| text.to_string())
+        })
+        .collect();
+    let is_code: Vec<bool> = queries
+        .iter()
+        .map(|q| {
+            code_query_text(q.get("q").and_then(|q| q.as_str()).unwrap_or("")).is_some()
+        })
+        .collect();
+    let depth = args
+        .value("-n")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|n| n.max(0) as usize)
+        .unwrap_or(10);
+    let z_gate = args
+        .value("--zgate")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2.0);
+    let word_weight = args.value("--word-weight").and_then(|v| v.parse().ok());
+    let index = args.index_folder();
+    let main_store = if is_code.iter().any(|code| !*code) {
+        Some(IndexStore::open(&index, MAIN_FILE).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    let code_store = if is_code.iter().any(|code| *code) {
+        Some(IndexStore::open(&index, CODE_FILE).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    let mut main_searcher: Option<Searcher<'_>> = main_store
+        .as_ref()
+        .map(|store| Searcher::new(store, true))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let mut code_searcher: Option<Searcher<'_>> = code_store
+        .as_ref()
+        .map(|store| Searcher::new(store, true))
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let mut vectors: Vec<Option<Vec<f32>>> = vec![None; queries.len()];
+    for group in [false, true] {
+        let slots: Vec<usize> = (0..queries.len()).filter(|i| is_code[*i] == group).collect();
+        if slots.is_empty() {
+            continue;
+        }
+        let (searcher, store, prompt) = if group {
+            (
+                code_searcher.as_mut().expect("the code searcher"),
+                code_store.as_ref().expect("the code store"),
+                digup_runtime::prompts::code_query as fn(&str) -> String,
+            )
+        } else {
+            (
+                main_searcher.as_mut().expect("the main searcher"),
+                main_store.as_ref().expect("the main store"),
+                digup_runtime::prompts::query as fn(&str) -> String,
+            )
+        };
+        let group_texts: Vec<String> = slots.iter().map(|i| texts[*i].clone()).collect();
+        if let Some(embedded) = query_vectors(&group_texts, store, &*searcher, prompt)? {
+            for (slot, vector) in slots.iter().zip(embedded) {
+                vectors[*slot] = Some(vector);
+            }
+        }
+    }
+    let mut by_tag: Vec<(String, Row)> = Vec::new();
+    let mut shown = 0i64;
+    let mut listed = 0i64;
+    let mut folded = 0i64; // the app's weaker-matches fold (Searcher.strongCount)
+    for (i, query) in queries.iter().enumerate() {
+        let kinds: Option<std::collections::HashSet<FileKind>> = query
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .and_then(FileKind::parse)
+            .map(|kind| std::collections::HashSet::from([kind]));
+        let searcher: &mut Searcher<'_> = if is_code[i] {
+            code_searcher.as_mut().expect("the code searcher")
+        } else {
+            main_searcher.as_mut().expect("the main searcher")
+        };
+        let opts = SearchOptions {
+            kinds: kinds.as_ref(),
+            limit: depth,
+            z_gate,
+            word_weight,
+            prefix_last: false,
+        };
+        let hits = searcher
+            .search(&texts[i], vectors[i].as_deref(), &opts)
+            .map_err(|e| e.to_string())?;
+        let scores: Vec<f64> = hits.iter().map(|hit| hit.score).collect();
+        let strong = digup_core::scoring::strong_count(&scores, 0.5) as i64;
+        shown += strong;
+        listed += hits.len() as i64;
+        // Paths relative to `base`; "path@6-12" also requires the hit to start in [6, 12).
+        let targets: Vec<(String, Option<(f64, f64)>)> = query
+            .get("expect")
+            .and_then(|e| e.as_array())
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| {
+                        let entry = entry.as_str().unwrap_or("");
+                        let mut parts = entry.splitn(2, '@');
+                        let head = parts.next().unwrap_or("");
+                        let range = parts.next().and_then(|tail| {
+                            let numbers: Vec<f64> =
+                                tail.split('-').filter_map(|s| s.parse().ok()).collect();
+                            if numbers.len() == 2 {
+                                Some((numbers[0], numbers[1]))
+                            } else {
+                                None
+                            }
+                        });
+                        (format!("{base}/{head}"), range)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // A place to be at: a page or moment starts in the range; a stretch of
+        // code overlaps it (its lines or cells).
+        let rank = hits
+            .iter()
+            .position(|hit| {
+                targets.iter().any(|(path, range)| {
+                    hit.path == *path
+                        && match range {
+                            Some((low, high)) => match hit.segment {
+                                SegmentKind::Lines | SegmentKind::Cells => hit
+                                    .loc
+                                    .map(|loc| {
+                                        loc <= *high && hit.loc_end.unwrap_or(loc) >= *low
+                                    })
+                                    .unwrap_or(false),
+                                _ => hit
+                                    .loc
+                                    .map(|loc| loc >= *low && loc <= *high)
+                                    .unwrap_or(false),
+                            },
+                            None => true,
+                        }
+                })
+            })
+            .map(|found| found + 1);
+        if let Some(rank) = rank {
+            if (rank as i64) > strong {
+                folded += 1;
+            }
+        }
+        let tag = query
+            .get("tag")
+            .and_then(|t| t.as_str())
+            .unwrap_or("all")
+            .to_string();
+        for key in [tag.clone(), "ALL".to_string()] {
+            let existing = by_tag.iter_mut().find(|(k, _)| *k == key);
+            match existing {
+                Some((_, row)) => {
+                    row.n += 1;
+                    if let Some(rank) = rank {
+                        if rank <= 1 {
+                            row.at1 += 1;
+                        }
+                        if rank <= 5 {
+                            row.at5 += 1;
+                        }
+                        if rank <= 10 {
+                            row.at10 += 1;
+                        }
+                        row.mrr += 1.0 / rank as f64;
+                    }
+                }
+                None => {
+                    let mut row = Row::default();
+                    row.n = 1;
+                    if let Some(rank) = rank {
+                        if rank <= 1 {
+                            row.at1 = 1;
+                        }
+                        if rank <= 5 {
+                            row.at5 = 1;
+                        }
+                        if rank <= 10 {
+                            row.at10 = 1;
+                        }
+                        row.mrr = 1.0 / rank as f64;
+                    }
+                    by_tag.push((key, row));
+                }
+            }
+        }
+        let top = hits
+            .first()
+            .map(|hit| {
+                let name = Path::new(&hit.path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| hit.path.clone());
+                let place = location(hit);
+                // main.swift:674 — `"\(($0.path as NSString).lastPathComponent)"`: the
+                // parens around Swift's interpolation are syntax, not characters, so the
+                // name prints bare (measured on this box: `top: seg_6s.mp4 [at 0:00]`).
+                format!(
+                    "{}{}",
+                    name,
+                    if place.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{place}]")
+                    }
+                )
+            })
+            .unwrap_or_else(|| "-".to_string());
+        let rank_field = rank
+            .map(|rank| formats::lpad(&format!("#{rank}"), 4))
+            .unwrap_or_else(|| "miss".to_string());
+        let qtext = query.get("q").and_then(|q| q.as_str()).unwrap_or("");
+        println!(
+            "{}  {} {} top: {}",
+            rank_field,
+            formats::pad(&tag, 11),
+            formats::pad(&format!("“{qtext}”"), 42),
+            top
+        );
+    }
+    println!();
+    println!(
+        "{} {}  {}  {}  {}  {}",
+        formats::pad("tag", 12),
+        formats::lpad("n", 3),
+        formats::lpad("R@1", 5),
+        formats::lpad("R@5", 5),
+        formats::lpad("R@10", 5),
+        formats::lpad("MRR", 5)
+    );
+    by_tag.sort_by_key(|(key, _)| if key == "ALL" { "~" } else { key.as_str() }.to_string());
+    for (tag, row) in &by_tag {
+        let n = row.n as f64;
+        println!(
+            "{} {}  {:5.2}  {:5.2}  {:5.2}  {:5.2}",
+            formats::pad(tag, 12),
+            formats::lpad(&row.n.to_string(), 3),
+            row.at1 as f64 / n,
+            row.at5 as f64 / n,
+            row.at10 as f64 / n,
+            row.mrr / n
+        );
+    }
+    let count = queries.len().max(1) as f64;
+    println!(
+        "weaker-matches fold (below 0.5× the top score): {:.1} of {:.1} results shown per query; {} expected {} folded",
+        shown as f64 / count,
+        listed as f64 / count,
+        folded,
+        if folded == 1 { "answer" } else { "answers" }
+    );
+    Ok(())
+}
+
+/// `emit` of DownloadModel.swift: the JSON lines, keys in the order each event lists them.
+fn emit_event(event: &str, fields: serde_json::Map<String, serde_json::Value>) {
+    let mut row = serde_json::Map::new();
+    row.insert("event".to_string(), serde_json::Value::String(event.to_string()));
+    for (key, value) in fields {
+        row.insert(key, value);
+    }
+    emit(row);
+}
+
+fn json_object<I: IntoIterator<Item = (String, serde_json::Value)>>(items: I) -> serde_json::Map<String, serde_json::Value> {
+    items.into_iter().collect()
+}
+
+fn json_str(value: &str) -> serde_json::Value {
+    serde_json::Value::String(value.to_string())
+}
+
+fn json_int(value: i64) -> serde_json::Value {
+    serde_json::json!(value)
+}
+
+/// `downloadModel(_:)` (DownloadModel.swift) + its `FileFetcher` (FileFetcher.swift),
+/// with `curl` as the transport (every OS ships it, so the port adds no HTTP stack):
+/// the events, the resume (curl's `-C -` sends the Range and keeps it across the
+/// redirect, as FileFetcher does), the ≤5-a-second progress with one final event
+/// when the transfer ends, and the sha256 gate before a file gets its name.
+fn download_model(args: &Arguments) -> i32 {
+    use digup_runtime::models::ModelFiles;
+    use std::time::Duration;
+
+    let folder = match args.value("--to") {
+        Some(dir) => folder_url(dir),
+        None => ModelFiles::installed(),
+    };
+    if let Err(e) = std::fs::create_dir_all(&folder) {
+        eprintln!("error: {e}");
+        return 1;
+    }
+    let missing = ModelFiles::missing(&folder);
+    let mut done = ModelFiles::total_bytes() - missing.iter().map(|file| file.bytes).sum::<i64>();
+    for file in missing {
+        let final_path = folder.join(file.name);
+        // A checksum-matched file in the Hugging Face cache is copied, not fetched.
+        let cached_ok = ModelFiles::cached_copy(file)
+            .map(|cached| ModelFiles::sha256(&cached).map(|hash| hash == file.sha256).unwrap_or(false))
+            .unwrap_or(false);
+        if cached_ok {
+            emit_event(
+                "file",
+                json_object([
+                    ("name".to_string(), json_str(file.name)),
+                    ("bytes".to_string(), json_int(file.bytes)),
+                    ("from".to_string(), json_str("cache")),
+                ]),
+            );
+            let partial = folder.join(format!("{}.partial", file.name));
+            let _ = std::fs::remove_file(&partial);
+            let cached = ModelFiles::cached_copy(file).expect("the cache copy, checked just now");
+            if let Err(e) = std::fs::copy(&cached, &partial).and_then(|_| std::fs::rename(&partial, &final_path))
+            {
+                eprintln!("error: {e}");
+                return 1;
+            }
+            done += file.bytes;
+            continue;
+        }
+        emit_event(
+            "file",
+            json_object([
+                ("name".to_string(), json_str(file.name)),
+                ("bytes".to_string(), json_int(file.bytes)),
+                ("from".to_string(), json_str("download")),
+            ]),
+        );
+        let mut failures = 0i32;
+        loop {
+            match fetch(file, &folder, done) {
+                Outcome::Downloaded(partial) => {
+                    emit_event("verifying", json_object([("name".to_string(), json_str(file.name))]));
+                    let hash = match ModelFiles::sha256(&partial) {
+                        Ok(hash) => hash,
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            return 1;
+                        }
+                    };
+                    if hash != file.sha256 {
+                        let _ = std::fs::remove_file(&partial);
+                        failures += 1;
+                        if failures >= 3 {
+                            emit_event(
+                                "error",
+                                json_object([(
+                                    "message".to_string(),
+                                    json_str(&format!("{} arrived damaged, three times", file.name)),
+                                )]),
+                            );
+                            return 1;
+                        }
+                        emit_event(
+                            "retry",
+                            json_object([
+                                (
+                                    "message".to_string(),
+                                    json_str(&format!("{} arrived damaged", file.name)),
+                                ),
+                                ("seconds".to_string(), json_int(0)),
+                            ]),
+                        );
+                        continue;
+                    }
+                    if let Err(e) = std::fs::rename(&partial, &final_path) {
+                        eprintln!("error: {e}");
+                        return 1;
+                    }
+                    done += file.bytes;
+                }
+                Outcome::Failed(message, retry) => {
+                    failures += 1;
+                    if !retry || failures > 20 {
+                        emit_event(
+                            "error",
+                            json_object([("message".to_string(), json_str(&message))]),
+                        );
+                        return 1;
+                    }
+                    // A flaky link resumes where it stopped: 2, 4, 8 … seconds apart, a minute at most.
+                    let seconds = 60i32.min(1 << failures.min(6));
+                    emit_event(
+                        "retry",
+                        json_object([
+                            ("message".to_string(), json_str(&message)),
+                            ("seconds".to_string(), json_int(seconds as i64)),
+                        ]),
+                    );
+                    std::thread::sleep(Duration::from_secs(seconds as u64));
+                }
+            }
+            break;
+        }
+    }
+    emit_event("done", json_object([("folder".to_string(), json_str(&folder.to_string_lossy()))]));
+    0
+}
+
+enum Outcome {
+    Downloaded(PathBuf),
+    Failed(String, bool),
+}
+
+/// One try at one file (FileFetcher.swift's `start` + delegate): the file lands on
+/// disk as `<name>.partial`, curl resumes it with a Range, the progress events are
+/// read off the file at FileFetcher's pace (≥0.2 s apart), and one last event tells
+/// how far it got when the transfer ends — as Swift's `didCompleteWithError` does.
+fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) -> Outcome {
+    use std::time::{Duration, Instant};
+
+    let partial = folder.join(format!("{}.partial", file.name));
+    let mut written = std::fs::metadata(&partial).map(|m| m.len() as i64).unwrap_or(0);
+    if written > file.bytes {
+        let _ = std::fs::remove_file(&partial);
+        written = 0;
+    }
+    if written == file.bytes {
+        // The file is already complete on disk (a previous run stopped after the last
+        // byte): FileFetcher reports it downloaded without making a request.
+        return Outcome::Downloaded(partial);
+    }
+    // curl writes into the partial; `-C -` resumes from its size (the Range survives
+    // Hugging Face's redirect to its CDN, which `-L` follows); `-f` fails on 4xx/5xx,
+    // and `--speed-limit/--speed-time` mirror the 60 s "no bytes" request timeout.
+    let mut child = match Command::new("curl")
+        .arg("-sS")
+        .arg("-L")
+        .arg("-f")
+        .arg("-C")
+        .arg("-")
+        .arg("--speed-limit")
+        .arg("1")
+        .arg("--speed-time")
+        .arg("60")
+        .arg("-o")
+        .arg(&partial)
+        .arg("-w")
+        .arg("%{http_code}")
+        .arg(digup_runtime::models::ModelFiles::url(file))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return Outcome::Failed(format!("curl did not start: {e}"), true),
+    };
+    let mut last_report = Instant::now() - Duration::from_millis(200);
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        let written = std::fs::metadata(&partial).map(|m| m.len() as i64).unwrap_or(0);
+        if last_report.elapsed() >= Duration::from_millis(200) {
+            last_report = Instant::now();
+            emit_event(
+                "progress",
+                json_object([
+                    ("name".to_string(), json_str(file.name)),
+                    ("bytes".to_string(), json_int(written)),
+                    ("total".to_string(), json_int(file.bytes)),
+                    ("all_bytes".to_string(), json_int(before + written)),
+                    ("all_total".to_string(), json_int(digup_runtime::models::ModelFiles::total_bytes())),
+                ]),
+            );
+        }
+        if child.try_wait().expect("curl is here, it can be waited for").is_some() {
+            break;
+        }
+    }
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(e) => return Outcome::Failed(format!("curl did not end: {e}"), true),
+    };
+    let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let written = std::fs::metadata(&partial).map(|m| m.len() as i64).unwrap_or(0);
+    // The one event that always lands at the end (FileFetcher's final `progress`).
+    emit_event(
+        "progress",
+        json_object([
+            ("name".to_string(), json_str(file.name)),
+            ("bytes".to_string(), json_int(written)),
+            ("total".to_string(), json_int(file.bytes)),
+            ("all_bytes".to_string(), json_int(before + written)),
+            ("all_total".to_string(), json_int(digup_runtime::models::ModelFiles::total_bytes())),
+        ]),
+    );
+    match output.status.code() {
+        Some(0) => {
+            if written == file.bytes {
+                Outcome::Downloaded(partial)
+            } else {
+                Outcome::Failed("The download stopped early".to_string(), true)
+            }
+        }
+        Some(22) => {
+            // `-f` answered a 4xx/5xx: the status decides retry, as FileFetcher's
+            // response handler does (429 and the 5xx family are flaky links).
+            let code: i64 = status.parse().unwrap_or(0);
+            Outcome::Failed(
+                format!("Hugging Face answered {code}"),
+                code == 429 || code >= 500,
+            )
+        }
+        Some(23) => Outcome::Failed("Can't save the model: the disk write stopped".to_string(), false),
+        Some(28) => Outcome::Failed(
+            "The download stopped: no bytes for a minute".to_string(),
+            true,
+        ),
+        Some(code) => Outcome::Failed(
+            format!("curl exited {code}{tail}", tail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") }),
+            true,
+        ),
+        None => Outcome::Failed("the download stopped".to_string(), true),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::byte_count;
+
+    /// The number shapes are pinned from probing Swift 6.4's `JSONSerialization`
+    /// writer on this box (jsonprobe3/4.out): shortest digits, exponent form when
+    /// the leading power is < -4 or ≥ 16, fixed form bare-integral, "-0" for the
+    /// signed zero.
+    #[test]
+    fn swift_number_shapes() {
+        let cases: [(f64, &str); 16] = [
+            (0.0, "0"),
+            (-0.0, "-0"),
+            (3.0, "3"),
+            (2.5, "2.5"),
+            (0.1, "0.1"),
+            (1760000000.5, "1760000000.5"),
+            (0.9708202862739563, "0.9708202862739563"),
+            (1e15, "1000000000000000"),
+            (1e16, "1e+16"),
+            (1e17, "1e+17"),
+            (1e18, "1e+18"),
+            (1e21, "1e+21"),
+            (1e-4, "0.0001"),
+            (1e-5, "1e-05"),
+            (9.9e-5, "9.9e-05"),
+            (2.5e-8, "2.5e-08"),
+        ];
+        for (value, want) in cases {
+            let number = serde_json::Number::from_f64(value).expect("every case is a finite f64");
+            let got = super::swift_number(&number);
+            assert_eq!(got, want, "{value}");
+        }
+        // Swift's writer's string escapes and container shapes (jsonprobe.out / 2.out).
+        let rows = vec![serde_json::json!({
+            "path": "/var/tmp/a/b.jpg",
+            "info": {},
+            "excerpt": "“café” — বাংলা \n tab\\ end\u{01}\u{1c}\u{7f}",
+            "n": 1.0,
+            "neg": -0.0,
+        })];
+        let want = "[\n  {\n    \"excerpt\" : \"“café” — বাংলা \\n tab\\\\ end\\u0001\\u001C\u{7f}\",\n    \"info\" : {\n\n    },\n    \"n\" : 1,\n    \"neg\" : -0,\n    \"path\" : \"\\/var\\/tmp\\/a\\/b.jpg\"\n  }\n]";
+        assert_eq!(super::swift_json(&rows), want);
+        // Empty top-level answers print "[", a blank line, "]" (jsonprobe.out).
+        assert_eq!(super::swift_json(&[]), "[\n\n]");
+    }
 
     /// `ByteCountFormatter(countStyle: .file)`, pinned by probing the formatter (Swift 6.4,
     /// corelibs Foundation) on these exact byte counts.

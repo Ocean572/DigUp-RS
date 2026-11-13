@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 
+use unicode_segmentation::UnicodeSegmentation;
+
 pub fn number(value: i64) -> String {
     let digits = value.abs().to_string();
     let mut out = String::new();
@@ -29,8 +31,11 @@ pub fn number(value: i64) -> String {
     out
 }
 
+/// Swift's `String.count` is UAX #29 extended grapheme clusters — a Bengali conjunct
+/// (য + ্ + ন) is ONE character there. Pads measured in code points would shift every
+/// multilingual eval line (the evals quote Bengali/Arabic text through pad/lpad).
 pub fn pad(text: &str, width: usize) -> String {
-    let count = text.chars().count();
+    let count = text.graphemes(true).count();
     if count >= width {
         text.to_string()
     } else {
@@ -39,7 +44,7 @@ pub fn pad(text: &str, width: usize) -> String {
 }
 
 pub fn lpad(text: &str, width: usize) -> String {
-    let count = text.chars().count();
+    let count = text.graphemes(true).count();
     if count >= width {
         text.to_string()
     } else {
@@ -69,6 +74,16 @@ pub fn states_line(states: &HashMap<String, i64>) -> String {
 
 /// `duration(_:)` (main.swift:164): "N s" under 90, "N min" under an hour and
 /// a half, else "X.Y h".
+/// `clock(_:)` (main.swift:170): "H:MM:SS" from an hour on, else "M:SS".
+pub fn clock(seconds: f64) -> String {
+    let total = seconds as i64; // Swift's Int(Double): truncate
+    if total >= 3600 {
+        format!("{}:{:02}:{:02}", total / 3600, total / 60 % 60, total % 60)
+    } else {
+        format!("{}:{:02}", total / 60, total % 60)
+    }
+}
+
 pub fn duration(seconds: f64) -> String {
     if seconds < 90.0 {
         format!("{} s", seconds.round() as i64)
