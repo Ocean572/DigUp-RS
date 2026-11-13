@@ -11,7 +11,7 @@
 //!
 //! ```sh
 //! scripts/build-llama.sh                                   # once: Vendor/llama
-//! LD_LIBRARY_PATH=Vendor/llama/lib DIGUP_MODELS=$HOME/digup-data/models \
+//! LD_LIBRARY_PATH=Vendor/llama/lib DIGUP_MODELS=/path/to/models \
 //!   cargo run -q -p digup-runtime --example embed -- "payment declined error"
 //! ```
 

@@ -2,8 +2,8 @@
 //! compared with the engine's numbers by eye.
 //!
 //! ```sh
-//! DIGUP_MODELS=$HOME/digup-data/models cargo run -q -p digup-runtime --example embed -- "payment declined error"
-//! DIGUP_MODELS=$HOME/digup-data/models cargo run -q -p digup-runtime --example embed -- --document notes.txt "the notes"
+//! DIGUP_MODELS=/path/to/models cargo run -q -p digup-runtime --example embed -- "payment declined error"
+//! DIGUP_MODELS=/path/to/models cargo run -q -p digup-runtime --example embed -- --document notes.txt "the notes"
 //! ```
 
 use digup_runtime::{prompts, Embedder, LlamaEmbedder, LlamaModels};

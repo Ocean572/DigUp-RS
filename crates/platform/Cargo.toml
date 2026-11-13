@@ -8,4 +8,6 @@ publish.workspace = true
 description = "Per-OS file readers (Rust port): Apple frameworks vs PDFium/ffmpeg/stb/miniz. Scaffold — Phase 4+."
 
 [dependencies]
-digup-core = { workspace = true }
+# Readers land in Phase 4+ (ARCHITECTURE_MAP.md §1): `objc2` bridges on macOS, the bindgen
+# bindings elsewhere — both over `digup-core`'s types, which is why the dependency is added
+# with the first reader, not declared unused here.
