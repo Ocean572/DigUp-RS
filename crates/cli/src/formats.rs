@@ -67,6 +67,18 @@ pub fn states_line(states: &HashMap<String, i64>) -> String {
         .join(" · ")
 }
 
+/// `duration(_:)` (main.swift:164): "N s" under 90, "N min" under an hour and
+/// a half, else "X.Y h".
+pub fn duration(seconds: f64) -> String {
+    if seconds < 90.0 {
+        format!("{} s", seconds.round() as i64)
+    } else if seconds < 5400.0 {
+        format!("{} min", (seconds / 60.0).round() as i64)
+    } else {
+        format!("{:.1} h", seconds / 3600.0)
+    }
+}
+
 const UNITS: [&str; 7] = ["", "KB", "MB", "GB", "TB", "PB", "EB"];
 
 /// Foundation's `ByteCountFormatter.string(fromByteCount:countStyle:.file)`,

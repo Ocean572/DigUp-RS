@@ -17,6 +17,9 @@ on:
       - "Package.swift"
       - "Sources/**"
       - "scripts/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   push:
     branches: [main, "feat/**"]
     paths:
@@ -31,6 +34,9 @@ on:
       - "Package.swift"
       - "Sources/**"
       - "scripts/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   workflow_dispatch:
 
 permissions:
@@ -494,3 +500,104 @@ jobs:
           except Exception as exc:
               print(f"::warning::registry hygiene skipped: {exc}")
           PY
+
+  # ── stage 4f: the SAME contract suite over the Rust payload ────────────────
+  # The user-directed Rust port (AGENTS.md "Rust port"): `crates/` compiled by the
+  # Dockerfile's rust-engine-* stages into the payload shape the Swift stages ship
+  # (digup + its native libraries beside themselves, $ORIGIN). The suite is
+  # unchanged, the mounts are unchanged, the bar is unchanged — 0 failed, 0
+  # skipped — because the port reproduces the engine's published interfaces
+  # byte-for-byte (the JSON-lines verbs, schema v6 at user_version 6, the 768-dim
+  # float16 vectors scored in float32, the one-shot --json CLI), so the suite IS
+  # the port's gate. The suite builds its own indexes with this binary (the /index
+  # mount starts empty): unlike a cross-check gate over one shared store, nothing
+  # here is self-consistent by construction.
+  # README §1–2 say "the engine is not rewritten" — written for the server-as-
+  # wrapper era; this job is the override the user directed, and it flags the
+  # tension exactly where a reviewer will read it.
+  server-rust:
+    needs: []
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The engine owns the model pins and the Rust payload answers with them: the
+      # drift guard is this job's first step too (a model bump fails in seconds).
+      - name: Model pins follow the engine (drift guard)
+        run: |
+          engine=$(grep -oE 'sha256: "[0-9a-f]{64}"' Sources/DigUpKit/ModelFiles.swift | grep -oE '[0-9a-f]{64}' | sort)
+          ci=$(printf '%s\n%s\n' \
+            2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135 \
+            c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f | sort)
+          if [ "$engine" != "$ci" ]; then
+            echo "::error::ModelFiles.swift pins differ from server.yml — update the download step's pins in the same PR"
+            echo "engine: $engine"; echo "ci:     $ci"; exit 1
+          fi
+          rev=$(sed -nE 's/.*revision = "([0-9a-f]{40})".*/\1/p' Sources/DigUpKit/ModelFiles.swift)
+          if [ "$rev" != "bfcd298762cc34d0357ece5ebdd31791a3a374d8" ]; then
+            echo "::error::ModelFiles.revision moved (engine: $rev) — update this step and the download step together"
+            exit 1
+          fi
+          grep -q '"embeddinggemma-2-Q8_0.gguf"' Sources/DigUpKit/ModelFiles.swift &&
+          grep -q '"mmproj-embeddinggemma-2-Q8_0.gguf"' Sources/DigUpKit/ModelFiles.swift || {
+            echo "::error::ModelFiles.swift file names changed — update the download step in the same PR"; exit 1; }
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Vendor
+          key: server-vendor-linux-${{ hashFiles('scripts/fetch-vendor.sh', 'scripts/build-ffmpeg.sh', 'scripts/build-llama.sh', 'scripts/package-linux.sh') }}
+      # The same vendor seeding as the Swift job — one recipe, the YAML anchor:
+      # rust-engine-builder shares the Vendor cache mount and the stamped scripts,
+      # so a PR that touches both engines pays the C compiles once per job.
+      - <<: *vendor
+
+      - name: Model files, pinned by Sources/DigUpKit/ModelFiles.swift
+        run: |
+          mkdir -p "$RUNNER_TEMP/models"
+          rev=bfcd298762cc34d0357ece5ebdd31791a3a374d8
+          base=https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/$rev
+          curl -fsSL -o "$RUNNER_TEMP/models/embeddinggemma-2-Q8_0.gguf" \
+            "$base/embeddinggemma-2-Q8_0.gguf"
+          curl -fsSL -o "$RUNNER_TEMP/models/mmproj-embeddinggemma-2-Q8_0.gguf" \
+            "$base/mmproj-embeddinggemma-2-Q8_0.gguf"
+          echo "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135  $RUNNER_TEMP/models/embeddinggemma-2-Q8_0.gguf" > "$RUNNER_TEMP/pins.txt"
+          echo "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f  $RUNNER_TEMP/models/mmproj-embeddinggemma-2-Q8_0.gguf" >> "$RUNNER_TEMP/pins.txt"
+          sha256sum -c "$RUNNER_TEMP/pins.txt"
+
+      - name: Corpus (pinned photos are in git; the videos, clip, and manifest checks run here)
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ffmpeg
+          server/tests/corpus/build.sh
+
+      - name: The corpus clip exists (the video fixtures are not skippable)
+        run: test -f server/tests/corpus/media/clips/scenes.mp4
+
+      - name: Build the Rust payload test image (cargo build --release + the adapter)
+        run: docker build --target server-test-rust -f server/docker/Dockerfile -t digup-server-test-rust:ci .
+
+      - name: The Rust runtime image runs the CLI headless
+        run: |
+          docker build --target server-runtime-rust -f server/docker/Dockerfile -t digup-engine-rust:ci .
+          docker run --rm digup-engine-rust:ci digup --help
+          docker run --rm digup-engine-rust:ci digup --help | sed -n 2p
+
+      # The suite as written: same tests, same mounts, same zero-skip gate. The
+      # cargo release compile lands in the BuildKit cache mount; a warm cache
+      # re-runs the suite in minutes.
+      - name: Contract tests over the Rust payload (every test runs — skips are red in CI)
+        run: |
+          mkdir -p "$RUNNER_TEMP/index"
+          docker run --rm \
+            -v "$PWD/server/tests/corpus/media:/corpus:ro" \
+            -v "$PWD/server/tests/corpus:/corpus-root:ro" \
+            -v "$RUNNER_TEMP/models:/models:ro" \
+            -v "$RUNNER_TEMP/index:/index" \
+            digup-server-test-rust:ci /srv/server/.venv/bin/pytest -rs 2>&1 | tee "$RUNNER_TEMP/rust-suite.log"
+          if grep -qE '^(SKIPPED|tests/.*SKIPPED)' "$RUNNER_TEMP/rust-suite.log"; then
+            echo "::error::a test SKIPPED against the Rust payload — green-by-construction is a lie"
+            grep -E 'SKIPPED' "$RUNNER_TEMP/rust-suite.log" | head -20
+            exit 1
+          fi
+          grep -qE '[0-9]+ passed' "$RUNNER_TEMP/rust-suite.log"

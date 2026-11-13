@@ -75,8 +75,11 @@ impl LlamaEmbedder {
         log: Option<&Path>,
     ) -> Result<Self> {
         let started = Instant::now();
-        backend::init();
+        // The sink is installed BEFORE the backend init (LlamaEmbedder.swift:321-387):
+        // init announces "backends: …", and that line belongs beside the model log —
+        // emitting it first would strand it on stderr.
         backend::set_log(log);
+        backend::init();
         if !text_only && models.media.is_none() {
             return Err(Error::NotFound(format!(
                 "{} (images and audio) isn't downloaded yet",

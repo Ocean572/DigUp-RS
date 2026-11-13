@@ -106,6 +106,26 @@ fn first_capture<'t>(pattern: &str, text: &'t str) -> Option<regex::Captures<'t>
         .captures(text)
 }
 
+/// `estimate_lines(config)`: `estimate --json` — every JSON line, one per root
+/// folder, as the engine streams them. ParentWatch rule: this helper exits the
+/// moment its parent dies and treats PID 1 as a dead app; the server is the
+/// long-lived parent (direct children, no shell wrappers). No JSON line is a
+/// CLIError quoting the head of the output — `api.py:6`'s rule (quote the
+/// engine, never invent).
+pub fn estimate_lines(config: &EngineConfig, timeout: Duration) -> Result<Vec<Value>, CliError> {
+    let out = run(&config.estimate_argv(), &config.env(), timeout)?;
+    let lines: Vec<Value> = out
+        .lines()
+        .filter(|line| line.trim().starts_with('{'))
+        .filter_map(|line| serde_json::from_str(line.trim()).ok())
+        .collect();
+    if lines.is_empty() {
+        let head: String = out.chars().take(200).collect();
+        return Err(CliError(format!("estimate --json printed no JSON line: {head}")));
+    }
+    Ok(lines)
+}
+
 /// `status(config)`: `digup status` parsed — index path, vectors, per-kind
 /// counts, fingerprint, build tag, size. The patterns are `cli.py`'s, verbatim,
 /// including the ones the engine's thousands separators defeat at >999 rows

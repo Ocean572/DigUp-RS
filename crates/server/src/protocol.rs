@@ -85,7 +85,7 @@ impl std::fmt::Display for EngineRefused {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Python's f-string with `{op!r}`: repr of a str is its double-quoted form,
         // which is exactly what a Rust `String`'s `{:?}` prints.
-        write!(out, "engine refused {:?}: {}", self.op, self.error)
+        write!(out, "engine refused {}: {}", crate::targets::py_repr(&self.op), self.error)
     }
 }
 
@@ -221,7 +221,9 @@ impl JsonLinesProcess {
             move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines() {
-                    let Ok(line) = line else { break };
+                    let Ok(line) = line else {
+                        break
+                    };
                     let line = line.trim();
                     if line.is_empty() {
                         continue;
@@ -404,18 +406,22 @@ impl JsonLinesProcess {
         self.write_line(line.as_bytes())?;
 
         let deadline = Instant::now() + timeout;
+        // ONE guard across the check and the wait (`with self._cond:` in Python):
+        // unlocking between them lets a push + notify land in the window, and the
+        // waiter sleeps out its full timeout — a LOST WAKEUP, measured 2026-11-13
+        // as index jobs hanging in `running` for the whole job timeout (the engine
+        // had answered, the events were queued, the runner never woke).
+        let mut guard = self.inner.0.lock().expect("the protocol lock");
         loop {
-            let remaining = {
-                let mut guard = self.inner.0.lock().expect("the protocol lock");
-                if let Some(reply) = guard.replies.remove(&rid.to_string()) {
-                    return Ok(reply);
-                }
-                if let Some(exited) = guard.exited.clone() {
-                    return Err(exited.into());
-                }
-                deadline.saturating_duration_since(Instant::now())
-            };
+            if let Some(reply) = guard.replies.remove(&rid.to_string()) {
+                return Ok(reply);
+            }
+            if let Some(exited) = guard.exited.clone() {
+                return Err(exited.into());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                drop(guard);
                 // A late reply must not pile up.
                 self.inner
                     .0
@@ -440,12 +446,36 @@ impl JsonLinesProcess {
                     format_gf64(timeout.as_secs_f64())
                 )));
             }
-            let guard = self
+            let (next, outcome) = self
                 .inner
                 .1
-                .wait_timeout(self.inner.0.lock().expect("the protocol lock"), remaining)
+                .wait_timeout(guard, remaining)
                 .expect("the protocol condvar");
-            drop(guard);
+            guard = next;
+            if outcome.timed_out() {
+                drop(guard);
+                self.inner
+                    .0
+                    .lock()
+                    .expect("the protocol lock")
+                    .replies
+                    .remove(&rid.to_string());
+                let op = fields
+                    .get("op")
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| value.to_string())
+                    })
+                    .unwrap_or_else(|| Value::Object(fields.clone()).to_string());
+                return Err(ProtocolError::Timeout(format!(
+                    "{}: no reply to {} within {} s",
+                    self.name,
+                    op,
+                    format_gf64(timeout.as_secs_f64())
+                )));
+            }
         }
     }
 
@@ -457,17 +487,16 @@ impl JsonLinesProcess {
     /// The next event line, in order, or EngineExited when the process has ended.
     pub fn next_event(&self, timeout: Duration) -> Result<Value, ProtocolError> {
         let deadline = Instant::now() + timeout;
+        // One guard across check + wait — see `request` for the measured race.
+        let mut guard = self.inner.0.lock().expect("the protocol lock");
         loop {
-            let remaining = {
-                let mut guard = self.inner.0.lock().expect("the protocol lock");
-                if let Some(event) = guard.events.pop_front() {
-                    return Ok(event);
-                }
-                if let Some(exited) = guard.exited.clone() {
-                    return Err(exited.into());
-                }
-                deadline.saturating_duration_since(Instant::now())
-            };
+            if let Some(event) = guard.events.pop_front() {
+                return Ok(event);
+            }
+            if let Some(exited) = guard.exited.clone() {
+                return Err(exited.into());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 // Python: `f"{name}: no event within {timeout:g} s"` → 504.
                 return Err(ProtocolError::Timeout(format!(
@@ -476,12 +505,16 @@ impl JsonLinesProcess {
                     format_gf64(timeout.as_secs_f64())
                 )));
             }
-            let guard = self
-                .inner
-                .1
-                .wait_timeout(self.inner.0.lock().expect("the protocol lock"), remaining)
+            let (next, outcome) = self.inner.1.wait_timeout(guard, remaining)
                 .expect("the protocol condvar");
-            drop(guard);
+            guard = next;
+            if outcome.timed_out() {
+                return Err(ProtocolError::Timeout(format!(
+                    "{}: no event within {} s",
+                    self.name,
+                    format_gf64(timeout.as_secs_f64())
+                )));
+            }
         }
     }
 
@@ -503,5 +536,61 @@ impl JsonLinesProcess {
         drop(guard);
         notify(&self.inner);
         exited
+    }
+}
+
+// ── tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::{JsonLinesProcess, ProtocolError};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// The reader → queue → waiter handoff on a REAL child (`cat` echoes what we
+    /// write). The 2026-11-13 job hang hinged on exactly this path: the runner
+    /// parked in the condvar, the engine's lines were already queued, and the
+    /// notify landed in the window left by unlocking BETWEEN the queue check and
+    /// the wait — a lost wakeup, and the job stayed `running` for its whole
+    /// timeout with a completed crawl in hand. A parked waiter must wake.
+    #[test]
+    fn a_parked_waiter_wakes_for_a_line_written_after_it_parks() {
+        let proc = Arc::new(JsonLinesProcess::new(
+            vec!["cat".to_string()],
+            "echo",
+            Vec::new(),
+        ));
+        proc.start(None, Duration::from_secs(5)).expect("cat spawns");
+        let feeder = {
+            let writer = proc.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                let _ = writer.send_line("{\"event\":\"fed\"}");
+            })
+        };
+        let event = proc
+            .next_event(Duration::from_secs(5))
+            .expect("the fed line arrives");
+        assert_eq!(event.get("event").and_then(|v| v.as_str()), Some("fed"));
+        feeder.join().expect("feeder");
+        proc.close(Duration::from_secs(2));
+    }
+
+    /// EOF wakes every waiter with EngineExited (`exited` set, notify fired).
+    #[test]
+    fn the_exit_of_a_child_wakes_the_waiter() {
+        let proc = JsonLinesProcess::new(
+            vec!["/bin/sh".to_string(), "-c".to_string(), "exit 3".to_string()],
+            "quick",
+            Vec::new(),
+        );
+        proc.start(None, Duration::from_secs(5)).expect("sh spawns");
+        match proc.next_event(Duration::from_secs(5)) {
+            Err(ProtocolError::Exited(exited)) => {
+                assert!(format!("{exited}").contains("quick"), "names the helper: {exited}");
+            }
+            other => panic!("expected EngineExited, got {other:?}"),
+        }
+        proc.close(Duration::from_secs(2));
     }
 }

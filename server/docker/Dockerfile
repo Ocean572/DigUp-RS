@@ -365,3 +365,108 @@ FROM server-runtime AS server-runtime-cuda
 COPY --from=cuda-libs /out/ /opt/digup/
 RUN ldd /opt/digup/libggml-cuda.so \
     && ! ldd /opt/digup/libggml-cuda.so | grep 'not found' | grep -v 'libcuda.so.1'
+
+# ── Rust port payload (stage 4f, user-directed override) ─────────────────────────────────────
+# The same payload shape the Swift stages ship — `digup` + its native libraries beside
+# themselves ($ORIGIN) — built from the Rust workspace (crates/) instead of Sources/.
+# The contract suite (`server/tests/`) runs UNCHANGED against this payload: the engine's
+# published interfaces (JSON-lines verbs, schema v6, the 768-f16 vector layout, one-shot
+# --json CLI) are reproduced byte-for-byte, so the suite is the port's gate. The suite
+# itself builds indexes with THIS binary (the /index mount starts empty), so unlike the
+# cross-check gates it measures the payload end-to-end, not a cached artifact.
+#
+#   docker build --target server-test-rust -f server/docker/Dockerfile -t digup-rust-test .
+#
+# Ubuntu 22.04, same rule as the Swift builder: the binaries then ask for glibc 2.35 at
+# most, and the runtime stages (Debian 13, glibc 2.41) run NEWER — forward, never back.
+# The Vendor tree is shared with the Swift builder (the same cache mount, the same stamped
+# scripts): a build that runs both builders pays the C-library compiles once.
+FROM ${BASE_IMAGE} AS rust-engine-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+# clang + libclang-dev: `digup-runtime`'s build script runs bindgen over the
+# vendored llama.cpp/PDFium headers, and bindgen IS libclang (measured 2026-11-13:
+# the build died "Unable to find libclang" without them).
+RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+    ca-certificates curl git gnupg xz-utils unzip python3 binutils build-essential cmake ninja-build \
+    meson nasm pkg-config patchelf file zlib1g-dev libcurl4-openssl-dev libxml2-dev libedit2 \
+    libsqlite3-0 libz3-dev libpython3-dev tzdata libgomp1 clang libclang-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# The pinned Rust toolchain, installed through rustup (the distro cargo lags it by
+# years): 1.99.1, the compiler this port is measured with on the dev box. The
+# workspace's floor is 1.88 (Cargo.toml — sha2 0.11 requires it; a 1.85 builder
+# died on exactly that, measured 2026-11-13). Profile minimal: rustc + cargo,
+# no clippy, no docs.
+ARG RUST_VERSION=1.99.1
+RUN set -eux; \
+    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
+    sh /tmp/rustup.sh -y --default-toolchain "${RUST_VERSION}" --profile minimal; \
+    rm -f /tmp/rustup.sh
+ENV PATH=/root/.cargo/bin:$PATH
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+WORKDIR /src
+COPY . .
+COPY .ci-vendor /ci-vendor
+
+# Same vendor seeding as engine-builder: CI passes a prebuilt Vendor through the context,
+# the scripts land on their stamps (Vendor/VENDOR, ffmpeg/BUILD, llama/BUILD) and skip.
+RUN --mount=type=cache,target=/src/Vendor \
+    --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/root/.cargo/registry \
+    set -eux; \
+    if [ -f /ci-vendor/llama/BUILD ]; then cp -a /ci-vendor/. /src/Vendor/; fi; \
+    export CC="${CC:-cc}" CXX="${CXX:-c++}"; \
+    scripts/fetch-vendor.sh; \
+    # The resolver-retry wrapper mirrors engine-builder: these scripts are stamped and
+    # idempotent, so one flaky DNS query must not kill a 20-minute build.
+    tries=0; until scripts/build-ffmpeg.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
+      echo "build-ffmpeg: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
+    tries=0; until scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
+      echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
+    cargo build --release -p digup-cli; \
+    # The engine answers in the payload's own shape: --help carries the version line.
+    LD_LIBRARY_PATH="/src/Vendor/llama/lib:/src/Vendor/pdfium/lib" \
+      PATH="/src/Vendor/ffmpeg/bin:$PATH" ./target/release/digup --help > /dev/null; \
+    ./target/release/digup --help | sed -n '2p;3p'
+
+# The payload: the CLI + the native libraries it asks for (PDFium, llama.cpp, ffmpeg),
+# rpath'd $ORIGIN — the same file set and layout engine-payload ships. The Rust engine
+# loads the llama/pdfium libraries at run time (dlopen), so the payload carries them
+# exactly where the Swift payload puts them; ffmpeg/ffprobe ride beside the binary,
+# which is how `FFmpeg.find` reaches them (beside the executable, then PATH).
+FROM rust-engine-builder AS rust-engine-payload
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN --mount=type=cache,target=/src/Vendor \
+    --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/root/.cargo/registry \
+    set -euxo pipefail; \
+    cargo build --release -p digup-cli; \
+    mkdir -p /out; \
+    cp /src/target/release/digup /src/Vendor/pdfium/lib/libpdfium.so \
+       /src/Vendor/ffmpeg/bin/ffmpeg /src/Vendor/ffmpeg/bin/ffprobe /out/; \
+    for file in /src/Vendor/llama/lib/*.so*; do \
+      name=${file##*/}; \
+      case "$name" in \
+        *.so.[0-9]*) [ -L "$file" ] && cp -L "$file" "/out/$name" ;; \
+        *.so) [ ! -L "$file" ] && cp "$file" "/out/" ;; \
+      esac; \
+    done; \
+    for file in /out/digup /out/*.so*; do patchelf --set-rpath '$ORIGIN' "$file"; done; \
+    PATH="/out:$PATH" /out/digup --help | sed -n '2p'
+
+# The contract suite over the Rust payload: the server-test stage with the Swift payload
+# replaced (the directory is emptied first — the Swift-only libraries must NOT ride along
+# into a run that measures the Rust engine). The suite is unchanged: same tests, same
+# mounts, same zero-skip bar. This is stage 4f's gate.
+FROM server-test AS server-test-rust
+RUN rm -rf /opt/digup
+COPY --from=rust-engine-payload /out/ /opt/digup/
+
+# The shipping image with the Rust engine (the deploy compose can target it unchanged).
+FROM server-runtime AS server-runtime-rust
+# server-runtime keeps the healthcheck inside /opt/digup — re-copy it after the swap.
+RUN rm -rf /opt/digup
+COPY --from=rust-engine-payload /out/ /opt/digup/
+COPY server/docker/healthcheck.py /opt/digup/healthcheck.py

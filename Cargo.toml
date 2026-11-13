@@ -17,7 +17,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/Ocean572/DigUp"
 publish = false
@@ -62,9 +62,17 @@ sha2 = "0.11"
 hex = "0.4"
 bindgen = { version = "0.73", features = ["runtime"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 # Phase 4 (the axum server): the HTTP layer the FastAPI wrapper is replaced by. tokio is the
 # runtime the axum handlers run on; the JSON-lines helper client blocks on pipes, so its calls
 # run through `spawn_blocking` — the helper processes are the engine's, unchanged.
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "fs"] }
+# Stage 4b (media/file serving): Starlette's FileResponse etag is an MD5 over
+# "mtime-size" (measured), its last-modified is an RFC 1123 GMT date, and
+# ranged bodies stream — the etag/date/stream helpers are these three crates.
+md5 = "0.7"
+futures-util = "0.3"
+httpdate = "1"
+tokio-util = { version = "0.7", features = ["io"] }
+chrono = "0.4"

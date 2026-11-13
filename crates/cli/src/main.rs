@@ -115,6 +115,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("index") => {
+            if let Err(e) = index(&args) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("worker") => {
             let text_only = args.flags.iter().any(|flag| flag == "--text-only");
             std::process::exit(digup_services::worker::worker_service(text_only));
@@ -637,6 +643,163 @@ fn model_speed(args: &Arguments) -> Result<(), String> {
 /// `estimate` (main.swift:212-300): what indexing these folders will cost here, from
 /// metadata alone. Costs come from what indexing has measured on this machine
 /// (`MeasuredCosts`); until then the M4 Pro's fixed numbers, scaled by the speed check.
+/// `index(_:)` (main.swift:516): the human one-shot index — the store, the
+/// full model with its log beside the index, the sync, the first pass over the
+/// pending queue, and the rest of the long files. The lines are the CLI's own
+/// words (`pad`/`lpad`/`duration`/`statesLine` in main.swift); the contract
+/// suite seeds its store with exactly this verb.
+fn index(args: &Arguments) -> Result<(), String> {
+    use digup_core::IndexStore;
+    use digup_runtime::indexer::{Indexer, MakeEmbedder};
+    use digup_runtime::models::LlamaModels;
+    use digup_runtime::worker::Embedder;
+    use digup_runtime::LlamaEmbedder;
+    if args.positional.len() < 2 {
+        return Err("which folders? e.g. digup index ~/DigUpTestbed".to_string());
+    }
+    // `Arguments.folders()` (main.swift:117): the same refusals, the same words.
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for folder_arg in &args.positional[1..] {
+        let folder = folder_url(folder_arg);
+        if !std::fs::metadata(&folder)
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false)
+        {
+            return Err(format!("not a folder: {folder_arg}"));
+        }
+        if !digup_core::crawler::can_list(&folder.to_string_lossy()) {
+            return Err(format!("can't read {folder_arg} (macOS privacy settings?)"));
+        }
+        folders.push(folder);
+    }
+    let index_folder = args.index_folder();
+    let log = index_folder.join("worker.log");
+    let store = IndexStore::open(&index_folder, digup_core::MAIN_FILE).map_err(|e| e.to_string())?;
+    if args.flag("--reindex") {
+        store.reset_all().map_err(|e| e.to_string())?;
+    }
+    // `makeEmbedder(textOnly: false, log:)` (main.swift:519): the full model, its
+    // llama.cpp log beside the index — the same file the app's runs append to.
+    let make_embedder: MakeEmbedder = Box::new(move || {
+        let models = LlamaModels::locate()?;
+        let embedder = LlamaEmbedder::new(&models, false, None, Some(&log))?;
+        Ok(Box::new(embedder) as Box<dyn Embedder>)
+    });
+    let mut indexer =
+        Indexer::new(store, args.options(), make_embedder).map_err(|e| e.to_string())?;
+    indexer.costs_folder = Some(index_folder.clone());
+    indexer.embedder_source = Some(digup_runtime::model_info().vector_source());
+    indexer
+        .store
+        .read_again_once()
+        .map_err(|e| e.to_string())?;
+    indexer.check_model().map_err(|e| e.to_string())?;
+    let sync = indexer
+        .sync(&folders, &mut |_| {})
+        .map_err(|e| e.to_string())?;
+    let home = std::env::var("HOME").unwrap_or_default();
+    println!(
+        "index: {}",
+        formats::tilde(&indexer.store.file.to_string_lossy(), &home)
+    );
+    println!(
+        "sync: {} new · {} changed · {} moved · {} removed · {} unchanged",
+        sync.added, sync.changed, sync.moved, sync.removed, sync.unchanged
+    );
+    if !sync.crawl.skipped.is_empty() {
+        println!("skipped: {}", skipped_line(&sync.crawl.skipped));
+    }
+    let mut datasets: Vec<(&String, &i64)> = sync.crawl.datasets.iter().collect();
+    datasets.sort();
+    for (folder, count) in datasets {
+        println!(
+            "looks like a dataset (skipped): {} ({} files)",
+            formats::tilde(folder, &home),
+            formats::number(*count)
+        );
+    }
+    let limit = args.value("--limit").and_then(|value| value.parse().ok());
+    let started = Instant::now();
+    let states = indexer
+        .run(limit, None, &|| false, &mut |event| {
+            let name = Path::new(&event.path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| event.path.clone());
+            let note = event
+                .note
+                .as_ref()
+                .map(|note| format!("  ({note})"))
+                .unwrap_or_default();
+            println!(
+                "[{}/{}] {} {} {:5.2}s  {}{}",
+                formats::lpad(&event.done.to_string(), 4),
+                event.total,
+                formats::pad(event.kind.as_str(), 10),
+                formats::pad(&event.state, 7),
+                event.seconds,
+                name,
+                note
+            );
+        })
+        .map_err(|e| e.to_string())?;
+    if states.is_empty() {
+        println!("nothing pending");
+    } else {
+        println!(
+            "done in {}: {}",
+            formats::duration(started.elapsed().as_secs_f64()),
+            formats::states_line(&states.into_iter().collect())
+        );
+    }
+    // The rest of long files, as the app does once nothing is pending (not
+    // after a --limit run: things still are).
+    if limit.is_none()
+        && indexer
+            .store
+            .unfinished_count()
+            .map_err(|e| e.to_string())?
+            .0
+            > 0
+    {
+        let started = Instant::now();
+        let finished = indexer
+            .finish_long_files(&|| false, &mut |step| {
+                let name = Path::new(&step.path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| step.path.clone());
+                let note = step
+                    .note
+                    .as_ref()
+                    .map(|note| format!("  ({note})"))
+                    .unwrap_or_default();
+                println!(
+                    "[rest {}/{}] {} {} {:5.2}s  {}{}",
+                    formats::lpad(&step.done.to_string(), 5),
+                    step.total,
+                    formats::pad(step.kind.as_str(), 4),
+                    formats::pad(&step.state, 7),
+                    step.seconds,
+                    name,
+                    note
+                );
+            })
+            .map_err(|e| e.to_string())?;
+        println!(
+            "the rest of long files in {}: {}",
+            formats::duration(started.elapsed().as_secs_f64()),
+            if finished.is_empty() {
+                "none finished".to_string()
+            } else {
+                formats::states_line(&finished.into_iter().collect())
+            }
+        );
+    }
+    indexer.finish(); // frees the model, clears the scratch folder
+    Ok(())
+}
+
 /// `status(_:)` (main.swift:398): the CLI's own status text — the index path,
 /// vector + segment counts, the per-kind table, the fingerprint, this build's
 /// tag, the bytes on disk. `formats.rs` pins the exact shapes; the server

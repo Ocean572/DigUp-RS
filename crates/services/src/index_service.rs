@@ -223,7 +223,6 @@ fn run(config: IndexServiceConfig) -> Result<i32, String> {
         wake: Condvar::new(),
         wake_lock: Mutex::new(()),
     });
-    read_commands(&shared);
     serve_loop(&shared, config.new_files_limit, config.linger)
 }
 
@@ -303,6 +302,18 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
         return Ok(1);
     }
     drop(state);
+
+    // `Thread.detachNewThread { readCommands() }` (IndexService.swift:104):
+    // the stdin thread starts AFTER the startup pass, and the loop's first
+    // flag consumption (the `defer { syncRequested = false }` at the loop
+    // top) lands before the reader thread can set the flag. A client that
+    // writes `sync` right after spawning it — the server's `start(); sync()`
+    // — is therefore a RE-request, not part of the first sync: the pass
+    // yields at `yield_at`, re-syncs, and the batch summaries land as the
+    // suite pins them. Measured 2026-11-13: a reader started before the
+    // startup pass merged that line into the first latch — one batch, six
+    // files, ONE summary (the suite asks for >= 2).
+    read_commands(shared);
 
     let mut new_files: HashSet<i64> = HashSet::new();
     let mut new_code: HashSet<i64> = HashSet::new();

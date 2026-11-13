@@ -261,3 +261,233 @@ pub fn embed_ahead(body: &Value) -> Result<EmbedAheadReq, Vec<Value>> {
         code,
     })
 }
+
+/// `pixels: int = Query(256, ge=32, le=2048)` (the preview endpoint's param):
+/// query params arrive as strings, so pydantic's lax int-from-string rules
+/// apply — a fractional string is `int_parsing` (a number with a fractional
+/// part, `int_from_float`, is a JSON-body shape a query string cannot be).
+/// The FIRST occurrence of the param wins, like FastAPI's `Query` on
+/// `?pixels=1&pixels=2`.
+pub fn check_pixels(value: &str) -> Result<i64, Vec<Value>> {
+    let mut errors = Vec::new();
+    let trimmed = value.trim();
+    let parsed: Option<i64> = match trimmed.parse::<i64>() {
+        Ok(number) => Some(number),
+        Err(_) => {
+            // A huge integer literal is still an integer to Python (arbitrary
+            // precision); it only trips the range check.
+            let digits = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+            if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                Some(i64::MAX)
+            } else {
+                errors.push(item(
+                    "int_parsing",
+                    vec![json!("query"), json!("pixels")],
+                    "Input should be a valid integer, unable to parse string as an integer",
+                ));
+                return Err(errors);
+            }
+        }
+    };
+    let value = parsed.expect("checked above");
+    if value < 32 {
+        errors.push(item(
+            "greater_than_equal",
+            vec![json!("query"), json!("pixels")],
+            "Input should be greater than or equal to 32",
+        ));
+    } else if value > 2048 {
+        errors.push(item(
+            "less_than_equal",
+            vec![json!("query"), json!("pixels")],
+            "Input should be less than or equal to 2048",
+        ));
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(value)
+}
+
+/// The `IndexRequest` body (`prune: bool = False`, extra ignored), with the
+/// endpoint's `IndexRequest | None = None` shape: an empty body or `null` is
+/// a plain sync, a body is validated.
+pub fn index_request(body: &[u8]) -> Result<bool, Vec<Value>> {
+    if body.is_empty() {
+        return Ok(false);
+    }
+    let value: Value = serde_json::from_slice(body).map_err(|_| {
+        vec![json!({
+            "type": "json_invalid", "loc": ["body", 0], "msg": "JSON decode error"
+        })]
+    })?;
+    if value.is_null() {
+        return Ok(false);
+    }
+    let Some(map) = value.as_object() else {
+        return Err(vec![json!({
+            "type": "model_attributes_type", "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from"
+        })]);
+    };
+    let mut errors = Vec::new();
+    let prune = check_bool(&value, "prune", false, &mut errors);
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let _ = map;
+    Ok(prune)
+}
+
+/// The `EstimateRequest` body: an empty model (extra ignored) — the body is
+/// required (FastAPI: a model endpoint demands a body), any object passes.
+pub fn estimate_request(body: &[u8]) -> Result<(), Vec<Value>> {
+    if body.is_empty() {
+        return Err(vec![json!({
+            "type": "missing", "loc": ["body"], "msg": "Field required"
+        })]);
+    }
+    let value: Value = serde_json::from_slice(body).map_err(|_| {
+        vec![json!({
+            "type": "json_invalid", "loc": ["body", 0], "msg": "JSON decode error"
+        })]
+    })?;
+    if !value.is_object() {
+        return Err(vec![json!({
+            "type": "model_attributes_type", "loc": ["body"],
+            "msg": "Input should be a valid dictionary or object to extract fields from"
+        })]);
+    }
+    Ok(())
+}
+
+pub struct TargetRegisterReq {
+    pub name: String,
+    pub roots: Vec<String>,
+    pub index: Option<String>,
+}
+
+/// `TargetRegister` (stage 14): `extra="forbid"` — the one model in this API
+/// that REFUSES unknown fields (`extra_forbidden`), because a registration's
+/// body is the application's identity, not a negotiation. Field order: name
+/// (1..64 chars), roots (1..32 strings), index (str | None).
+pub fn target_register(body: &Value) -> Result<TargetRegisterReq, Vec<Value>> {
+    let mut errors = Vec::new();
+    if !body_is_object(body, &mut errors) {
+        return Err(errors);
+    }
+    let map = body.as_object().expect("checked above");
+    // name: str = Field(min_length=1, max_length=64)
+    let name = match map.get("name") {
+        None => {
+            errors.push(item("missing", vec![json!("body"), json!("name")], "Field required"));
+            None
+        }
+        Some(Value::String(text)) => {
+            let chars: Vec<char> = text.chars().collect();
+            if chars.is_empty() {
+                errors.push(item(
+                    "string_too_short",
+                    vec![json!("body"), json!("name")],
+                    "String should have at least 1 character",
+                ));
+                None
+            } else if chars.len() > 64 {
+                errors.push(item(
+                    "string_too_long",
+                    vec![json!("body"), json!("name")],
+                    "String should have at most 64 characters",
+                ));
+                None
+            } else {
+                Some(text.clone())
+            }
+        }
+        Some(_) => {
+            errors.push(item(
+                "string_type",
+                vec![json!("body"), json!("name")],
+                "Input should be a valid string",
+            ));
+            None
+        }
+    };
+    // roots: list[str] = Field(min_length=1, max_length=32)
+    let roots = match map.get("roots") {
+        None => {
+            errors.push(item("missing", vec![json!("body"), json!("roots")], "Field required"));
+            None
+        }
+        Some(Value::Array(items)) => {
+            let mut roots = Vec::new();
+            for (index, entry) in items.iter().enumerate() {
+                match entry {
+                    Value::String(text) => roots.push(text.clone()),
+                    _ => errors.push(item(
+                        "string_type",
+                        vec![json!("body"), json!("roots"), json!(index)],
+                        "Input should be a valid string",
+                    )),
+                }
+            }
+            if items.is_empty() {
+                errors.push(item(
+                    "too_short",
+                    vec![json!("body"), json!("roots")],
+                    // pydantic v2's exact templates: `not {actual}` — measured
+                    // live against the shipped pydantic (B25, 2026-11-13).
+                    "List should have at least 1 item after validation, not 0",
+                ));
+            } else if items.len() > 32 {
+                errors.push(item(
+                    "too_long",
+                    vec![json!("body"), json!("roots")],
+                    &format!(
+                        "List should have at most 32 items after validation, not {}",
+                        items.len()
+                    ),
+                ));
+            }
+            Some(roots)
+        }
+        Some(_) => {
+            errors.push(item(
+                "list_type",
+                vec![json!("body"), json!("roots")],
+                "Input should be a valid list",
+            ));
+            None
+        }
+    };
+    // index: str | None = None
+    let index = match map.get("index") {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::String(text)) => Some(Some(text.clone())),
+        Some(_) => {
+            errors.push(item(
+                "string_type",
+                vec![json!("body"), json!("index")],
+                "Input should be a valid string",
+            ));
+            None
+        }
+    };
+    // extra="forbid": unknown fields are refused in the input's own order.
+    for key in map.keys() {
+        if key != "name" && key != "roots" && key != "index" {
+            errors.push(item(
+                "extra_forbidden",
+                vec![json!("body"), json!(key)],
+                "Extra inputs are not permitted",
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(TargetRegisterReq {
+        name: name.expect("no errors means name was a string"),
+        roots: roots.expect("no errors means roots was a list"),
+        index: index.flatten(),
+    })
+}

@@ -167,6 +167,18 @@ pub struct ServerConfig {
     pub excluded: Vec<String>,
     pub excluded_extensions: Vec<String>,
     pub encoder_idle: f64,
+    /// `DIGUP_SERVER_ESTIMATE_TIMEOUT_S` (120): the endpoint's honest ceiling
+    /// for one full-tree walk; the engine keeps walking past it.
+    pub estimate_timeout_s: f64,
+    /// `DIGUP_SERVER_JOB_TIMEOUT_S` (3600): a job's ceiling — an expired job
+    /// records *interrupted* with its partial counters and the next resumes.
+    pub job_timeout_s: f64,
+    /// `DIGUP_SERVER_JOB_LOG_SIZE` (1 MiB): the jobs log rotates at size.
+    pub job_log_size: u64,
+    /// `DIGUP_SERVER_MINT_KEYS`: the standalone box mints its API key at boot.
+    pub mint_keys: bool,
+    /// `DIGUP_SERVER_UI`: where the built frontend lives (Stage 6's mount).
+    pub ui: Option<PathBuf>,
 }
 
 fn env_string(name: &str, default: &str) -> String {
@@ -187,6 +199,15 @@ impl ServerConfig {
     pub fn from_env() -> Self {
         let index = PathBuf::from(env_string("DIGUP_SERVER_INDEX", "/data/index"));
         let roots = env_list("DIGUP_SERVER_ROOTS");
+        // `config_from_env`'s config folder: env wins, else beside the index
+        // (jobs.jsonl, tokens.json, targets.json — recreation-safe facts).
+        let config_dir = match std::env::var("DIGUP_SERVER_CONFIG")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+        {
+            Some(value) => PathBuf::from(value),
+            None => index.join("server-config"),
+        };
         let models = std::env::var("DIGUP_SERVER_MODELS")
             .ok()
             .filter(|value| !value.is_empty())
@@ -208,7 +229,31 @@ impl ServerConfig {
                 .unwrap_or(15.0),
             prewarm: env_flag("DIGUP_SERVER_PREWARM", true),
             backfill: env_flag("DIGUP_SERVER_BACKFILL", true),
-            config: PathBuf::from(env_string("DIGUP_SERVER_CONFIG", "/data/config")),
+            config: config_dir,
+            estimate_timeout_s: std::env::var("DIGUP_SERVER_ESTIMATE_TIMEOUT_S")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(120.0),
+            job_timeout_s: std::env::var("DIGUP_SERVER_JOB_TIMEOUT_S")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(3600.0),
+            job_log_size: std::env::var("DIGUP_SERVER_JOB_LOG_SIZE")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1_048_576),
+            mint_keys: matches!(
+                std::env::var("DIGUP_SERVER_MINT_KEYS")
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .as_str(),
+                "1" | "true" | "yes"
+            ),
+            ui: std::env::var("DIGUP_SERVER_UI")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from),
             encoder_idle: idle,
             binary,
             models_dir: models,
