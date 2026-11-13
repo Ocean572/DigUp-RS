@@ -47,18 +47,21 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Extension, Request, State};
-use axum::http::header::{HeaderName, HeaderValue, ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, CONTENT_TYPE, VARY, WWW_AUTHENTICATE};
+use axum::http::header::{
+    HeaderName, HeaderValue, ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, CONTENT_TYPE, VARY,
+    WWW_AUTHENTICATE,
+};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use axum::routing::{MethodFilter, MethodRouter};
 use axum::{Json, Router};
 use serde_json::{json, Map, Value};
-use axum::routing::{MethodFilter, MethodRouter};
 
 use cli::CliError;
 use config::{format_gf64, EngineConfig, ServerConfig};
@@ -106,7 +109,10 @@ impl StatusCache {
         let now = Instant::now();
         if let Some((stamp, data)) = map.get(&key) {
             // `now - stamp > ttl` refreshes; equality serves the cache (Python's `>`).
-            if now.checked_duration_since(*stamp).map_or(true, |age| age <= self.ttl) {
+            if now
+                .checked_duration_since(*stamp)
+                .map_or(true, |age| age <= self.ttl)
+            {
                 return Ok(data.clone());
             }
         }
@@ -158,7 +164,8 @@ impl App {
     /// best-effort, and the main job runner (log replay included) starts.
     fn new(cfg: ServerConfig) -> Result<Shared, String> {
         let engine = cfg.engine();
-        let registry = targets::build_registry(&cfg.roots, &cfg.index.to_string_lossy(), &cfg.config)?;
+        let registry =
+            targets::build_registry(&cfg.roots, &cfg.index.to_string_lossy(), &cfg.config)?;
         let app_target_names: Vec<String> = registry
             .iter()
             .filter(|target| !target.main)
@@ -180,8 +187,7 @@ impl App {
                 }
             }
             None => {
-                let default = Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../server/ui/dist");
+                let default = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server/ui/dist");
                 if default.join("index.html").is_file() {
                     Some(default)
                 } else {
@@ -324,7 +330,9 @@ impl App {
                     ));
                 }
                 // mid reload→prewarm: the CLI's words, below.
-                Err(CallError::Exited(_)) | Err(CallError::Refused(_)) | Err(CallError::Timeout(_)) => {}
+                Err(CallError::Exited(_))
+                | Err(CallError::Refused(_))
+                | Err(CallError::Timeout(_)) => {}
                 Err(other) => return Err(other.into()),
             }
         }
@@ -348,7 +356,10 @@ impl App {
                             .sum::<i64>()
                     })
                     .unwrap_or(0);
-                Ok((json!(files), facts.get("vectors").cloned().unwrap_or(Value::Null)))
+                Ok((
+                    json!(files),
+                    facts.get("vectors").cloned().unwrap_or(Value::Null),
+                ))
             }
             // EngineExited/EngineRefused/TimeoutError/FileNotFoundError/OSError
             // (Python's tuple): nothing to report, honestly.
@@ -510,10 +521,9 @@ fn refuse(status: StatusCode, detail: String) -> Response {
     let mut parts = (status, Json(json!({"detail": detail}))).into_response();
     // FastAPI's JSONResponse answers content-type `application/json`
     // (no charset) — axum's Json says the same.
-    parts.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
+    parts
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if status == StatusCode::UNAUTHORIZED {
         parts
             .headers_mut()
@@ -538,7 +548,8 @@ fn json_response(status: StatusCode, body: Value) -> Response {
 
 fn py_float_repr(value: f64) -> String {
     let text = format!("{value}");
-    if !text.contains('.') && !text.contains('e') && !text.contains("inf") && !text.contains("NaN") {
+    if !text.contains('.') && !text.contains('e') && !text.contains("inf") && !text.contains("NaN")
+    {
         // Python prints integral floats with the `.0` suffix.
         format!("{text}.0")
     } else {
@@ -547,7 +558,11 @@ fn py_float_repr(value: f64) -> String {
 }
 
 fn etag_of(mtime: f64, size: u64) -> String {
-    let digest = md5::compute(format!("{repr}-{size}", repr = py_float_repr(mtime), size = size));
+    let digest = md5::compute(format!(
+        "{repr}-{size}",
+        repr = py_float_repr(mtime),
+        size = size
+    ));
     format!("\"{:x}\"", digest)
 }
 
@@ -619,8 +634,7 @@ fn status_with_headers(
 
 fn header(name: &str, value: &str) -> (HeaderName, HeaderValue) {
     (
-        HeaderName::from_lowercase(name.to_lowercase().as_bytes())
-            .expect("header name"),
+        HeaderName::from_lowercase(name.to_lowercase().as_bytes()).expect("header name"),
         HeaderValue::try_from(value).expect("header value"),
     )
 }
@@ -693,7 +707,10 @@ fn starlette_full(header: Option<&str>, size: i64) -> StarFull {
     if ranges.is_empty() {
         return StarFull::BadRequest("Range header: range must be requested");
     }
-    if ranges.iter().any(|(start, _)| !(0 <= *start && *start < size)) {
+    if ranges
+        .iter()
+        .any(|(start, _)| !(0 <= *start && *start < size))
+    {
         return StarFull::Unsatisfiable;
     }
     if ranges.iter().any(|(start, end)| start >= end) {
@@ -756,9 +773,8 @@ fn file_response(
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
     let etag = etag_of(mtime, meta.len());
-    let last_modified = httpdate::fmt_http_date(
-        std::time::UNIX_EPOCH + Duration::from_secs(mtime as u64),
-    );
+    let last_modified =
+        httpdate::fmt_http_date(std::time::UNIX_EPOCH + Duration::from_secs(mtime as u64));
     let mut extra = headers.clone();
     // Starlette's FileResponse carries `accept-ranges: bytes` on every answer.
     extra.push(header("accept-ranges", "bytes"));
@@ -780,8 +796,7 @@ fn file_response(
         .and_then(|v| v.to_str().ok())
         .and_then(|value| httpdate::parse_http_date(value).ok())
     {
-        let file_time = std::time::UNIX_EPOCH
-            + Duration::from_secs(mtime.floor() as u64);
+        let file_time = std::time::UNIX_EPOCH + Duration::from_secs(mtime.floor() as u64);
         if file_time <= imds {
             return status_with_headers(StatusCode::NOT_MODIFIED, extra, Body::empty());
         }
@@ -945,7 +960,10 @@ fn file_response(
 // compares tokens. All knobs are inert when unset (README §7, stage-12).
 
 fn state_changing(method: &Method) -> bool {
-    matches!(*method, Method::POST | Method::PUT | Method::PATCH | Method::DELETE)
+    matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    )
 }
 
 fn hhmmss() -> String {
@@ -986,7 +1004,9 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
     // Python: `scope["path"].rstrip("/")` — the guard compares stripped.
     let guard_path = raw_path.trim_end_matches('/').to_string();
     let guarded = guard_path.starts_with("/api/v1")
-        && !security::OPEN_PATHS.iter().any(|open| *open == guard_path.as_str());
+        && !security::OPEN_PATHS
+            .iter()
+            .any(|open| *open == guard_path.as_str());
     let headers = req.headers().clone();
 
     let origin_raw = headers
@@ -1024,14 +1044,24 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
                 &method_str,
                 &guard_path,
                 response.status().as_u16(),
-                if ctx.principal.is_empty() { "none" } else { &ctx.principal },
-                if target_set { Some(ctx.target.as_str()) } else { None },
+                if ctx.principal.is_empty() {
+                    "none"
+                } else {
+                    &ctx.principal
+                },
+                if target_set {
+                    Some(ctx.target.as_str())
+                } else {
+                    None
+                },
             );
         }
         if let Some(origin) = &cors_origin {
             // `_decorate`: ACAO + Vary on every response from an allowlisted origin.
             if let Ok(value) = HeaderValue::try_from(origin) {
-                response.headers_mut().insert(ACCESS_CONTROL_ALLOW_ORIGIN, value);
+                response
+                    .headers_mut()
+                    .insert(ACCESS_CONTROL_ALLOW_ORIGIN, value);
             }
             response
                 .headers_mut()
@@ -1050,11 +1080,11 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
                         ACCESS_CONTROL_ALLOW_ORIGIN,
                         HeaderValue::try_from(origin).expect("origin header"),
                     ),
+                    header("access-control-allow-methods", "POST, GET, OPTIONS"),
                     header(
-                        "access-control-allow-methods",
-                        "POST, GET, OPTIONS",
+                        "access-control-allow-headers",
+                        "authorization, content-type",
                     ),
-                    header("access-control-allow-headers", "authorization, content-type"),
                     header("access-control-max-age", "600"),
                     (VARY, HeaderValue::from_static("Origin")),
                     (axum::http::header::CONTENT_LENGTH, HeaderValue::from(0u64)),
@@ -1082,25 +1112,33 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
             .trim()
             .to_lowercase();
         if !allowed.iter().any(|h| h == &host) {
-            return finish(refuse(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "the Host header ({host_disp}) is not one of this server's allowed hosts"
+            return finish(
+                refuse(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "the Host header ({host_disp}) is not one of this server's allowed hosts"
+                    ),
                 ),
-            ), &ctx, target_set);
+                &ctx,
+                target_set,
+            );
         }
         if !origin_raw.is_empty()
             && state_changing(&method)
             && !cors_allowed
             && security::origin_host(&origin_raw) != host
         {
-            return finish(refuse(
-                StatusCode::FORBIDDEN,
-                format!(
-                    "the Origin ({origin_raw}) is not this server's own origin; \
+            return finish(
+                refuse(
+                    StatusCode::FORBIDDEN,
+                    format!(
+                        "the Origin ({origin_raw}) is not this server's own origin; \
                      state-changing requests must come from the same host"
+                    ),
                 ),
-            ), &ctx, target_set);
+                &ctx,
+                target_set,
+            );
         }
     }
 
@@ -1135,19 +1173,27 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
                             ctx.target = MAIN_TARGET.to_string();
                             target_set = true;
                         } else {
-                            return finish(refuse(
-                                StatusCode::UNAUTHORIZED,
-                                "this server asks for a bearer token".to_string(),
-                            ), &ctx, target_set);
+                            return finish(
+                                refuse(
+                                    StatusCode::UNAUTHORIZED,
+                                    "this server asks for a bearer token".to_string(),
+                                ),
+                                &ctx,
+                                target_set,
+                            );
                         }
                     }
                     Some(token) => {
                         let names = auth.token_names(&token);
                         if names.is_empty() {
-                            return finish(refuse(
-                                StatusCode::UNAUTHORIZED,
-                                "the bearer token is not this server's token".to_string(),
-                            ), &ctx, target_set);
+                            return finish(
+                                refuse(
+                                    StatusCode::UNAUTHORIZED,
+                                    "the bearer token is not this server's token".to_string(),
+                                ),
+                                &ctx,
+                                target_set,
+                            );
                         }
                         let app_target = names
                             .iter()
@@ -1171,17 +1217,19 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
                                         .to_string(),
                                 ), &ctx, target_set);
                             }
-                        } else if !(is_admin
-                            || app_target.as_deref() == Some(target.as_str()))
-                        {
-                            return finish(refuse(
-                                StatusCode::FORBIDDEN,
-                                format!(
-                                    "target {} is answered by its own application token \
+                        } else if !(is_admin || app_target.as_deref() == Some(target.as_str())) {
+                            return finish(
+                                refuse(
+                                    StatusCode::FORBIDDEN,
+                                    format!(
+                                        "target {} is answered by its own application token \
                                      (or the admin token) — not by this one",
-                                    targets::py_repr(&target)
+                                        targets::py_repr(&target)
+                                    ),
                                 ),
-                            ), &ctx, target_set);
+                                &ctx,
+                                target_set,
+                            );
                         }
                         if admin_route && !is_admin {
                             // Mutating routes: admin always; an app token for
@@ -1191,12 +1239,16 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
                                 ctx.target = target.clone();
                                 target_set = true;
                             } else {
-                                return finish(refuse(
-                                    StatusCode::FORBIDDEN,
-                                    "that is this server's read-scope token; indexing and \
+                                return finish(
+                                    refuse(
+                                        StatusCode::FORBIDDEN,
+                                        "that is this server's read-scope token; indexing and \
                                      estimating need the admin token"
-                                        .to_string(),
-                                ), &ctx, target_set);
+                                            .to_string(),
+                                    ),
+                                    &ctx,
+                                    target_set,
+                                );
                             }
                         } else {
                             ctx.target = target.clone();
@@ -1255,7 +1307,11 @@ fn parse_body(body: &[u8]) -> Result<Value, Response> {
 /// Run one request's engine work on the blocking pool (FastAPI runs its
 /// sync endpoints in a threadpool; `scope_for` may spawn a child and wait
 /// for its `ready` handshake, engine calls ride the service's RLock).
-async fn in_scope<T>(app: Shared, target: String, f: impl FnOnce(&Arc<Scope>) -> Result<T, ApiError> + Send + 'static) -> Result<T, ApiError>
+async fn in_scope<T>(
+    app: Shared,
+    target: String,
+    f: impl FnOnce(&Arc<Scope>) -> Result<T, ApiError> + Send + 'static,
+) -> Result<T, ApiError>
 where
     T: Send + 'static,
 {
@@ -1340,7 +1396,11 @@ async fn status_endpoint(State(app): State<Shared>, Extension(ctx): Extension<Ct
 /// rides verbatim, `SearchReply`'s declared fields included (a missing
 /// hits/strong/meaning/ms is the model's ValidationError in Python: 500;
 /// `warning` is null when the engine had none).
-async fn search(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body: Bytes) -> Response {
+async fn search(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
     let value = match parse_body(&body) {
         Ok(value) => value,
         Err(response) => return response,
@@ -1411,7 +1471,11 @@ async fn search(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body:
 /// `POST /api/v1/embed_ahead` — the typist's warm-up: the engine embeds and
 /// caches the text so far, so the pause's vector is ready for the next
 /// search. Plain passthrough (`_strip`), like the Python endpoint.
-async fn embed_ahead(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body: Bytes) -> Response {
+async fn embed_ahead(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
     let value = match parse_body(&body) {
         Ok(value) => value,
         Err(response) => return response,
@@ -1439,7 +1503,11 @@ async fn embed_ahead(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, 
 /// operator's: `DIGUP_SERVER_ESTIMATE_TIMEOUT_S` (an expired walk answers
 /// 502 quoting the engine's own timeout sentence; the engine keeps
 /// walking).
-async fn estimate(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body: Bytes) -> Response {
+async fn estimate(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
     if let Err(errors) = validate::estimate_request(&body) {
         return detail_response(errors);
     }
@@ -1462,9 +1530,12 @@ async fn estimate(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, bod
     let task = {
         let app = app.clone();
         tokio::task::spawn_blocking(move || {
-            cli::estimate_lines(&scope.cfg, Duration::from_secs_f64(app.cfg.estimate_timeout_s))
-                .map(|folders| json!({"folders": folders}))
-                .map_err(ApiError::from)
+            cli::estimate_lines(
+                &scope.cfg,
+                Duration::from_secs_f64(app.cfg.estimate_timeout_s),
+            )
+            .map(|folders| json!({"folders": folders}))
+            .map_err(ApiError::from)
         })
     };
     let outcome = task.await.map_err(|_| ApiError::Internal).and_then(|r| r);
@@ -1492,11 +1563,7 @@ async fn index(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body: 
         Err(error) => return error.into_response(),
     };
     match scope.jobs.start(prune) {
-        Ok(job) => (
-            StatusCode::ACCEPTED,
-            Json(json!({"ok": true, "job": job})),
-        )
-            .into_response(),
+        Ok(job) => (StatusCode::ACCEPTED, Json(json!({"ok": true, "job": job}))).into_response(),
         Err(busy) => ApiError::from(busy).into_response(),
     }
 }
@@ -1547,10 +1614,7 @@ fn media_scope_allows(app: &App, ctx: &Ctx, path: &str) -> Result<String, ApiErr
 }
 
 fn no_media(media_id: &str) -> ApiError {
-    ApiError::http(
-        StatusCode::NOT_FOUND,
-        format!("no media handle {media_id}"),
-    )
+    ApiError::http(StatusCode::NOT_FOUND, format!("no media handle {media_id}"))
 }
 
 /// `GET /api/v1/media/{media_id}/preview?pixels=N` — the JPEGs the
@@ -1580,7 +1644,9 @@ async fn preview(
         Err(error) => return error.into_response(),
     };
     let result = in_scope(app.clone(), owner, move |scope| {
-        let reply = scope.service.render(&entry.path, &entry.kind, entry.loc, pixels)?;
+        let reply = scope
+            .service
+            .render(&entry.path, &entry.kind, entry.loc, pixels)?;
         let image = reply
             .get("image")
             .and_then(Value::as_str)
@@ -1698,7 +1764,11 @@ async fn media_file(
             .into_response()
         }
     };
-    if !handle.metadata().map(|meta| meta.is_file()).unwrap_or(false) {
+    if !handle
+        .metadata()
+        .map(|meta| meta.is_file())
+        .unwrap_or(false)
+    {
         return ApiError::http(
             StatusCode::NOT_FOUND,
             "the file is gone (it left the folders)",
@@ -1707,9 +1777,7 @@ async fn media_file(
     }
     drop(handle);
     let mut media_type = media::sniff_type(Path::new(&resolved));
-    if media_type == "application/octet-stream"
-        && (entry.kind == "code" || entry.kind == "doc")
-    {
+    if media_type == "application/octet-stream" && (entry.kind == "code" || entry.kind == "doc") {
         media_type = "text/plain; charset=utf-8".to_string();
     }
     // RFC 5987: names with any characters, escaped.
@@ -1927,11 +1995,7 @@ async fn register_target(
             Some(token) if auth.minted.iter().any(|minted| minted == &key) => token,
             _ => {
                 let fresh = security::urlsafe_token();
-                if let Some(entry) = auth
-                    .readers
-                    .iter_mut()
-                    .find(|(name, _)| *name == key)
-                {
+                if let Some(entry) = auth.readers.iter_mut().find(|(name, _)| *name == key) {
                     entry.1 = fresh.clone();
                 } else {
                     auth.readers.push((key.clone(), fresh.clone()));
@@ -1990,7 +2054,11 @@ async fn register_target(
 /// this with no key in the browser, exactly as the main page searches with
 /// no key. A deployment that TYPED its secrets never displays them
 /// (`env_secrets`); an application's key never lists the server's keys.
-async fn tokens_endpoint(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, headers: HeaderMap) -> Response {
+async fn tokens_endpoint(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    headers: HeaderMap,
+) -> Response {
     let principal = ctx.principal.clone();
     let auth = app.auth.read().expect("the auth state").clone();
     if (principal.is_empty() || principal == "none") && !security::env_secrets(&auth) {
@@ -2007,7 +2075,11 @@ async fn tokens_endpoint(State(app): State<Shared>, Extension(ctx): Extension<Ct
 /// 0600, the old values die immediately, and the bearer gate reads the
 /// SAME live object — one swap lands everywhere. A deployment whose keys
 /// all come from env answers 400: nothing to rotate.
-async fn rotate_tokens(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, headers: HeaderMap) -> Response {
+async fn rotate_tokens(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    headers: HeaderMap,
+) -> Response {
     if let Err(error) = admin_scope(&app, &ctx, security::bearer_of(&headers).as_deref()) {
         return error.into_response();
     }
@@ -2211,12 +2283,12 @@ async fn main() -> ExitCode {
             "/api/v1/targets",
             get_only(targets_endpoint).post(register_target),
         )
-        .route("/api/v1/tokens", get_only(tokens_endpoint).post(rotate_tokens))
+        .route(
+            "/api/v1/tokens",
+            get_only(tokens_endpoint).post(rotate_tokens),
+        )
         .fallback(fallback)
-        .layer(axum::middleware::from_fn_with_state(
-            app.clone(),
-            api_gate,
-        ))
+        .layer(axum::middleware::from_fn_with_state(app.clone(), api_gate))
         .with_state(app.clone());
     let signal = Arc::new(AtomicI32::new(0));
     let served = {
@@ -2277,7 +2349,10 @@ mod starlette_range_tests {
             ("bytes=abc", "400 Range header: range must be requested"),
             ("bytes=", "400 Range header: range must be requested"),
             ("bytes=-", "400 Range header: range must be requested"),
-            ("bytes=0-10;append=1", "400 Range header: range must be requested"),
+            (
+                "bytes=0-10;append=1",
+                "400 Range header: range must be requested",
+            ),
             ("items=0-10", "400 Only support bytes range"),
             ("rangeish", "400 Malformed range header."),
             ("", "400 Malformed range header."),

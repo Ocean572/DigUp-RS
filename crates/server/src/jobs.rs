@@ -351,7 +351,12 @@ impl JobRunner {
         }
         let active = inner.state.lock().expect("the runner state").active.clone();
         if let Some(active) = active {
-            inner.mark(&active, STATE_INTERRUPTED, Some("server stopped"), Map::new());
+            inner.mark(
+                &active,
+                STATE_INTERRUPTED,
+                Some("server stopped"),
+                Map::new(),
+            );
         }
     }
 }
@@ -468,9 +473,7 @@ impl Inner {
             Ok(()) => {
                 while end_reason.is_none() {
                     match service.lock().expect("the writer").next_event(timeout) {
-                        Ok(None) => {
-                            break
-                        } // the helper's own exit event
+                        Ok(None) => break, // the helper's own exit event
                         Ok(Some(event)) => match event.get("event").and_then(Value::as_str) {
                             Some("file") => {
                                 match event.get("state") {
@@ -511,12 +514,8 @@ impl Inner {
                             }
                             _ => {}
                         },
-                        Err(ProtocolError::Exited(exited)) => {
-                            end_reason = Some(exited.to_string())
-                        }
-                        Err(ProtocolError::Timeout(why)) => {
-                            end_reason = Some(why)
-                        }
+                        Err(ProtocolError::Exited(exited)) => end_reason = Some(exited.to_string()),
+                        Err(ProtocolError::Timeout(why)) => end_reason = Some(why),
                         Err(other) => return Err(other.to_string()),
                     }
                 }

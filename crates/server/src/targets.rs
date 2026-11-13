@@ -90,14 +90,16 @@ pub fn validated(
         if !Path::new(root).is_absolute() {
             return Err(format!(
                 "application target {} root {} is not an absolute path",
-                py_repr(name), py_repr(root)
+                py_repr(name),
+                py_repr(root)
             ));
         }
     }
     if !Path::new(index).is_absolute() {
         return Err(format!(
             "application target {} index {} is not an absolute path",
-            py_repr(name), py_repr(index)
+            py_repr(name),
+            py_repr(index)
         ));
     }
     if let Some(main) = main_index {
@@ -120,10 +122,7 @@ pub fn validated(
 
 /// `parse_app_targets`: entries split on ';', each `name=roots:index` (roots
 /// colon-separated, index the LAST folder). Raises quoting the entry.
-pub fn parse_app_targets(
-    value: &str,
-    main_index: Option<&str>,
-) -> Result<Vec<Target>, String> {
+pub fn parse_app_targets(value: &str, main_index: Option<&str>) -> Result<Vec<Target>, String> {
     let mut targets = Vec::new();
     for entry in value.split(';') {
         let entry = entry.trim();
@@ -160,13 +159,8 @@ pub fn parse_app_targets(
 /// refused loudly (config files are operator facts, not suggestions).
 pub fn load_targets_file(path: &Path, main_index: &str) -> Result<Vec<Target>, String> {
     let raw = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|exc| {
-            format!(
-                "{}: not valid JSON ({})",
-                path.to_string_lossy(),
-                exc
-            )
-        })?,
+        Ok(text) => serde_json::from_str::<Value>(&text)
+            .map_err(|exc| format!("{}: not valid JSON ({})", path.to_string_lossy(), exc))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("{}: {}", path.to_string_lossy(), error)),
     };
@@ -190,7 +184,12 @@ pub fn load_targets_file(path: &Path, main_index: &str) -> Result<Vec<Target>, S
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            targets.push(validated(&name, &roots.join(":"), &index, Some(main_index))?);
+            targets.push(validated(
+                &name,
+                &roots.join(":"),
+                &index,
+                Some(main_index),
+            )?);
         }
     }
     Ok(targets)

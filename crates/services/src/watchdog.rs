@@ -57,10 +57,7 @@ impl Watchdog {
             let reading = digup_runtime::indexer::now_reading();
             if let Some(footprint) = footprint() {
                 if footprint > memory_limit {
-                    let why = format!(
-                        "needed more than {} of memory to read",
-                        size(memory_limit)
-                    );
+                    let why = format!("needed more than {} of memory to read", size(memory_limit));
                     stop(&note, reading.as_ref().map(|(path, _)| path.as_str()), &why);
                 }
             }
@@ -71,7 +68,11 @@ impl Watchdog {
                     } else {
                         format!("{} seconds", time_limit as i64)
                     };
-                    stop(&note, Some(path.as_str()), &format!("took more than {limit} to read"));
+                    stop(
+                        &note,
+                        Some(path.as_str()),
+                        &format!("took more than {limit} to read"),
+                    );
                 }
             }
         });

@@ -21,9 +21,9 @@ use crate::emit::emit;
 
 /// `workerService(_:)`. `text_only`: `--text-only` — queries only, no media encoders.
 pub fn worker_service(text_only: bool) -> i32 {
-    let embedder = match LlamaModels::locate().and_then(|models| {
-        LlamaEmbedder::new(&models, text_only, None, None)
-    }) {
+    let embedder = match LlamaModels::locate()
+        .and_then(|models| LlamaEmbedder::new(&models, text_only, None, None))
+    {
         Ok(embedder) => embedder,
         Err(error) => {
             emit(&serde_json::json!({"ready": false, "error": error.to_string()}));
@@ -38,7 +38,9 @@ pub fn worker_service(text_only: bool) -> i32 {
         let Ok(request) = serde_json::from_str::<Value>(&line) else {
             continue; // `try? JSONSerialization … as? [String: Any]`
         };
-        let Value::Object(request) = request else { continue };
+        let Value::Object(request) = request else {
+            continue;
+        };
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let inputs: Vec<String> = request
             .get("inputs")
@@ -103,11 +105,11 @@ fn handle(
                     .map(|rows| rows.into_iter().map(Embedding::made).collect())
                     .map_err(|e| e.to_string())?,
                 "image" => {
-                    let budget = request
-                        .get("budget")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(280) as i32;
-                    embedder.embed_images(inputs, budget).map_err(|e| e.to_string())?
+                    let budget =
+                        request.get("budget").and_then(Value::as_i64).unwrap_or(280) as i32;
+                    embedder
+                        .embed_images(inputs, budget)
+                        .map_err(|e| e.to_string())?
                 }
                 _ => embedder.embed_audio(inputs).map_err(|e| e.to_string())?,
             };
@@ -147,12 +149,7 @@ fn handle(
             out.insert("errors".into(), Value::Array(errors));
             Ok(Value::Object(out))
         }
-        op => {
-            Err(format!(
-                "unknown op {}",
-                op.unwrap_or("(none)")
-            ))
-        }
+        op => Err(format!("unknown op {}", op.unwrap_or("(none)"))),
     }
 }
 

@@ -104,7 +104,11 @@ pub fn file_size(bytes: i64) -> String {
         return "Zero KB".to_string();
     }
     if bytes < 1000 {
-        return format!("{} byte{}", number(bytes), if bytes == 1 { "" } else { "s" });
+        return format!(
+            "{} byte{}",
+            number(bytes),
+            if bytes == 1 { "" } else { "s" }
+        );
     }
     let mut unit = 1usize;
     let mut scale = 1000.0f64;

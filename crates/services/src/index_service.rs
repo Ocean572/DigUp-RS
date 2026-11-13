@@ -39,7 +39,7 @@ use digup_core::{IndexStore, CODE_FILE, MAIN_FILE};
 use digup_runtime::indexer::{Event, Indexer, Step};
 use digup_runtime::models::LlamaModels;
 use digup_runtime::worker::Embedder;
-use digup_runtime::{LlamaEmbedder, model_info};
+use digup_runtime::{model_info, LlamaEmbedder};
 
 use crate::emit::emit;
 use crate::sharedembedder::SharedEmbedder;
@@ -129,7 +129,6 @@ impl Flags {
         self.backfill_allowed.load(Ordering::SeqCst)
     }
 
-
     /// `Date() >= yieldAt`.
     fn yielded(&self) -> bool {
         epoch_ms() >= self.yield_at.load(Ordering::SeqCst)
@@ -203,11 +202,23 @@ fn run(config: IndexServiceConfig) -> Result<i32, String> {
         let embedder = LlamaEmbedder::new(&models, text_only, context, Some(&log))?;
         Ok(Arc::new(embedder) as Arc<dyn Embedder>)
     })));
-    let main = make_part(&config, &model, MAIN_FILE, &config.roots, config.options.clone())?;
+    let main = make_part(
+        &config,
+        &model,
+        MAIN_FILE,
+        &config.roots,
+        config.options.clone(),
+    )?;
     let code = if config.code_roots.is_empty() {
         None
     } else {
-        Some(make_part(&config, &model, CODE_FILE, &config.code_roots, config.code_options.clone())?)
+        Some(make_part(
+            &config,
+            &model,
+            CODE_FILE,
+            &config.code_roots,
+            config.code_options.clone(),
+        )?)
     };
     let serve = Serve {
         main,
@@ -242,7 +253,8 @@ fn make_part(
         let owner = embedder_owner.clone();
         owner.embedder()
     });
-    let mut indexer = Indexer::new(store, options.clone(), make_embedder).map_err(|e| e.to_string())?;
+    let mut indexer =
+        Indexer::new(store, options.clone(), make_embedder).map_err(|e| e.to_string())?;
     indexer.costs_folder = Some(config.index.clone()); // measured costs, for later estimates
     indexer.embedder_source = Some(model_info().vector_source()); // known without starting one
     let code = options.code;
@@ -252,7 +264,11 @@ fn make_part(
     Ok(Part {
         indexer,
         roots: roots.to_vec(),
-        keep_only: if config.prune { Some(roots.to_vec()) } else { None },
+        keep_only: if config.prune {
+            Some(roots.to_vec())
+        } else {
+            None
+        },
     })
 }
 
@@ -266,7 +282,10 @@ fn read_commands(shared: &Arc<Shared>) {
             let Ok(line) = line else { break };
             match line.trim() {
                 "sync" => shared.flags.sync_requested.store(true, Ordering::SeqCst),
-                "sync code" => shared.flags.code_sync_requested.store(true, Ordering::SeqCst),
+                "sync code" => shared
+                    .flags
+                    .code_sync_requested
+                    .store(true, Ordering::SeqCst),
                 "stop" => shared.flags.stop_requested.store(true, Ordering::SeqCst),
                 "backfill on" => shared.flags.backfill_allowed.store(true, Ordering::SeqCst),
                 "backfill off" => shared.flags.backfill_allowed.store(false, Ordering::SeqCst),
@@ -431,8 +450,15 @@ fn startup(state: &Serve) -> Result<(), String> {
         };
         if let Some(path) = &stopped.path {
             for (part, code) in &parts {
-                if part.indexer.store.mark_stopped(path, &stopped.why).map_err(|e| e.to_string())? {
-                    event(serde_json::json!({"event": "stopped", "path": path, "why": stopped.why, "code": code}));
+                if part
+                    .indexer
+                    .store
+                    .mark_stopped(path, &stopped.why)
+                    .map_err(|e| e.to_string())?
+                {
+                    event(
+                        serde_json::json!({"event": "stopped", "path": path, "why": stopped.why, "code": code}),
+                    );
                 }
             }
         } else {
@@ -444,22 +470,48 @@ fn startup(state: &Serve) -> Result<(), String> {
             let mut marked = false;
             if let Ok(named) = std::env::var("DIGUP_STOPPED_FILE") {
                 for (part, code) in &parts {
-                    if part.indexer.store.mark_stopped(&named, &stopped.why).map_err(|e| e.to_string())? {
-                        event(serde_json::json!({"event": "stopped", "path": named, "why": stopped.why, "code": code}));
+                    if part
+                        .indexer
+                        .store
+                        .mark_stopped(&named, &stopped.why)
+                        .map_err(|e| e.to_string())?
+                    {
+                        event(
+                            serde_json::json!({"event": "stopped", "path": named, "why": stopped.why, "code": code}),
+                        );
                         marked = true;
                     }
                 }
             }
             if !marked {
-                let head = state.main.indexer.store.pending(Some(1), None).map_err(|e| e.to_string())?.into_iter().next();
+                let head = state
+                    .main
+                    .indexer
+                    .store
+                    .pending(Some(1), None)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .next();
                 if let Some(head) = head {
-                    state.main.indexer.store.mark_stopped(&head.path, &stopped.why).map_err(|e| e.to_string())?;
-                    event(serde_json::json!({"event": "stopped", "path": head.path, "why": stopped.why}));
+                    state
+                        .main
+                        .indexer
+                        .store
+                        .mark_stopped(&head.path, &stopped.why)
+                        .map_err(|e| e.to_string())?;
+                    event(
+                        serde_json::json!({"event": "stopped", "path": head.path, "why": stopped.why}),
+                    );
                 }
             }
         }
     }
-    let again = state.main.indexer.store.read_again_once().map_err(|e| e.to_string())?;
+    let again = state
+        .main
+        .indexer
+        .store
+        .read_again_once()
+        .map_err(|e| e.to_string())?;
     if again > 0 {
         event(serde_json::json!({"event": "rescan", "files": again}));
     }
@@ -473,8 +525,15 @@ fn startup(state: &Serve) -> Result<(), String> {
     for (part, code) in parts {
         part.indexer.check_model().map_err(|e| e.to_string())?;
         if let Some(keep) = &part.keep_only {
-            let keep: Vec<String> = keep.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-            let pruned = part.indexer.store.prune_keeping_under(&keep).map_err(|e| e.to_string())?;
+            let keep: Vec<String> = keep
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            let pruned = part
+                .indexer
+                .store
+                .prune_keeping_under(&keep)
+                .map_err(|e| e.to_string())?;
             if pruned > 0 {
                 event(serde_json::json!({"event": "pruned", "files": pruned, "code": code}));
             }
@@ -510,7 +569,13 @@ fn pending_count(state: &Serve, code: bool) -> i64 {
 
 /// `(try? main.store.unfinishedCount().files) ?? 0`.
 fn unfinished_files(state: &Serve) -> i64 {
-    state.main.indexer.store.unfinished_count().map(|(files, _)| files).unwrap_or(0)
+    state
+        .main
+        .indexer
+        .store
+        .unfinished_count()
+        .map(|(files, _)| files)
+        .unwrap_or(0)
 }
 
 /// `modelReady`: `embedderSource() == nil || LlamaModels.complete` — the
@@ -525,22 +590,36 @@ fn model_ready() -> bool {
 /// as "all deleted").
 fn available_roots(state: &mut Serve, code: bool) -> Result<Vec<PathBuf>, String> {
     let roots: Vec<PathBuf> = part(state, code).roots.clone();
-    let missing: Vec<PathBuf> = roots.iter().filter(|folder| !folder.is_dir()).cloned().collect();
+    let missing: Vec<PathBuf> = roots
+        .iter()
+        .filter(|folder| !folder.is_dir())
+        .cloned()
+        .collect();
     let unreadable: Vec<PathBuf> = roots
         .iter()
-        .filter(|folder| !missing.contains(folder) && !digup_core::crawler::can_list(&folder.to_string_lossy()))
+        .filter(|folder| {
+            !missing.contains(folder) && !digup_core::crawler::can_list(&folder.to_string_lossy())
+        })
         .cloned()
         .collect();
     let report = (
-        missing.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
-        unreadable.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+        missing
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        unreadable
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
     );
     let say = match state.unavailable.get(&code) {
         Some(previous) => *previous != report,
         None => !(report.0.is_empty() && report.1.is_empty()),
     };
     if say {
-        event(serde_json::json!({"event": "missing", "folders": report.0, "unreadable": report.1, "code": code}));
+        event(
+            serde_json::json!({"event": "missing", "folders": report.0, "unreadable": report.1, "code": code}),
+        );
     }
     state.unavailable.insert(code, report);
     let available: Vec<PathBuf> = roots
@@ -551,7 +630,10 @@ fn available_roots(state: &mut Serve, code: bool) -> Result<Vec<PathBuf>, String
         .indexer
         .store
         .set_scope(Some(
-            available.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+            available
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
         ))
         .map_err(|e| e.to_string())?;
     Ok(available)
@@ -581,7 +663,10 @@ fn sync_part(
                 }
                 event(Value::Object(fields));
             };
-            part(state, code).indexer.sync(&roots, &mut progress).map_err(|e| e.to_string())
+            part(state, code)
+                .indexer
+                .sync(&roots, &mut progress)
+                .map_err(|e| e.to_string())
         }
         Err(error) => Err(error),
     };
@@ -607,15 +692,18 @@ fn sync_part(
             // The app checks its sync request came before this.
             extras.insert(
                 "started".into(),
-                serde_json::json!(
-                    started.duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
-                ),
+                serde_json::json!(started
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0)),
             );
             extras.insert("left_out".into(), serde_json::json!(summary.crawl.left_out));
             emit_counts(state, "sync", extras);
         }
         Err(error) => {
-            event(serde_json::json!({"event": "error", "message": format!("sync failed: {error}"), "code": code}));
+            event(
+                serde_json::json!({"event": "error", "message": format!("sync failed: {error}"), "code": code}),
+            );
         }
     }
 }
@@ -628,19 +716,23 @@ fn run_part(state: &mut Serve, flags: &Flags, code: bool, ids: Option<&HashSet<i
     let started = Instant::now();
     let is_new = ids.is_some();
     if !code {
-        let kinds = part(state, code).indexer.store.pending_kinds(ids).unwrap_or_else(|_| {
-            [
-                FileKind::Screenshot,
-                FileKind::Image,
-                FileKind::Pdf,
-                FileKind::Doc,
-                FileKind::Audio,
-                FileKind::Video,
-                FileKind::Code,
-            ]
-            .into_iter()
-            .collect()
-        });
+        let kinds = part(state, code)
+            .indexer
+            .store
+            .pending_kinds(ids)
+            .unwrap_or_else(|_| {
+                [
+                    FileKind::Screenshot,
+                    FileKind::Image,
+                    FileKind::Pdf,
+                    FileKind::Doc,
+                    FileKind::Audio,
+                    FileKind::Video,
+                    FileKind::Code,
+                ]
+                .into_iter()
+                .collect()
+            });
         let needs_media = kinds.iter().any(FileKind::needs_media_encoders);
         state.model.note(needs_media);
     }
@@ -666,7 +758,9 @@ fn run_part(state: &mut Serve, flags: &Flags, code: bool, ids: Option<&HashSet<i
         }));
     };
     let should_stop = &|| flags.should_stop(is_new, code);
-    let result = part_mut(state, code).indexer.run(None, ids, should_stop, on_event);
+    let result = part_mut(state, code)
+        .indexer
+        .run(None, ids, should_stop, on_event);
     state.pass.insert(code, (so_far.0 + done_this_run, total));
     match result {
         Ok(states) => {
@@ -682,7 +776,9 @@ fn run_part(state: &mut Serve, flags: &Flags, code: bool, ids: Option<&HashSet<i
             true
         }
         Err(error) => {
-            emit(&serde_json::json!({"event": "error", "message": error.to_string(), "fatal": true, "code": code}));
+            emit(
+                &serde_json::json!({"event": "error", "message": error.to_string(), "fatal": true, "code": code}),
+            );
             false
         }
     }
@@ -719,7 +815,9 @@ fn finish_long_files(state: &mut Serve, flags: &Flags) -> bool {
             true
         }
         Err(error) => {
-            emit(&serde_json::json!({"event": "error", "message": error.to_string(), "fatal": true}));
+            emit(
+                &serde_json::json!({"event": "error", "message": error.to_string(), "fatal": true}),
+            );
             false
         }
     }
@@ -791,7 +889,9 @@ fn emit_counts(state: &Serve, event_name: &str, extra: Map<String, Value>) {
         parts.push((code, true));
     }
     for (part, code) in parts {
-        let Ok(counts) = part.indexer.store.counts() else { continue };
+        let Ok(counts) = part.indexer.store.counts() else {
+            continue;
+        };
         let prefix = if code { "code_" } else { "" };
         let (mut files, mut searchable, mut pending) = (0i64, 0i64, 0i64);
         for states in counts.by_kind_and_state.values() {
@@ -808,7 +908,10 @@ fn emit_counts(state: &Serve, event_name: &str, extra: Map<String, Value>) {
         fields.insert(format!("{prefix}files"), serde_json::json!(files));
         fields.insert(format!("{prefix}searchable"), serde_json::json!(searchable));
         fields.insert(format!("{prefix}pending"), serde_json::json!(pending));
-        fields.insert(format!("{prefix}vectors"), serde_json::json!(counts.vectors));
+        fields.insert(
+            format!("{prefix}vectors"),
+            serde_json::json!(counts.vectors),
+        );
         if !code {
             fields.insert("unfinished".into(), serde_json::json!(counts.unfinished));
         }
@@ -830,11 +933,17 @@ fn finish_all(state: &mut Serve) {
 /// indexing processes that are gone (killed mid-batch).
 fn remove_stale_scratch_folders() {
     let temp = std::env::temp_dir();
-    let Ok(entries) = std::fs::read_dir(&temp) else { return };
+    let Ok(entries) = std::fs::read_dir(&temp) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(rest) = name.strip_prefix("DigUp-") else { continue };
-        let Ok(pid) = rest.parse::<i32>() else { continue };
+        let Some(rest) = name.strip_prefix("DigUp-") else {
+            continue;
+        };
+        let Ok(pid) = rest.parse::<i32>() else {
+            continue;
+        };
         if pid == std::process::id() as i32 || !is_gone(pid) {
             continue;
         }
@@ -844,5 +953,8 @@ fn remove_stale_scratch_folders() {
 
 /// `isGone(_:)`: no process has this id now (`kill(pid, 0)` fails with ESRCH).
 fn is_gone(pid: i32) -> bool {
-    unsafe { libc::kill(pid, 0) != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) }
+    unsafe {
+        libc::kill(pid, 0) != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
 }

@@ -27,10 +27,7 @@ impl EngineConfig {
     /// `search_argv()`: the argv array the daemon is spawned with — direct spawn,
     /// never a shell wrapper (ParentWatch kills children whose parent dies).
     pub fn search_argv(&self) -> Vec<String> {
-        let mut argv = vec![
-            self.binary.clone(),
-            "search-service".to_string(),
-        ];
+        let mut argv = vec![self.binary.clone(), "search-service".to_string()];
         argv.extend(self.roots.iter().cloned());
         argv.push("--index".to_string());
         argv.push(self.index.to_string_lossy().into_owned());
@@ -52,10 +49,7 @@ impl EngineConfig {
         new_limit: Option<i64>,
         linger_s: Option<f64>,
     ) -> Vec<String> {
-        let mut argv = vec![
-            self.binary.clone(),
-            "index-service".to_string(),
-        ];
+        let mut argv = vec![self.binary.clone(), "index-service".to_string()];
         argv.extend(self.roots.iter().cloned());
         argv.push("--index".to_string());
         argv.push(self.index.to_string_lossy().into_owned());
@@ -98,10 +92,7 @@ impl EngineConfig {
     /// `estimate_argv()`: `estimate --json`, the excludes with it (ParentWatch
     /// helper: the server is the long-lived parent, direct child, no shell).
     pub fn estimate_argv(&self) -> Vec<String> {
-        let mut argv = vec![
-            self.binary.clone(),
-            "estimate".to_string(),
-        ];
+        let mut argv = vec![self.binary.clone(), "estimate".to_string()];
         argv.extend(self.roots.iter().cloned());
         argv.push("--index".to_string());
         argv.push(self.index.to_string_lossy().into_owned());

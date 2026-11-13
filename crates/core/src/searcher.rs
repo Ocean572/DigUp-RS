@@ -447,9 +447,15 @@ impl<'a> Searcher<'a> {
             self.row_modality
                 .push(Modality::parse(&r.modality).unwrap_or(Modality::None));
             // Past the first step of a long PDF (its pages) or document (its chunks).
-            let place = if r.loc_is_null { 0 } else { r.loc.trunc() as i64 };
+            let place = if r.loc_is_null {
+                0
+            } else {
+                r.loc.trunc() as i64
+            };
             let later = if r.file_kind == "pdf" {
-                r.kind != SegmentKind::Chunk.as_str() && r.pages > steps.big_pdf_pages && place > steps.pdf_step
+                r.kind != SegmentKind::Chunk.as_str()
+                    && r.pages > steps.big_pdf_pages
+                    && place > steps.pdf_step
             } else {
                 r.kind == SegmentKind::Chunk.as_str() && place > steps.doc_step
             };
@@ -473,14 +479,12 @@ impl<'a> Searcher<'a> {
     /// `reloadFiles` (Searcher.swift:92): the file-kind map and `vector_source`.
     pub fn reload_files(&mut self) -> Result<(), crate::db::Error> {
         let mut rows: Vec<(i64, Option<String>)> = Vec::new();
-        self.store.db.query(
-            "SELECT id, kind FROM files",
-            [],
-            |row| {
+        self.store
+            .db
+            .query("SELECT id, kind FROM files", [], |row| {
                 rows.push((row.int(0), row.text(1)));
                 Ok(())
-            },
-        )?;
+            })?;
         self.file_kind.clear();
         for (id, kind) in rows {
             if let Some(kind) = kind.and_then(|k| FileKind::parse(&k)) {
@@ -530,17 +534,19 @@ impl<'a> Searcher<'a> {
             } else {
                 ""
             },
-            if names_only { " AND s.kind = 'name'" } else { "" }
+            if names_only {
+                " AND s.kind = 'name'"
+            } else {
+                ""
+            }
         );
         let mut found = false;
-        self.store.db.query(
-            &sql,
-            [Sql::Text(pattern.to_string())],
-            |_| {
+        self.store
+            .db
+            .query(&sql, [Sql::Text(pattern.to_string())], |_| {
                 found = true;
                 Ok(())
-            },
-        )?;
+            })?;
         Ok(found)
     }
 
@@ -617,9 +623,11 @@ impl<'a> Searcher<'a> {
         opts: &SearchOptions<'_>,
     ) -> Result<Vec<SearchHit>, crate::db::Error> {
         let is_code = self.is_code();
-        let word_weight = opts
-            .word_weight
-            .unwrap_or(if is_code { CODE_WORD_WEIGHT } else { WORD_WEIGHT });
+        let word_weight = opts.word_weight.unwrap_or(if is_code {
+            CODE_WORD_WEIGHT
+        } else {
+            WORD_WEIGHT
+        });
         // "name: …": names only, no query vector, the model never runs for it.
         let mut text = text.to_string();
         let mut query_vector: Option<Vec<f32>> = query_vector.map(|q| q.to_vec());
@@ -654,7 +662,10 @@ impl<'a> Searcher<'a> {
                         continue;
                     }
                     let z = meaning[row];
-                    if z > best.get(&self.row_file[row]).map(|b| b.0).unwrap_or(f64::NEG_INFINITY)
+                    if z > best
+                        .get(&self.row_file[row])
+                        .map(|b| b.0)
+                        .unwrap_or(f64::NEG_INFINITY)
                     {
                         best.insert(self.row_file[row], (z, f64::from(scores[row]), row));
                     }
@@ -694,7 +705,8 @@ impl<'a> Searcher<'a> {
         }
         if !patterns.is_empty() {
             let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
-            let sql = format!(
+            let sql =
+                format!(
                 "SELECT s.file, s.id, snippet(fts, {}, '«', '»', '…', 12), fts.original FROM fts \
                  JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?{} \
                  ORDER BY bm25(fts, 3.0, 1.0) LIMIT 1000",
@@ -702,14 +714,12 @@ impl<'a> Searcher<'a> {
                 if names_only { " AND s.kind = 'name'" } else { "" }
             );
             let mut rows: Vec<(i64, i64, Option<String>, Option<String>)> = Vec::new();
-            self.store.db.query(
-                &sql,
-                [Sql::Text(patterns.join(" OR "))],
-                |row| {
+            self.store
+                .db
+                .query(&sql, [Sql::Text(patterns.join(" OR "))], |row| {
                     rows.push((row.int(0), row.int(1), row.text(2), row.text(3)));
                     Ok(())
-                },
-            )?;
+                })?;
             for (file, segment, sql_snippet, original) in rows {
                 if words.len() >= 100 {
                     continue;
@@ -738,17 +748,19 @@ impl<'a> Searcher<'a> {
                         "SELECT DISTINCT s.file FROM fts JOIN segments s ON s.id = fts.rowid \
                          WHERE fts MATCH ? AND s.file IN ({}){}",
                         files,
-                        if names_only { " AND s.kind = 'name'" } else { "" }
+                        if names_only {
+                            " AND s.kind = 'name'"
+                        } else {
+                            ""
+                        }
                     );
                     let mut hits: Vec<i64> = Vec::new();
-                    self.store.db.query(
-                        &sql,
-                        [Sql::Text(pattern.clone())],
-                        |row| {
+                    self.store
+                        .db
+                        .query(&sql, [Sql::Text(pattern.clone())], |row| {
                             hits.push(row.int(0));
                             Ok(())
-                        },
-                    )?;
+                        })?;
                     for file in hits {
                         *coverage.entry(file).or_insert(0.0) += 1.0 / patterns.len() as f64;
                     }
@@ -795,7 +807,9 @@ impl<'a> Searcher<'a> {
         // stands out, else the segment the words matched.
         let mut word_rank: HashMap<i64, (usize, i64, Option<String>)> = HashMap::new();
         for (index, word) in words.iter().enumerate() {
-            word_rank.entry(word.0).or_insert((index + 1, word.1, word.2.clone()));
+            word_rank
+                .entry(word.0)
+                .or_insert((index + 1, word.1, word.2.clone()));
         }
         let mut hits: Vec<SearchHit> = Vec::new();
         for (file, score) in scored.into_iter().take(opts.limit) {
@@ -816,7 +830,11 @@ impl<'a> Searcher<'a> {
                 let (segment, line) = self.code_place(
                     file,
                     segment_id,
-                    if rank < 10 { identifier.as_deref() } else { None },
+                    if rank < 10 {
+                        identifier.as_deref()
+                    } else {
+                        None
+                    },
                     &text,
                     &terms,
                     keyword.map(|k| k.1 == segment_id).unwrap_or(false) || identifier.is_some(),
@@ -834,7 +852,8 @@ impl<'a> Searcher<'a> {
                 [Sql::Int(file)],
                 |row| {
                     path = row.text(0).unwrap_or_default();
-                    kind = FileKind::parse(&row.text(1).unwrap_or_default()).unwrap_or(FileKind::Doc);
+                    kind =
+                        FileKind::parse(&row.text(1).unwrap_or_default()).unwrap_or(FileKind::Doc);
                     modified = row.double(2);
                     size = row.int(3);
                     info_json = row.text(4);

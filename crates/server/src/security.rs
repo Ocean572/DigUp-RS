@@ -87,7 +87,9 @@ pub fn tokens_match(a: &str, b: &str) -> bool {
 /// (admin), `DIGUP_SERVER_READ_TOKENS` (the named map).
 pub fn auth_from_env() -> Auth {
     Auth {
-        read: std::env::var("DIGUP_SERVER_TOKEN").ok().filter(|v| !v.is_empty()),
+        read: std::env::var("DIGUP_SERVER_TOKEN")
+            .ok()
+            .filter(|v| !v.is_empty()),
         admin: std::env::var("DIGUP_SERVER_ADMIN_TOKEN")
             .ok()
             .filter(|v| !v.is_empty()),
@@ -110,9 +112,10 @@ pub fn read_tokens_from_env() -> Vec<(String, String)> {
             continue;
         }
         let (name, token) = match entry.rfind(':') {
-            Some(at) if !entry[..at].trim().is_empty() && !entry[at + 1..].trim().is_empty() => {
-                (entry[..at].trim().to_lowercase(), entry[at + 1..].trim().to_string())
-            }
+            Some(at) if !entry[..at].trim().is_empty() && !entry[at + 1..].trim().is_empty() => (
+                entry[..at].trim().to_lowercase(),
+                entry[at + 1..].trim().to_string(),
+            ),
             _ => {
                 eprintln!("DIGUP_SERVER_READ_TOKENS: entry '{entry}' is not a 'name:token' pair — skipped");
                 continue;
@@ -293,7 +296,12 @@ pub fn write_tokens_file(path: &Path, auth: &Auth) -> Result<(), String> {
         let _ = std::fs::create_dir_all(dir);
     }
     let tmp = format!("{}.new", path.display());
-    write_private(Path::new(&tmp), serde_json::to_string(&Value::Object(merged)).expect("json").as_bytes())?;
+    write_private(
+        Path::new(&tmp),
+        serde_json::to_string(&Value::Object(merged))
+            .expect("json")
+            .as_bytes(),
+    )?;
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
     set_private(path);
     Ok(())
@@ -310,7 +318,8 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     use std::io::Write;
-    file.write_all(bytes).map_err(|e| format!("{}: {e}", path.display()))
+    file.write_all(bytes)
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[cfg(unix)]
@@ -343,11 +352,7 @@ pub fn rotate_minted(auth: &Auth, config_dir: &Path) -> Result<Option<Auth>, Str
     }
     for name in &auth.minted {
         if name.starts_with("app:") {
-            if let Some((_, token)) = rotated
-                .readers
-                .iter_mut()
-                .find(|(n, _)| n == name)
-            {
+            if let Some((_, token)) = rotated.readers.iter_mut().find(|(n, _)| n == name) {
                 *token = urlsafe_token();
                 minted.push(name.clone());
             }
@@ -385,7 +390,13 @@ pub fn allowed_origins_from_env() -> Option<Vec<String>> {
     Some(
         raw.split(',')
             .filter(|origin| !origin.trim().is_empty())
-            .map(|origin| origin.trim().to_lowercase().trim_end_matches('/').to_string())
+            .map(|origin| {
+                origin
+                    .trim()
+                    .to_lowercase()
+                    .trim_end_matches('/')
+                    .to_string()
+            })
             .collect(),
     )
 }
@@ -409,10 +420,8 @@ pub fn origin_host(origin: &str) -> String {
 pub const OPEN_PATHS: [&str; 3] = ["/api/v1/health", "/api/v1/docs", "/api/v1/openapi.json"];
 
 /// `ADMIN_ROUTES`: POST endpoints that change the index or crawl the whole tree.
-pub const ADMIN_ROUTES: [(&str, &str); 2] = [
-    ("POST", "/api/v1/index"),
-    ("POST", "/api/v1/estimate"),
-];
+pub const ADMIN_ROUTES: [(&str, &str); 2] =
+    [("POST", "/api/v1/index"), ("POST", "/api/v1/estimate")];
 
 /// The live Auth: rotation swaps the value in place — the gate and the
 /// endpoints read the SAME live object (Python's `current = {"auth": ...}`).
@@ -424,7 +433,10 @@ pub fn read_auth(state: &AuthState) -> RwLockReadGuard<'_, Auth> {
 
 /// `_bearer`: the Authorization header's bearer token, if any.
 pub fn bearer_of(headers: &axum::http::HeaderMap) -> Option<String> {
-    let value = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
     let text = value.trim();
     let (scheme, token) = match text.split_once(' ') {
         Some((scheme, token)) => (scheme, token),

@@ -69,7 +69,12 @@ pub fn install(folder: &Path) {
         libc::SIGSEGV,
         libc::SIGTRAP,
     ] {
-        unsafe { libc::signal(sig, crash_note_and_reraise as *const () as libc::sighandler_t) };
+        unsafe {
+            libc::signal(
+                sig,
+                crash_note_and_reraise as *const () as libc::sighandler_t,
+            )
+        };
     }
 }
 
@@ -81,7 +86,11 @@ extern "C" fn crash_note_and_reraise(sig: c_int) {
     unsafe {
         let (path, bytes, len) = (NOTE_PATH, NOTE_BYTES, NOTE_LEN);
         if !path.is_null() && !bytes.is_null() {
-            let fd = libc::open(path, libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o644 as libc::mode_t);
+            let fd = libc::open(
+                path,
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o644 as libc::mode_t,
+            );
             if fd >= 0 {
                 let _ = libc::write(fd, bytes as *const libc::c_void, len);
                 let _ = libc::close(fd);

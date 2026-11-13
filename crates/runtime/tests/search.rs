@@ -147,7 +147,10 @@ fn search_answer(
         limit: sc.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize,
         z_gate: sc.get("zGate").and_then(Value::as_f64).unwrap_or(2.0),
         word_weight: sc.get("wordWeight").and_then(Value::as_f64),
-        prefix_last: sc.get("prefixLast").and_then(Value::as_bool).unwrap_or(false),
+        prefix_last: sc
+            .get("prefixLast")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     };
     let vector = vectors.get(&qkey(code, &q)).map(|v| v.as_slice());
     let searcher = if code { code_searcher } else { main_searcher };
@@ -213,7 +216,9 @@ fn canonicalize_hits(value: &mut Value, root: &str) {
                             "excerpt".into(),
                             Value::String(
                                 std::iter::once("C".to_string())
-                                    .chain(tokens[root_tokens.len()..].iter().map(|t| t.to_string()))
+                                    .chain(
+                                        tokens[root_tokens.len()..].iter().map(|t| t.to_string()),
+                                    )
                                     .collect::<Vec<_>>()
                                     .join(" "),
                             ),
@@ -359,15 +364,20 @@ fn search_answers_match_the_engine() {
         std::fs::create_dir_all(&keep).expect("the keep folder");
         for f in [MAIN_FILE, CODE_FILE] {
             for ext in ["", "-wal", "-shm"] {
-                let _ = std::fs::copy(index.join(format!("{f}{ext}")), keep.join(format!("{f}{ext}")));
+                let _ = std::fs::copy(
+                    index.join(format!("{f}{ext}")),
+                    keep.join(format!("{f}{ext}")),
+                );
             }
         }
     }
 
-    let main_store: &'static IndexStore =
-        Box::leak(Box::new(IndexStore::main(&index).expect("open the main index")));
-    let code_store: &'static IndexStore =
-        Box::leak(Box::new(IndexStore::open(&index, CODE_FILE).expect("open the code index")));
+    let main_store: &'static IndexStore = Box::leak(Box::new(
+        IndexStore::main(&index).expect("open the main index"),
+    ));
+    let code_store: &'static IndexStore = Box::leak(Box::new(
+        IndexStore::open(&index, CODE_FILE).expect("open the code index"),
+    ));
     let mut main_searcher = Searcher::new(main_store, true).expect("the main searcher");
     let mut code_searcher = Searcher::new(code_store, true).expect("the code searcher");
 
@@ -376,7 +386,10 @@ fn search_answers_match_the_engine() {
     for line in VECTORS.lines().filter(|l| !l.trim().is_empty()) {
         let v: Value = serde_json::from_str(line).expect("a vector line");
         vectors.insert(
-            qkey(v["code"].as_bool().unwrap_or(false), v["q"].as_str().unwrap()),
+            qkey(
+                v["code"].as_bool().unwrap_or(false),
+                v["q"].as_str().unwrap(),
+            ),
             v["vector"]
                 .as_array()
                 .unwrap()

@@ -215,8 +215,7 @@ pub fn parse_range(header: Option<&str>, size: i64) -> Span {
 pub fn quote_filename(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars() {
-        let safe = ch.is_ascii_alphanumeric()
-            || matches!(ch, '_' | '.' | '-' | '~' | '/');
+        let safe = ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-' | '~' | '/');
         if safe {
             out.push(ch);
         } else {

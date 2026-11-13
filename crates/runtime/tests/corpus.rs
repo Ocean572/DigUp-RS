@@ -37,7 +37,6 @@ macro_rules! media_fixture {
 /// the offsets; the indexing order — kind, mtime DESC — is then a property of the corpus).
 pub const STAMP: i64 = 1731000000;
 
-
 pub const MANIFEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/index-corpus-manifest.jsonl"
@@ -289,13 +288,16 @@ pub fn build_corpus(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-
 /// The whole indexing (sync → run → finish_long_files → finish), silent (the ⑨ suite's
 /// `index_all` spells the same recipe with its event lines; the ⑩c harness and suite
 /// need the effect only). Fully qualified paths so the module stays import-free for
 /// its two homes: `crates/runtime/tests` and the searchcheck harness's `include!`.
-pub fn build_index(corpus: &std::path::Path, index: &std::path::Path, code: bool,
-                   models: &::digup_runtime::LlamaModels) {
+pub fn build_index(
+    corpus: &std::path::Path,
+    index: &std::path::Path,
+    code: bool,
+    models: &::digup_runtime::LlamaModels,
+) {
     let store = if code {
         ::digup_core::index_store::IndexStore::open(index, ::digup_core::index_store::CODE_FILE)
             .expect("open the code store")
@@ -312,8 +314,8 @@ pub fn build_index(corpus: &std::path::Path, index: &std::path::Path, code: bool
             ::digup_runtime::LlamaEmbedder::new(&models, false, None, None).expect("the embedder"),
         ))
     };
-    let mut indexer =
-        ::digup_runtime::indexer::Indexer::new(store, options, Box::new(make)).expect("the indexer");
+    let mut indexer = ::digup_runtime::indexer::Indexer::new(store, options, Box::new(make))
+        .expect("the indexer");
     indexer
         .sync(&[corpus.to_path_buf()], &mut |_| {})
         .expect("sync");

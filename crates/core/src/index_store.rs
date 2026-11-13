@@ -926,12 +926,7 @@ PRAGMA user_version = 5;"
                 HashMap::new(),
             )?;
         } else {
-            self.finish(
-                id,
-                "failed",
-                Some(&format!("It {why}")),
-                HashMap::new(),
-            )?;
+            self.finish(id, "failed", Some(&format!("It {why}")), HashMap::new())?;
         }
         Ok(true)
     }

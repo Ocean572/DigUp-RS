@@ -85,7 +85,12 @@ impl std::fmt::Display for EngineRefused {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Python's f-string with `{op!r}`: repr of a str is its double-quoted form,
         // which is exactly what a Rust `String`'s `{:?}` prints.
-        write!(out, "engine refused {}: {}", crate::targets::py_repr(&self.op), self.error)
+        write!(
+            out,
+            "engine refused {}: {}",
+            crate::targets::py_repr(&self.op),
+            self.error
+        )
     }
 }
 
@@ -151,11 +156,7 @@ fn notify(inner: &(Mutex<Inner>, Condvar)) {
 }
 
 impl JsonLinesProcess {
-    pub fn new(
-        argv: Vec<String>,
-        name: &str,
-        env: Vec<(String, OsString)>,
-    ) -> Self {
+    pub fn new(argv: Vec<String>, name: &str, env: Vec<(String, OsString)>) -> Self {
         Self {
             argv,
             name: name.to_string(),
@@ -221,9 +222,7 @@ impl JsonLinesProcess {
             move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines() {
-                    let Ok(line) = line else {
-                        break
-                    };
+                    let Ok(line) = line else { break };
                     let line = line.trim();
                     if line.is_empty() {
                         continue;
@@ -259,8 +258,12 @@ impl JsonLinesProcess {
                     }
                     .flatten()
                 };
-                let tail: Vec<String> =
-                    stderr_slot.lock().expect("the stderr lock").iter().cloned().collect();
+                let tail: Vec<String> = stderr_slot
+                    .lock()
+                    .expect("the stderr lock")
+                    .iter()
+                    .cloned()
+                    .collect();
                 {
                     let mut guard = inner.0.lock().expect("the protocol lock");
                     if guard.exited.is_none() {
@@ -318,7 +321,12 @@ impl JsonLinesProcess {
     }
 
     pub fn stderr_tail(&self) -> Vec<String> {
-        self.stderr.lock().expect("the stderr lock").iter().cloned().collect()
+        self.stderr
+            .lock()
+            .expect("the stderr lock")
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Close stdin (EOF: services stop themselves), then join, then terminate,
@@ -399,9 +407,8 @@ impl JsonLinesProcess {
         };
         row.insert("id".into(), Value::from(rid));
         // `json.dumps(..., separators=(",", ":"))`: the compact form, no spaces.
-        let mut line = serde_json::to_string(&Value::Object(row)).map_err(|e| {
-            ProtocolError::Internal(format!("request: {e}"))
-        })?;
+        let mut line = serde_json::to_string(&Value::Object(row))
+            .map_err(|e| ProtocolError::Internal(format!("request: {e}")))?;
         line.push('\n');
         self.write_line(line.as_bytes())?;
 
@@ -505,7 +512,10 @@ impl JsonLinesProcess {
                     format_gf64(timeout.as_secs_f64())
                 )));
             }
-            let (next, outcome) = self.inner.1.wait_timeout(guard, remaining)
+            let (next, outcome) = self
+                .inner
+                .1
+                .wait_timeout(guard, remaining)
                 .expect("the protocol condvar");
             guard = next;
             if outcome.timed_out() {
@@ -560,7 +570,8 @@ mod protocol_tests {
             "echo",
             Vec::new(),
         ));
-        proc.start(None, Duration::from_secs(5)).expect("cat spawns");
+        proc.start(None, Duration::from_secs(5))
+            .expect("cat spawns");
         let feeder = {
             let writer = proc.clone();
             std::thread::spawn(move || {
@@ -580,14 +591,21 @@ mod protocol_tests {
     #[test]
     fn the_exit_of_a_child_wakes_the_waiter() {
         let proc = JsonLinesProcess::new(
-            vec!["/bin/sh".to_string(), "-c".to_string(), "exit 3".to_string()],
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "exit 3".to_string(),
+            ],
             "quick",
             Vec::new(),
         );
         proc.start(None, Duration::from_secs(5)).expect("sh spawns");
         match proc.next_event(Duration::from_secs(5)) {
             Err(ProtocolError::Exited(exited)) => {
-                assert!(format!("{exited}").contains("quick"), "names the helper: {exited}");
+                assert!(
+                    format!("{exited}").contains("quick"),
+                    "names the helper: {exited}"
+                );
             }
             other => panic!("expected EngineExited, got {other:?}"),
         }

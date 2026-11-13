@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use regex::Regex;
 use serde_json::{json, Value};
 
-use crate::config::EngineConfig;
 use crate::config::format_gf64;
+use crate::config::EngineConfig;
 
 /// `CLIError`: the CLI said `error: …` and exited nonzero — the engine's own
 /// words, kept. The API maps it to 502.
@@ -90,7 +90,10 @@ pub fn run(
         } else if !stdout_text.is_empty() {
             stdout_text
         } else {
-            format!("digup exited {}", code.map(|c| c.to_string()).unwrap_or("None".into()))
+            format!(
+                "digup exited {}",
+                code.map(|c| c.to_string()).unwrap_or("None".into())
+            )
         };
         return Err(CliError(words));
     }
@@ -121,7 +124,9 @@ pub fn estimate_lines(config: &EngineConfig, timeout: Duration) -> Result<Vec<Va
         .collect();
     if lines.is_empty() {
         let head: String = out.chars().take(200).collect();
-        return Err(CliError(format!("estimate --json printed no JSON line: {head}")));
+        return Err(CliError(format!(
+            "estimate --json printed no JSON line: {head}"
+        )));
     }
     Ok(lines)
 }
@@ -154,11 +159,9 @@ pub fn status(config: &EngineConfig, timeout: Duration) -> Result<Value, CliErro
     if let Some(c) = search(r"(?m)^size: (.+)$", &out) {
         info["index_size"] = json!(c[1]);
     }
-    let kinds_re =
-        Regex::new(r"(?m)^  (\S+)\s+(\d+)\s+(\d+ done(?: \(\d+ partial\))?)$").expect("cli.py's pattern");
-    let kinds = info["kinds"]
-        .as_array_mut()
-        .expect("kinds is a list");
+    let kinds_re = Regex::new(r"(?m)^  (\S+)\s+(\d+)\s+(\d+ done(?: \(\d+ partial\))?)$")
+        .expect("cli.py's pattern");
+    let kinds = info["kinds"].as_array_mut().expect("kinds is a list");
     for c in kinds_re.captures_iter(&out) {
         kinds.push(json!({
             "kind": c[1].to_string(),

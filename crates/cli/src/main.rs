@@ -156,11 +156,28 @@ fn main() {
             // daemon sees them, the idle seconds as the shell asked (`--encoder-idle`).
             let config = digup_services::search_service::SearchConfig {
                 index: args.index_folder(),
-                roots: args.positional[1..].iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
-                skipped: args.list("--exclude").iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
-                types: digup_core::options::IndexOptions::extensions(&args.list("--exclude-ext").join(",")),
-                code_roots: args.list("--code-root").iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
-                code_skipped: args.list("--code-exclude").iter().map(|p| digup_services::search_service::folder_url(p)).collect(),
+                roots: args.positional[1..]
+                    .iter()
+                    .map(|p| digup_services::search_service::folder_url(p))
+                    .collect(),
+                skipped: args
+                    .list("--exclude")
+                    .iter()
+                    .map(|p| digup_services::search_service::folder_url(p))
+                    .collect(),
+                types: digup_core::options::IndexOptions::extensions(
+                    &args.list("--exclude-ext").join(","),
+                ),
+                code_roots: args
+                    .list("--code-root")
+                    .iter()
+                    .map(|p| digup_services::search_service::folder_url(p))
+                    .collect(),
+                code_skipped: args
+                    .list("--code-exclude")
+                    .iter()
+                    .map(|p| digup_services::search_service::folder_url(p))
+                    .collect(),
                 idle_seconds: args
                     .value("--encoder-idle")
                     .and_then(|v| v.parse().ok())
@@ -188,7 +205,11 @@ fn main() {
             let config = digup_services::index_service::IndexServiceConfig {
                 index: index.clone(),
                 roots: args.positional[1..].iter().map(|p| folder_url(p)).collect(),
-                code_roots: args.list("--code-root").iter().map(|p| folder_url(p)).collect(),
+                code_roots: args
+                    .list("--code-root")
+                    .iter()
+                    .map(|p| folder_url(p))
+                    .collect(),
                 options: args.options(),
                 code_options,
                 prune: args.flag("--prune"),
@@ -197,7 +218,10 @@ fn main() {
                     .value("--new-limit")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(50),
-                linger: args.value("--linger").and_then(|v| v.parse().ok()).unwrap_or(60.0),
+                linger: args
+                    .value("--linger")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60.0),
             };
             // `&*` and not `<<`: a --memory-limit above 2^44 MB would overflow-shift
             // and trap in the helper's own setup (#182 review N1); saturating gives a
@@ -709,7 +733,8 @@ fn index(args: &Arguments) -> Result<(), String> {
     }
     let index_folder = args.index_folder();
     let log = index_folder.join("worker.log");
-    let store = IndexStore::open(&index_folder, digup_core::MAIN_FILE).map_err(|e| e.to_string())?;
+    let store =
+        IndexStore::open(&index_folder, digup_core::MAIN_FILE).map_err(|e| e.to_string())?;
     if args.flag("--reindex") {
         store.reset_all().map_err(|e| e.to_string())?;
     }
@@ -724,10 +749,7 @@ fn index(args: &Arguments) -> Result<(), String> {
         Indexer::new(store, args.options(), make_embedder).map_err(|e| e.to_string())?;
     indexer.costs_folder = Some(index_folder.clone());
     indexer.embedder_source = Some(digup_runtime::model_info().vector_source());
-    indexer
-        .store
-        .read_again_once()
-        .map_err(|e| e.to_string())?;
+    indexer.store.read_again_once().map_err(|e| e.to_string())?;
     indexer.check_model().map_err(|e| e.to_string())?;
     let sync = indexer
         .sync(&folders, &mut |_| {})
@@ -895,7 +917,9 @@ fn status(args: &Arguments) -> digup_core::db::Result<()> {
         store.file.clone(),
         std::path::PathBuf::from(format!("{}-wal", store.file.to_string_lossy())),
     ] {
-        size += std::fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0);
+        size += std::fs::metadata(&path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
     }
     println!("size: {}", formats::file_size(size));
     Ok(())
@@ -1341,7 +1365,8 @@ fn query_vectors(
     }
     let models = LlamaModels::locate().map_err(|e| e.to_string())?;
     let log = store.directory.join("worker-query.log");
-    let embedder = LlamaEmbedder::new(&models, true, None, Some(&log)).map_err(|e| e.to_string())?;
+    let embedder =
+        LlamaEmbedder::new(&models, true, None, Some(&log)).map_err(|e| e.to_string())?;
     if let Some(source) = &searcher.vector_source {
         let mine = embedder.info().vector_source();
         if *source != mine {
@@ -1379,14 +1404,11 @@ fn location(hit: &digup_core::searcher::SearchHit) -> String {
         SegmentKind::Lines => hit
             .loc
             .map(|loc| {
-                format!(
-                    "lines {}–{}",
-                    loc as i64,
-                    hit.loc_end.unwrap_or(loc) as i64
-                ) + &hit
-                    .focus
-                    .map(|focus| format!(", opens at {}", focus as i64))
-                    .unwrap_or_default()
+                format!("lines {}–{}", loc as i64, hit.loc_end.unwrap_or(loc) as i64)
+                    + &hit
+                        .focus
+                        .map(|focus| format!(", opens at {}", focus as i64))
+                        .unwrap_or_default()
             })
             .unwrap_or_default(),
         SegmentKind::Cells => hit
@@ -1420,14 +1442,20 @@ fn swift_number(value: &serde_json::Number) -> String {
         return value.to_string();
     };
     if number == 0.0 {
-        return if number.is_sign_negative() { "-0".to_string() } else { "0".to_string() };
+        return if number.is_sign_negative() {
+            "-0".to_string()
+        } else {
+            "0".to_string()
+        };
     }
     let sign = if number.is_sign_negative() { "-" } else { "" };
     // The shortest decimal Rust's LowerExp prints: "d[.ddd]eE", digits + the power
     // of the leading digit.
     let text = format!("{:e}", number.abs());
     let (digits_part, exp_part) = text.split_once('e').expect("LowerExp prints e");
-    let exponent: i32 = exp_part.parse().expect("LowerExp prints an integer exponent");
+    let exponent: i32 = exp_part
+        .parse()
+        .expect("LowerExp prints an integer exponent");
     let digits: String = digits_part.chars().filter(|c| *c != '.').collect();
     let digits = digits.trim_end_matches('0');
     let digits = if digits.is_empty() { "0" } else { digits };
@@ -1679,7 +1707,10 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
         &std::fs::read(expand_tilde(file)).map_err(|e| format!("{file}: {e}"))?,
     )
     .map_err(|e| format!("{file}: {e}"))?;
-    let base_raw = doc.get("base").and_then(|b| b.as_str()).ok_or("eval file has no base")?;
+    let base_raw = doc
+        .get("base")
+        .and_then(|b| b.as_str())
+        .ok_or("eval file has no base")?;
     let queries = doc
         .get("queries")
         .and_then(|q| q.as_array())
@@ -1702,9 +1733,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
         .collect();
     let is_code: Vec<bool> = queries
         .iter()
-        .map(|q| {
-            code_query_text(q.get("q").and_then(|q| q.as_str()).unwrap_or("")).is_some()
-        })
+        .map(|q| code_query_text(q.get("q").and_then(|q| q.as_str()).unwrap_or("")).is_some())
         .collect();
     let depth = args
         .value("-n")
@@ -1739,7 +1768,9 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let mut vectors: Vec<Option<Vec<f32>>> = vec![None; queries.len()];
     for group in [false, true] {
-        let slots: Vec<usize> = (0..queries.len()).filter(|i| is_code[*i] == group).collect();
+        let slots: Vec<usize> = (0..queries.len())
+            .filter(|i| is_code[*i] == group)
+            .collect();
         if slots.is_empty() {
             continue;
         }
@@ -1828,9 +1859,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
                             Some((low, high)) => match hit.segment {
                                 SegmentKind::Lines | SegmentKind::Cells => hit
                                     .loc
-                                    .map(|loc| {
-                                        loc <= *high && hit.loc_end.unwrap_or(loc) >= *low
-                                    })
+                                    .map(|loc| loc <= *high && hit.loc_end.unwrap_or(loc) >= *low)
                                     .unwrap_or(false),
                                 _ => hit
                                     .loc
@@ -1960,14 +1989,19 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
 /// `emit` of DownloadModel.swift: the JSON lines, keys in the order each event lists them.
 fn emit_event(event: &str, fields: serde_json::Map<String, serde_json::Value>) {
     let mut row = serde_json::Map::new();
-    row.insert("event".to_string(), serde_json::Value::String(event.to_string()));
+    row.insert(
+        "event".to_string(),
+        serde_json::Value::String(event.to_string()),
+    );
     for (key, value) in fields {
         row.insert(key, value);
     }
     emit(row);
 }
 
-fn json_object<I: IntoIterator<Item = (String, serde_json::Value)>>(items: I) -> serde_json::Map<String, serde_json::Value> {
+fn json_object<I: IntoIterator<Item = (String, serde_json::Value)>>(
+    items: I,
+) -> serde_json::Map<String, serde_json::Value> {
     items.into_iter().collect()
 }
 
@@ -2002,7 +2036,11 @@ fn download_model(args: &Arguments) -> i32 {
         let final_path = folder.join(file.name);
         // A checksum-matched file in the Hugging Face cache is copied, not fetched.
         let cached_ok = ModelFiles::cached_copy(file)
-            .map(|cached| ModelFiles::sha256(&cached).map(|hash| hash == file.sha256).unwrap_or(false))
+            .map(|cached| {
+                ModelFiles::sha256(&cached)
+                    .map(|hash| hash == file.sha256)
+                    .unwrap_or(false)
+            })
             .unwrap_or(false);
         if cached_ok {
             emit_event(
@@ -2016,7 +2054,8 @@ fn download_model(args: &Arguments) -> i32 {
             let partial = folder.join(format!("{}.partial", file.name));
             let _ = std::fs::remove_file(&partial);
             let cached = ModelFiles::cached_copy(file).expect("the cache copy, checked just now");
-            if let Err(e) = std::fs::copy(&cached, &partial).and_then(|_| std::fs::rename(&partial, &final_path))
+            if let Err(e) = std::fs::copy(&cached, &partial)
+                .and_then(|_| std::fs::rename(&partial, &final_path))
             {
                 eprintln!("error: {e}");
                 return 1;
@@ -2036,7 +2075,10 @@ fn download_model(args: &Arguments) -> i32 {
         loop {
             match fetch(file, &folder, done) {
                 Outcome::Downloaded(partial) => {
-                    emit_event("verifying", json_object([("name".to_string(), json_str(file.name))]));
+                    emit_event(
+                        "verifying",
+                        json_object([("name".to_string(), json_str(file.name))]),
+                    );
                     let hash = match ModelFiles::sha256(&partial) {
                         Ok(hash) => hash,
                         Err(e) => {
@@ -2052,7 +2094,10 @@ fn download_model(args: &Arguments) -> i32 {
                                 "error",
                                 json_object([(
                                     "message".to_string(),
-                                    json_str(&format!("{} arrived damaged, three times", file.name)),
+                                    json_str(&format!(
+                                        "{} arrived damaged, three times",
+                                        file.name
+                                    )),
                                 )]),
                             );
                             return 1;
@@ -2099,7 +2144,10 @@ fn download_model(args: &Arguments) -> i32 {
             break;
         }
     }
-    emit_event("done", json_object([("folder".to_string(), json_str(&folder.to_string_lossy()))]));
+    emit_event(
+        "done",
+        json_object([("folder".to_string(), json_str(&folder.to_string_lossy()))]),
+    );
     0
 }
 
@@ -2116,7 +2164,9 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
     use std::time::{Duration, Instant};
 
     let partial = folder.join(format!("{}.partial", file.name));
-    let mut written = std::fs::metadata(&partial).map(|m| m.len() as i64).unwrap_or(0);
+    let mut written = std::fs::metadata(&partial)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
     if written > file.bytes {
         let _ = std::fs::remove_file(&partial);
         written = 0;
@@ -2154,7 +2204,9 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
     let mut last_report = Instant::now() - Duration::from_millis(200);
     loop {
         std::thread::sleep(Duration::from_millis(200));
-        let written = std::fs::metadata(&partial).map(|m| m.len() as i64).unwrap_or(0);
+        let written = std::fs::metadata(&partial)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
         if last_report.elapsed() >= Duration::from_millis(200) {
             last_report = Instant::now();
             emit_event(
@@ -2164,11 +2216,18 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
                     ("bytes".to_string(), json_int(written)),
                     ("total".to_string(), json_int(file.bytes)),
                     ("all_bytes".to_string(), json_int(before + written)),
-                    ("all_total".to_string(), json_int(digup_runtime::models::ModelFiles::total_bytes())),
+                    (
+                        "all_total".to_string(),
+                        json_int(digup_runtime::models::ModelFiles::total_bytes()),
+                    ),
                 ]),
             );
         }
-        if child.try_wait().expect("curl is here, it can be waited for").is_some() {
+        if child
+            .try_wait()
+            .expect("curl is here, it can be waited for")
+            .is_some()
+        {
             break;
         }
     }
@@ -2178,7 +2237,9 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
     };
     let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let written = std::fs::metadata(&partial).map(|m| m.len() as i64).unwrap_or(0);
+    let written = std::fs::metadata(&partial)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
     // The one event that always lands at the end (FileFetcher's final `progress`).
     emit_event(
         "progress",
@@ -2187,7 +2248,10 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
             ("bytes".to_string(), json_int(written)),
             ("total".to_string(), json_int(file.bytes)),
             ("all_bytes".to_string(), json_int(before + written)),
-            ("all_total".to_string(), json_int(digup_runtime::models::ModelFiles::total_bytes())),
+            (
+                "all_total".to_string(),
+                json_int(digup_runtime::models::ModelFiles::total_bytes()),
+            ),
         ]),
     );
     match output.status.code() {
@@ -2207,13 +2271,23 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
                 code == 429 || code >= 500,
             )
         }
-        Some(23) => Outcome::Failed("Can't save the model: the disk write stopped".to_string(), false),
+        Some(23) => Outcome::Failed(
+            "Can't save the model: the disk write stopped".to_string(),
+            false,
+        ),
         Some(28) => Outcome::Failed(
             "The download stopped: no bytes for a minute".to_string(),
             true,
         ),
         Some(code) => Outcome::Failed(
-            format!("curl exited {code}{tail}", tail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") }),
+            format!(
+                "curl exited {code}{tail}",
+                tail = if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
+            ),
             true,
         ),
         None => Outcome::Failed("the download stopped".to_string(), true),

@@ -30,7 +30,10 @@ impl FileKind {
     /// Kinds whose indexing asks the model for pictures or sound (issue #155): the
     /// media encoders stay unloaded in the embedder until a queue holds one of these.
     pub fn needs_media_encoders(&self) -> bool {
-        matches!(self, Self::Image | Self::Screenshot | Self::Video | Self::Audio)
+        matches!(
+            self,
+            Self::Image | Self::Screenshot | Self::Video | Self::Audio
+        )
     }
 
     pub fn as_str(&self) -> &'static str {

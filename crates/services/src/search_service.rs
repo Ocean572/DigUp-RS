@@ -193,7 +193,10 @@ pub fn hit_fields(hit: &SearchHit) -> Value {
     let mut row = Map::new();
     row.insert("path".into(), Value::String(hit.path.clone()));
     row.insert("kind".into(), Value::String(hit.kind.as_str().to_string()));
-    row.insert("segment".into(), Value::String(hit.segment.as_str().to_string()));
+    row.insert(
+        "segment".into(),
+        Value::String(hit.segment.as_str().to_string()),
+    );
     row.insert("segment_id".into(), serde_json::json!(hit.segment_id));
     row.insert("score".into(), serde_json::json!(hit.score));
     row.insert("modified".into(), serde_json::json!(hit.modified));
@@ -246,21 +249,32 @@ fn open_code(state: &mut State) -> Result<(), String> {
 /// PDF's page, a video's frame at a moment, a picture a web view can't show,
 /// as JPEG. Two at a time run beside the request loop; each file version
 /// renders once (the cache key is the engine's, and daemon-internal).
-fn render(request: &Map<String, Value>, previews: &Path, rendered: &Mutex<HashMap<String, String>>) -> Result<Value, String> {
-    let path = request.get("path").and_then(Value::as_str).ok_or("which file?")?;
-    let kind = request.get("kind").and_then(Value::as_str).unwrap_or("image");
+fn render(
+    request: &Map<String, Value>,
+    previews: &Path,
+    rendered: &Mutex<HashMap<String, String>>,
+) -> Result<Value, String> {
+    let path = request
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("which file?")?;
+    let kind = request
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("image");
     let loc = number(request.get("loc"));
-    let pixels = (request.get("pixels").and_then(Value::as_i64).unwrap_or(1024).clamp(32, 2048)) as usize;
+    let pixels = (request
+        .get("pixels")
+        .and_then(Value::as_i64)
+        .unwrap_or(1024)
+        .clamp(32, 2048)) as usize;
     let modified = std::fs::metadata(path)
         .ok()
         .and_then(|meta| meta.modified().ok())
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
-    let key = format!(
-        "{path}|{modified}|{kind}|{}|{pixels}",
-        loc.unwrap_or(-1.0)
-    );
+    let key = format!("{path}|{modified}|{kind}|{}|{pixels}", loc.unwrap_or(-1.0));
     let cached = rendered.lock().expect("the render lock").get(&key).cloned();
     if let Some(done) = cached {
         if Path::new(&done).exists() {
@@ -276,13 +290,8 @@ fn render(request: &Map<String, Value>, previews: &Path, rendered: &Mutex<HashMa
             &out,
         )
         .map(|_| out),
-        "video" => digup_native::media::frame_at(
-            loc.unwrap_or(0.0),
-            Path::new(path),
-            pixels,
-            &out,
-        )
-        .map(|_| out),
+        "video" => digup_native::media::frame_at(loc.unwrap_or(0.0), Path::new(path), pixels, &out)
+            .map(|_| out),
         _ => digup_native::image::prepare(Path::new(path), pixels as i64, 0, previews, false)
             .map(|prepared| PathBuf::from(prepared.path)),
     }
@@ -316,7 +325,9 @@ fn summary(root: &str, store: Option<&IndexStore>) -> Value {
     }
     let mut kinds: HashMap<String, i64> = HashMap::new();
     let mut skipped_reasons: HashMap<String, i64> = HashMap::new();
-    let files = store.and_then(|store| store.files_under(&[root.to_string()]).ok()).unwrap_or_default();
+    let files = store
+        .and_then(|store| store.files_under(&[root.to_string()]).ok())
+        .unwrap_or_default();
     for file in &files {
         *kinds.entry(file.kind.as_str().to_string()).or_default() += 1;
         match file.state.as_str() {
@@ -330,7 +341,11 @@ fn summary(root: &str, store: Option<&IndexStore>) -> Value {
             _ => {
                 *states.get_mut("skipped").unwrap() += 1;
                 *skipped_reasons
-                    .entry(file.detail.clone().unwrap_or_else(|| "not read".to_string()))
+                    .entry(
+                        file.detail
+                            .clone()
+                            .unwrap_or_else(|| "not read".to_string()),
+                    )
                     .or_default() += 1;
             }
         }
@@ -362,16 +377,26 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
     match op {
         "search" => {
             let text = request.get("q").and_then(Value::as_str).unwrap_or("");
-            let code = request.get("code").and_then(Value::as_bool).unwrap_or(false);
-            let kinds: Option<HashSet<FileKind>> = request.get("kinds").and_then(Value::as_array).map(|rows| {
-                rows.iter()
-                    .filter_map(|v| v.as_str())
-                    .filter_map(FileKind::parse)
-                    .collect()
-            });
+            let code = request
+                .get("code")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let kinds: Option<HashSet<FileKind>> =
+                request.get("kinds").and_then(Value::as_array).map(|rows| {
+                    rows.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter_map(FileKind::parse)
+                        .collect()
+                });
             let limit = request.get("limit").and_then(Value::as_i64).unwrap_or(40) as usize;
-            let want_meaning = request.get("meaning").and_then(Value::as_bool).unwrap_or(true);
-            let prefix_last = request.get("prefix_last").and_then(Value::as_bool).unwrap_or(false);
+            let want_meaning = request
+                .get("meaning")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let prefix_last = request
+                .get("prefix_last")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let started = Instant::now();
             let mut vector: Option<Vec<f32>> = None;
             let mut warning: Option<String> = None;
@@ -382,7 +407,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 // keyword-only then, and say so once.
                 if vector.is_some() {
                     let indexed = if code {
-                        state.code_searcher.as_ref().and_then(|s| s.vector_source.clone())
+                        state
+                            .code_searcher
+                            .as_ref()
+                            .and_then(|s| s.vector_source.clone())
                     } else {
                         state.searcher.vector_source.clone()
                     };
@@ -424,8 +452,11 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                     })
                     .collect()
             } else {
-                let (roots, skipped, types) =
-                    (state.roots.clone(), state.skipped.clone(), state.types.clone());
+                let (roots, skipped, types) = (
+                    state.roots.clone(),
+                    state.skipped.clone(),
+                    state.types.clone(),
+                );
                 state
                     .searcher
                     .search(text, vector.as_deref(), &opts)
@@ -433,7 +464,8 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                     .into_iter()
                     .filter(|hit| {
                         folder_selection::is_searched(&hit.path, &roots, &skipped)
-                            && !types.contains(&digup_core::code::extension_of(&hit.path).to_lowercase())
+                            && !types
+                                .contains(&digup_core::code::extension_of(&hit.path).to_lowercase())
                             && Path::new(&hit.path).exists()
                     })
                     .collect()
@@ -444,7 +476,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 "hits".into(),
                 Value::Array(hits.iter().map(hit_fields).collect()),
             );
-            reply.insert("strong".into(), serde_json::json!(digup_core::scoring::strong_count(&scores, 0.5)));
+            reply.insert(
+                "strong".into(),
+                serde_json::json!(digup_core::scoring::strong_count(&scores, 0.5)),
+            );
             reply.insert("meaning".into(), Value::Bool(vector.is_some()));
             let embed_ms = {
                 // Int(_:): milliseconds, truncated. embed = embedded − started;
@@ -468,7 +503,14 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let typed = request.get("q").and_then(Value::as_str).unwrap_or("");
             if NameQuery::text_of(typed).is_none() {
                 // "name: …" is keyword-only: don't wake the encoder for it.
-                let _ = vector_for(state, typed, request.get("code").and_then(Value::as_bool).unwrap_or(false));
+                let _ = vector_for(
+                    state,
+                    typed,
+                    request
+                        .get("code")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                );
             }
             Ok(serde_json::json!({"ok": true}))
         }
@@ -479,7 +521,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let Some(segment) = segment else {
                 return Err("which segment?".to_string());
             };
-            let code = request.get("code").and_then(Value::as_bool).unwrap_or(false);
+            let code = request
+                .get("code")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let text = if code {
                 state.code_searcher.as_ref()
             } else {
@@ -496,8 +541,13 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             state.searcher = Searcher::new(state.store, had_vectors).map_err(|e| e.to_string())?;
             match state.code_store {
                 Some(code_store) => {
-                    let had = state.code_searcher.as_ref().map(|s| s.vectors_loaded).unwrap_or(false);
-                    state.code_searcher = Some(Searcher::new(code_store, had).map_err(|e| e.to_string())?);
+                    let had = state
+                        .code_searcher
+                        .as_ref()
+                        .map(|s| s.vectors_loaded)
+                        .unwrap_or(false);
+                    state.code_searcher =
+                        Some(Searcher::new(code_store, had).map_err(|e| e.to_string())?);
                 }
                 None => open_code(state)?,
             }
@@ -508,7 +558,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             }))
         }
         "summaries" => {
-            let code = request.get("code").and_then(Value::as_bool).unwrap_or(false);
+            let code = request
+                .get("code")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let roots: Vec<String> = if code {
                 state.code_roots.clone()
             } else {
@@ -519,24 +572,46 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             } else {
                 Some(state.store)
             };
-            Ok(serde_json::json!({"roots": roots.iter().map(|root| summary(root, store)).collect::<Vec<Value>>() }))
+            Ok(
+                serde_json::json!({"roots": roots.iter().map(|root| summary(root, store)).collect::<Vec<Value>>() }),
+            )
         }
         "folders" => {
             if let Some(value) = request.get("roots").and_then(Value::as_array) {
-                state.roots = value.iter().filter_map(Value::as_str).map(folder_url).collect();
+                state.roots = value
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(folder_url)
+                    .collect();
             }
             if let Some(value) = request.get("skipped").and_then(Value::as_array) {
-                state.skipped = value.iter().filter_map(Value::as_str).map(folder_url).collect();
+                state.skipped = value
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(folder_url)
+                    .collect();
             }
             if let Some(value) = request.get("types").and_then(Value::as_array) {
-                let joined = value.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",");
+                let joined = value
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",");
                 state.types = digup_core::options::IndexOptions::extensions(&joined);
             }
             if let Some(value) = request.get("code_roots").and_then(Value::as_array) {
-                state.code_roots = value.iter().filter_map(Value::as_str).map(folder_url).collect();
+                state.code_roots = value
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(folder_url)
+                    .collect();
             }
             if let Some(value) = request.get("code_skipped").and_then(Value::as_array) {
-                state.code_skipped = value.iter().filter_map(Value::as_str).map(folder_url).collect();
+                state.code_skipped = value
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(folder_url)
+                    .collect();
             }
             if state.code_roots.is_empty() {
                 state.code_searcher = None;
@@ -561,7 +636,11 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             reply.insert("encoder".into(), Value::String(state.encoder_state.clone()));
             reply.insert(
                 "vectors".into(),
-                serde_json::json!(if state.searcher.vectors_loaded { state.searcher.vector_count() } else { 0 }),
+                serde_json::json!(if state.searcher.vectors_loaded {
+                    state.searcher.vector_count()
+                } else {
+                    0
+                }),
             );
             reply.insert(
                 "code_vectors".into(),
@@ -570,7 +649,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                     _ => 0,
                 }),
             );
-            reply.insert("index".into(), Value::String(state.store.file.to_string_lossy().into_owned()));
+            reply.insert(
+                "index".into(),
+                Value::String(state.store.file.to_string_lossy().into_owned()),
+            );
             if let Ok(counts) = state.store.counts() {
                 let (mut files, mut searchable, mut pending) = (0i64, 0i64, 0i64);
                 for states in counts.by_kind_and_state.values() {
@@ -615,7 +697,9 @@ fn idle_watch(shared: Arc<Shared>, idle_seconds: f64) {
             if let Some(code_searcher) = state.code_searcher.as_mut() {
                 code_searcher.release_vectors();
             }
-            write_out(serde_json::json!({"event": "encoder", "state": "stopped", "reason": "idle"}));
+            write_out(
+                serde_json::json!({"event": "encoder", "state": "stopped", "reason": "idle"}),
+            );
         }
     }
 }
@@ -658,7 +742,9 @@ fn run(config: SearchConfig) -> Result<i32, String> {
         log: config.index.join("worker-query.log"),
     };
     open_code(&mut state)?;
-    write_out(serde_json::json!({"event": "ready", "index": config.index.to_string_lossy().into_owned()}));
+    write_out(
+        serde_json::json!({"event": "ready", "index": config.index.to_string_lossy().into_owned()}),
+    );
     let shared = Arc::new(Shared(Mutex::new(state)));
     std::thread::spawn({
         let shared = shared.clone();
@@ -675,7 +761,9 @@ fn run(config: SearchConfig) -> Result<i32, String> {
         let Ok(request) = serde_json::from_str::<Value>(&line) else {
             continue; // `try? JSONSerialization … as? [String: Any]`
         };
-        let Value::Object(request) = request else { continue };
+        let Value::Object(request) = request else {
+            continue;
+        };
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         let op = match request.get("op").and_then(Value::as_str) {
             Some(op) => op.to_string(),
@@ -722,7 +810,10 @@ fn run(config: SearchConfig) -> Result<i32, String> {
             Err(error) => {
                 let mut row = Map::new();
                 row.insert("ok".into(), Value::Bool(false));
-                row.insert("error".into(), Value::String(error.chars().take(500).collect()));
+                row.insert(
+                    "error".into(),
+                    Value::String(error.chars().take(500).collect()),
+                );
                 row
             }
         };

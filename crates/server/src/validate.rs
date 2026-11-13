@@ -12,7 +12,15 @@ use serde_json::{json, Value};
 
 /// `Kind = Literal[...]` (`api.py:56`) — the engine's FileKind rawValues; the API
 /// refuses anything else with a 422 because the engine would silently drop it.
-pub const KINDS: [&str; 7] = ["screenshot", "image", "pdf", "doc", "audio", "video", "code"];
+pub const KINDS: [&str; 7] = [
+    "screenshot",
+    "image",
+    "pdf",
+    "doc",
+    "audio",
+    "video",
+    "code",
+];
 
 /// pydantic's enum msg joins the values with commas and an "or" before the last.
 fn enum_msg() -> String {
@@ -55,7 +63,11 @@ pub struct EmbedAheadReq {
 fn check_q(body: &Value, errors: &mut Vec<Value>) -> Option<String> {
     match body.get("q") {
         None => {
-            errors.push(item("missing", vec![json!("body"), json!("q")], "Field required"));
+            errors.push(item(
+                "missing",
+                vec![json!("body"), json!("q")],
+                "Field required",
+            ));
             None
         }
         Some(Value::String(text)) => {
@@ -83,12 +95,7 @@ fn check_q(body: &Value, errors: &mut Vec<Value>) -> Option<String> {
 
 /// `code: bool = False` (and its peers): lax bools — bools, numbers 0/1, and the
 /// words pydantic-core accepts; anything else is `bool_parsing`.
-fn check_bool(
-    body: &Value,
-    field: &str,
-    default: bool,
-    errors: &mut Vec<Value>,
-) -> bool {
+fn check_bool(body: &Value, field: &str, default: bool, errors: &mut Vec<Value>) -> bool {
     match body.get(field) {
         None => default,
         Some(Value::Bool(value)) => *value,
@@ -380,7 +387,11 @@ pub fn target_register(body: &Value) -> Result<TargetRegisterReq, Vec<Value>> {
     // name: str = Field(min_length=1, max_length=64)
     let name = match map.get("name") {
         None => {
-            errors.push(item("missing", vec![json!("body"), json!("name")], "Field required"));
+            errors.push(item(
+                "missing",
+                vec![json!("body"), json!("name")],
+                "Field required",
+            ));
             None
         }
         Some(Value::String(text)) => {
@@ -415,7 +426,11 @@ pub fn target_register(body: &Value) -> Result<TargetRegisterReq, Vec<Value>> {
     // roots: list[str] = Field(min_length=1, max_length=32)
     let roots = match map.get("roots") {
         None => {
-            errors.push(item("missing", vec![json!("body"), json!("roots")], "Field required"));
+            errors.push(item(
+                "missing",
+                vec![json!("body"), json!("roots")],
+                "Field required",
+            ));
             None
         }
         Some(Value::Array(items)) => {

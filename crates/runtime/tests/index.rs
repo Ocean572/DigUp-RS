@@ -41,7 +41,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-
 use digup_core::index_store::{IndexStore, CODE_FILE, MAIN_FILE};
 use digup_core::options::IndexOptions;
 use digup_runtime::indexer::{Event, Indexer, Step};

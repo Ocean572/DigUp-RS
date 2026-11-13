@@ -112,9 +112,7 @@ impl SearchService {
     }
 
     pub fn running(&self) -> bool {
-        self.proc_of()
-            .map(|proc| proc.alive())
-            .unwrap_or(false)
+        self.proc_of().map(|proc| proc.alive()).unwrap_or(false)
     }
 
     // ── the protocol, one method per op ──────────────────────────────────────────────

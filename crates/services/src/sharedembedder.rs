@@ -171,9 +171,8 @@ impl SharedEmbedder {
         };
         // The indexers' `Embedder` is `Arc<dyn Embedder>`: a model made by a factory
         // that shares it is one `Arc` shared by both parts.
-        let model = model.ok_or_else(|| {
-            digup_runtime::Error::NotFound("the model is closed".to_string())
-        })?;
+        let model = model
+            .ok_or_else(|| digup_runtime::Error::NotFound("the model is closed".to_string()))?;
         body(model.as_ref())
     }
 
@@ -229,7 +228,8 @@ impl Embedder for Kept {
     }
 
     fn embed_images(&self, paths: &[String], budget: i32) -> Result<Vec<Embedding>> {
-        self.owner.use_model(true, |m| m.embed_images(paths, budget))
+        self.owner
+            .use_model(true, |m| m.embed_images(paths, budget))
     }
 
     fn embed_audio(&self, paths: &[String]) -> Result<Vec<Embedding>> {
