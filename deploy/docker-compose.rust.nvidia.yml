@@ -1,0 +1,34 @@
+# Stage 6 opt-in Rust + NVIDIA override: the CUDA shape of the Rust image, built and
+# measured on the box that has the card (docs/implementation/gpu-handoff.md §Gate B, item 4).
+# Use it on top of BOTH files, with the nvidia profile:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml \
+#                  -f docker-compose.rust.yml -f docker-compose.rust.nvidia.yml \
+#                  --profile nvidia up -d --build
+#
+# Same rules as the Swift CUDA override, unchanged: the image carries the CUDA backend
+# only when built from a matching CUDA *devel* base, ships exactly the CUDA runtime
+# libraries the `cuda-libs` stage globs from the matching CUDA *runtime* base (never the
+# toolkit, never a second libggml*), and `libcuda.so.1` comes from the HOST driver
+# through the NVIDIA Container Toolkit — never baked in. CUDA_BASE's X matches the
+# driver's `nvidia-smi` "CUDA Version"; CUDA_ARCHS is a plain number for the card
+# (`61` for Pascal sm_61, `89` for Ada sm_89 — the builder's apt cmake rejects dotted
+# values and `native` alike, measured 2026-11-04) or a fat list for many cards.
+#
+# The Rust engine loads the CUDA module exactly as the Swift one does — `$DIGUP_BACKENDS`,
+# then beside the executable (crates/runtime/src/backend.rs) — so the payload shape is
+# identical and `digup speed --model` measures it the same way. This file makes the device
+# AVAILABLE; the engine decides, and the proof of use is gpu-handoff.sh's utilization gate
+# (nvidia-smi sampled DURING a real index job). `"GPU NOT MEASURED"` is acceptable;
+# invented success is not.
+services:
+  server:
+    profiles: ["nvidia"]
+    build:
+      target: server-rust-runtime-cuda
+      args:
+        BASE_IMAGE: ${CUDA_BASE:-nvidia/cuda:12.4.1-devel-ubuntu22.04}
+        CUDA_RUNTIME_IMAGE: ${CUDA_RUNTIME_IMAGE:-nvidia/cuda:12.4.1-runtime-ubuntu22.04}
+        CUDA_ARCHS: ${CUDA_ARCHS:-native}
+        RUST_VERSION: ${RUST_VERSION:-1.99.1}
+    image: digup-rust-server:local

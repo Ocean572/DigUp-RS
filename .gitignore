@@ -65,3 +65,7 @@ server/ui/node_modules/
 # workspace ships binaries — cli + server — so the lockfile is part of a reproducible build).
 /target/
 **/*.rs.bk
+
+# The Rust packaging scripts' staging and artifacts (scripts/rust/package-linux.sh):
+# built payloads, like every other package folder, are working artifacts, never git.
+dist/

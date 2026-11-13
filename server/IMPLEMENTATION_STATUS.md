@@ -2,6 +2,48 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-13 — Rust port Stages 5–6: the CLI verbs + the eval twin, then the shipping image without Python
+
+The Rust workspace (`crates/`) is at its last CLI verbs and its first shipping shapes.
+Engine Swift tree untouched; the gates below are the contract suites, not a dev box's moods.
+
+```
+CLI verbs               search (+--json), eval, download-model — the JSON writer pinned by
+                        probing Swift 6.4's JSONSerialization on this box; the twin gate:
+                        19/19 search probes byte-identical (swift release vs rust release)
+eval twin               ONE store (the Swift binary indexes the Linux testbed twin), swift
+                        vs rust evals byte-diffed: synthetic 57 / multilingual 68 / code 48
+                        lines identical. Absolute, this box, CPU: ALL 43 R@1 0.93 · ALL 48
+                        R@1 0.67 · ALL 41 R@1 1.00 (no OCR on Linux: the screenshot-tag
+                        misses are identical on BOTH engines — equality is the gate)
+suites                  workspace cargo test: 0 failed (needs the pinned toolchain env —
+                        models at ModelFiles::installed(), DIGUP_BACKENDS=Vendor/llama/lib,
+                        DIGUP_FFMPEG=<4.4.2 folder>; without them the suites measure the
+                        wrong ffmpeg); contract suite server-test-rust: 139 passed /
+                        1 deselected / 0 failed / 0 SKIPPED in 230 s (all four mounts)
+digup-rust-runtime:local  server-rust-runtime (tini PID 1 → digup-server → the engine's
+                        helpers, non-root uid 990, the Lit bundle baked in, curl
+                        healthcheck counting 503 alive, no Python in the image): health 200,
+                        status 200 (fingerprints + counters), UI 200, estimate = the
+                        engine's forecast, POST /index → files 3 / vectors 3 / searchable 3,
+                        search answers the z + excerpt + media_id verbatim; SIGTERM exit 143
+                        with `Application shutdown complete`, a running job on record
+                        *interrupted* with its counters, replayed at the next boot
+compose                 base byte-identical; docker-compose.rust.yml and
+                        .rust.nvidia.yml opt-in; all four shapes `config --quiet` green
+payload (Linux)         scripts/rust/package-linux.sh measured here: dist/digup-0.1.0-
+                        linux-x86_64.tar.gz, 31.6 MB, 26 entries, notices-rust 402 KB,
+                        the CLI answering from its own folder ($ORIGIN). macOS/Windows
+                        scripts + .github/workflows/rust-release.yml are CI shapes: no
+                        macOS/Windows toolchain on this box, said plainly
+```
+
+Stage 9's CUDA procedure is defined for the Rust engine too (the `server-rust-runtime-cuda`
+stage, same `cuda-libs` glob, same ldd gate, same two build-args + a plain `CUDA_ARCHS`
+number); it is measured on the box with the card, with `gpu-handoff.sh` — CPU winning the
+measurement is a result, and `"GPU NOT MEASURED"` is acceptable where the Swift stages'
+numbers already are.
+
 ## 2026-11-10 — The shell's own Rust gate finally ran here (and the one warning it found)
 
 `shell/src-tauri` was blocked on the GTK/WebKit `-dev` packages all review long (§6 item 1 of the

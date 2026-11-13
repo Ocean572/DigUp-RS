@@ -51,3 +51,8 @@ AGENTS.md
 # COPY --from it (the host dist may be stale; a host build must never ship silently).
 server/ui/dist/
 server/ui/node_modules/
+
+# The Rust workspace's build output (git-ignored): a host `target/` is multi-gigabyte, and
+# the builder's `COPY . .` must see only a clean clone. The Rust stages build through cache
+# mounts (/src/target, /root/.cargo/registry), so nothing here needs the host's build.
+target/

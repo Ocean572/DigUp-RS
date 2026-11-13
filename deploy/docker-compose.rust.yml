@@ -1,0 +1,31 @@
+# Stage 6 opt-in Rust override: the shipping image with the Rust server (crates/server,
+# the axum port of the FastAPI wrapper) and the Rust engine payload — no Python, no
+# uvicorn. The CPU-only docker-compose.yml stays the default; this file only takes effect with
+#
+#   docker compose -f docker-compose.yml -f docker-compose.rust.yml up -d --build
+#
+# What changes is the image, and nothing else: same Dockerfile, the server-rust-runtime
+# target; same bind mounts (index / models / config on the host, media read-only), same
+# uid 990, same 8787 inside the container, same stop_grace_period and restart policy, same
+# DIGUP_SERVER_* environment (the Rust server reads the same names the FastAPI wrapper
+# publishes — config.rs), and the same supervision shape (tini PID 1 → digup-server → the
+# engine's helpers, so a stopped API takes its whole tree with it: ParentWatch's design).
+#
+# The differences the file carries:
+#   * `SWIFT_TESTS` is not passed: this target builds no Swift, so the engine-test gate
+#     of the Swift builder stage is not in the path. The Rust gates are `cargo test` and
+#     the contract suite (server-test-rust) — CI runs them (.github/workflows/rust.yml).
+#   * The UI mount: the image bakes the Lit bundle in and points DIGUP_SERVER_UI at it
+#     (the same frontend the FastAPI server serves).
+#   * The API host: the image binds 0.0.0.0 (the container's own face); a bare-metal run
+#     of digup-server keeps the 127.0.0.1 default. Publish stays localhost-only, as in
+#     the base file.
+services:
+  server:
+    build:
+      target: server-rust-runtime
+      args:
+        # The pinned Rust toolchain (the workspace's floor is rust-version = 1.88; the
+        # builder installs 1.99.1 through rustup — see the Dockerfile's rust stages).
+        RUST_VERSION: ${RUST_VERSION:-1.99.1}
+    image: digup-rust-server:local

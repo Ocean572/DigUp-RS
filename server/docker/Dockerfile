@@ -425,7 +425,7 @@ RUN --mount=type=cache,target=/src/Vendor \
       echo "build-ffmpeg: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
     tries=0; until scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
       echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
-    cargo build --release -p digup-cli; \
+    cargo build --release -p digup-cli -p digup-server; \
     # The engine answers in the payload's own shape: --help carries the version line.
     LD_LIBRARY_PATH="/src/Vendor/llama/lib:/src/Vendor/pdfium/lib" \
       PATH="/src/Vendor/ffmpeg/bin:$PATH" ./target/release/digup --help > /dev/null; \
@@ -442,9 +442,10 @@ RUN --mount=type=cache,target=/src/Vendor \
     --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root/.cargo/registry \
     set -euxo pipefail; \
-    cargo build --release -p digup-cli; \
+    cargo build --release -p digup-cli -p digup-server; \
     mkdir -p /out; \
-    cp /src/target/release/digup /src/Vendor/pdfium/lib/libpdfium.so \
+    cp /src/target/release/digup /src/target/release/digup-server \
+       /src/Vendor/pdfium/lib/libpdfium.so \
        /src/Vendor/ffmpeg/bin/ffmpeg /src/Vendor/ffmpeg/bin/ffprobe /out/; \
     for file in /src/Vendor/llama/lib/*.so*; do \
       name=${file##*/}; \
@@ -470,3 +471,88 @@ FROM server-runtime AS server-runtime-rust
 RUN rm -rf /opt/digup
 COPY --from=rust-engine-payload /out/ /opt/digup/
 COPY server/docker/healthcheck.py /opt/digup/healthcheck.py
+
+# ── Stage 6: the shipping image with the Rust server (no Python, no uvicorn) ──────────────────
+# The pure-Rust shape: `digup-server` (crates/server, the axum port of the FastAPI wrapper) +
+# the Rust engine payload + the Lit bundle, supervised by tini. The user's Stage-6 sketch
+# (`rust:1.78-bookworm` builder, `nvidia/cuda:12.1.0-runtime`, `digup server --host 0.0.0.0
+# --port 8000`, image `ocean572/digup:latest`) reconciles with the repo's measured conventions:
+# the compiler is the pinned `RUST_VERSION` in rust-engine-builder (1.99.1 — the workspace's
+# `rust-version = "1.88"` floor kills a 1.78 toolchain on sha2 0.11, measured 2026-11-13, the
+# same way a 1.85 builder died); the CUDA base is `CUDA_RUNTIME_IMAGE`, whose default is the
+# CUDA the box's card speaks (11.8 for sm_61, docs/implementation/gpu-handoff.md — a 12.1
+# runtime base cannot satisfy an sm_61 build of that era); the port is the repo's 8787
+# (EXPOSE + compose), bound through the config env, not argv; the image is pushed as
+# `ghcr.io/ocean572/digup` (the appcast/CI naming) and `ocean572/digup:latest` is its alias.
+#
+#   docker build --target server-rust-runtime -f server/docker/Dockerfile -t digup-rust:local .
+#
+# The supervision chain is the Swift stage's, unchanged: tini (PID 1) → digup-server → the
+# engine's helpers (search-service/index-service are spawned by digup-server; ParentWatch
+# ends a helper whose parent's parent is PID 1 — so a stopped API takes its whole tree with
+# it, by design). SIGTERM (docker stop): digup-server drains, runs the lifespan's shutdown
+# (the runners record a running job *interrupted*, `quit()`s every helper) and exits 143 —
+# the measured uvicorn parity line, and compose's `stop_grace_period: 90s` is the same contract.
+FROM ${BASE_IMAGE} AS server-rust-runtime
+
+RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+    ca-certificates curl libcurl4 libgomp1 libstdc++6 tzdata tini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rust-engine-payload /out/ /opt/digup/
+ENV PATH=/opt/digup:$PATH
+# The Lit bundle, baked in (the frontend-builder stage is the only place it is built — a
+# host `dist` is git-ignored and dockerignored, so a stale host build can never ship
+# silently). `DIGUP_SERVER_UI` is the Rust server's own mount knob (config.rs:180).
+COPY --from=frontend-builder /build/dist /srv/digup/ui
+
+# The same engine user (uid 990) and the same /data layout as every shipping stage: index /
+# models / config are bind mounts, so recreation never destroys them, and the writer lock
+# lives beside the index (`<index>/.digup-server.writer.lock`).
+RUN useradd --system --create-home --uid 990 digup \
+    && mkdir -p /data/index /data/models /data/config \
+    && chown -R digup:digup /data /srv/digup \
+    && digup --help > /dev/null \
+    && digup --help | sed -n '2p' \
+    && test -f /opt/digup/digup-server \
+    && test -f /srv/digup/ui/index.html
+
+# Host + port come from the config env (DIGUP_SERVER_HOST/PORT, config.rs:221): the compose
+# base sets them for the FastAPI image, so the same env drives this one. 0.0.0.0 is the
+# container's own face; a bare-metal run keeps the 127.0.0.1 default.
+ENV DIGUP_SERVER_INDEX=/data/index \
+    DIGUP_SERVER_ROOTS=/media/photos \
+    DIGUP_SERVER_MODELS=/data/models \
+    DIGUP_SERVER_CONFIG=/data/config \
+    DIGUP_SERVER_UI=/srv/digup/ui \
+    DIGUP_SERVER_HOST=0.0.0.0 \
+    DIGUP_SERVER_PORT=8787
+
+USER digup
+WORKDIR /data
+EXPOSE 8787
+
+# The healthcheck is the Swift stage's rule with curl instead of Python (no interpreter in
+# this image): ask the API's own /api/v1/health (server/docker/healthcheck.py asks the same
+# path), and count 503 as ALIVE — /health answers 503 while the searcher warms or respawns
+# (the engine honestly saying "not right now"), and docker must not restart a live server
+# over it. curl answers a 5xx with exit 22; 200 is exit 0; anything else (a refused
+# connection, a 4xx, a timeout) is the failure.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -fsS -o /dev/null http://127.0.0.1:8787/api/v1/health || test $? -eq 22
+
+ENTRYPOINT ["tini", "--"]
+CMD ["digup-server"]
+
+# ── Stage 6: the same image with the CUDA backend (built and measured on the box that has the
+# card, same two build-args as the Swift CUDA stage — see server-runtime-cuda above) ──────────
+# The Rust engine loads ggml's CUDA module the same way the Swift one does (backend.rs:
+# `$DIGUP_BACKENDS`, then beside the executable), so the CUDA payload is the same file set:
+# libggml-cuda.so from the Vendor build (rust-engine-payload copies every Vendor .so, the
+# CUDA flavor among them when the builder ran on a CUDA devel base) plus exactly the CUDA
+# runtime libraries `cuda-libs` ships — never the toolkit, never a second libggml*, and
+# `libcuda.so.1` stays the host driver's, never baked in.
+FROM server-rust-runtime AS server-rust-runtime-cuda
+COPY --from=cuda-libs /out/ /opt/digup/
+RUN ldd /opt/digup/libggml-cuda.so \
+    && ! ldd /opt/digup/libggml-cuda.so | grep 'not found' | grep -v 'libcuda.so.1'
