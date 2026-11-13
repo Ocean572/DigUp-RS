@@ -131,6 +131,12 @@ def rust_section(platform):
 
 
 def main():
+    # --count-crates <platform>: the crate count Cargo's own graph resolves for the
+    # binaries this workspace ships. scripts/rust/audit.sh checks the notices file
+    # against it, so the number in the file is Cargo's record, never a typed one.
+    if len(sys.argv) == 3 and sys.argv[1] == "--count-crates":
+        print(len(crates(sys.argv[2] if sys.argv[2] in TARGET else "linux")))
+        return
     if len(sys.argv) != 3 or sys.argv[1] not in TARGET:
         sys.exit(__doc__)
     platform, out = sys.argv[1], Path(sys.argv[2])
