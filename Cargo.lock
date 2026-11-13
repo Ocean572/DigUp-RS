@@ -268,7 +268,9 @@ dependencies = [
  "digup-platform",
  "digup-runtime",
  "digup-services",
+ "rusqlite",
  "serde_json",
+ "tempfile",
  "unicode-segmentation",
 ]
 
@@ -307,9 +309,6 @@ dependencies = [
 [[package]]
 name = "digup-platform"
 version = "0.1.0"
-dependencies = [
- "digup-core",
-]
 
 [[package]]
 name = "digup-runtime"
@@ -355,7 +354,6 @@ dependencies = [
  "digup-native",
  "digup-runtime",
  "libc",
- "serde",
  "serde_json",
 ]
 

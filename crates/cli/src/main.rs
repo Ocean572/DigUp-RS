@@ -316,6 +316,20 @@ impl Arguments {
         options
     }
 
+    /// `Arguments.store()` (main.swift:101-103): which SQLite file this verb reads and writes.
+    /// `--code` names the code index, so `index`/`status` work on `code.sqlite` and its own
+    /// fingerprint; the main store's media fingerprint (`photo140 shot280 …`) has nothing to
+    /// say about a code run. Measured 2026-11-13 by `scripts/rust/twin-gate.sh`: on a folder
+    /// holding a media index, `index --code` answers exit 0 with its rows in `code.sqlite` —
+    /// gating a code run by the main store's settings is the port refusing its own index.
+    fn store_file(&self) -> &'static str {
+        if self.flag("--code") {
+            digup_core::CODE_FILE
+        } else {
+            digup_core::MAIN_FILE
+        }
+    }
+
     /// `Arguments.indexFolder`: `--index` (with `~`), else the platform's default
     /// (`AppPaths.defaultIndex`: `$XDG_DATA_HOME/digup/index`, or `~/.local/share/digup/index`).
     fn index_folder(&self) -> PathBuf {
@@ -733,8 +747,7 @@ fn index(args: &Arguments) -> Result<(), String> {
     }
     let index_folder = args.index_folder();
     let log = index_folder.join("worker.log");
-    let store =
-        IndexStore::open(&index_folder, digup_core::MAIN_FILE).map_err(|e| e.to_string())?;
+    let store = IndexStore::open(&index_folder, args.store_file()).map_err(|e| e.to_string())?;
     if args.flag("--reindex") {
         store.reset_all().map_err(|e| e.to_string())?;
     }
@@ -864,7 +877,7 @@ fn index(args: &Arguments) -> Result<(), String> {
 /// cannot produce is a line the server must not fake.
 fn status(args: &Arguments) -> digup_core::db::Result<()> {
     use digup_core::model::FileKind;
-    let store = digup_core::IndexStore::open(&args.index_folder(), digup_core::MAIN_FILE)?;
+    let store = digup_core::IndexStore::open(&args.index_folder(), args.store_file())?;
     let counts = store.counts()?;
     let home = std::env::var("HOME").unwrap_or_default();
     println!(
@@ -2297,6 +2310,33 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
 #[cfg(test)]
 mod tests {
     use super::byte_count;
+    use super::parse;
+
+    /// `Arguments.store()` (main.swift:101-103): `--code` names `code.sqlite` — the store a
+    /// code run answers its fingerprint to. The port opened `index.sqlite` for `index --code`
+    /// and `status --code`, so a code run into a folder that already holds a media index
+    /// refused its own index on the media fingerprint ("index: … photo140 shot280 … now: …
+    /// code1 lines1800", exit 1) where the reference answers exit 0 with its rows in
+    /// `code.sqlite`. Measured 2026-11-13 by `scripts/rust/twin-gate.sh`, which indexes main
+    /// then code into one store; the twin corpus is small, so this verb is not otherwise
+    /// covered by the pinned suites (they pass each store explicitly through the library).
+    #[test]
+    fn the_code_flag_names_the_code_store() {
+        let store_of = |argv: &[&str]| {
+            let owned: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
+            parse(&owned).map(|args| args.store_file())
+        };
+        assert_eq!(store_of(&["index", "some-folder"]), Ok(digup_core::MAIN_FILE));
+        assert_eq!(
+            store_of(&["index", "some-folder", "--code"]),
+            Ok(digup_core::CODE_FILE)
+        );
+        assert_eq!(
+            store_of(&["status", "--index", "/tmp/idx", "--code"]),
+            Ok(digup_core::CODE_FILE)
+        );
+        assert_eq!(store_of(&["status", "--index", "/tmp/idx"]), Ok(digup_core::MAIN_FILE));
+    }
 
     /// The number shapes are pinned from probing Swift 6.4's `JSONSerialization`
     /// writer on this box (jsonprobe3/4.out): shortest digits, exponent form when

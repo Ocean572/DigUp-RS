@@ -19,3 +19,8 @@ digup-services = { workspace = true }
 digup-platform = { workspace = true }
 serde_json = { workspace = true }
 unicode-segmentation = { workspace = true }
+
+[dev-dependencies]
+# tests/cli.rs runs the verbs against the built binary and reads the SQLite files they write.
+rusqlite = { workspace = true }
+tempfile = { workspace = true }
