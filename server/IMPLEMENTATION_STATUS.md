@@ -68,6 +68,17 @@ comma→semicolon normalization engine-builder carries; and `speed --model` need
 app's own folder and dies "no embeddinggemma-2-Q8_0.gguf"). `gpu-handoff.sh` remains the
 Swift procedure; the Rust flavor is gated by its rules, measured here.
 
+And the payload probes got teeth (measured the hard way, the same class of bug the README
+warns about): `./digup --help | sed -n '2p'` reports **sed's** exit status, so a binary that
+dies `error while loading shared libraries: libllama.so.0` printed NOTHING and the build
+passed green — measured 2026-11-13 on `rust-engine-builder`. The stage now runs under bash
+with pipefail (Ubuntu's `/bin/sh` is dash, which has no `set -o pipefail`), captures the
+usage, requires its first line non-empty, and prints lines 1+3; `rust-engine-payload` prints
+line 1 (line 2 is blank, so asking for `2p` proves nothing alone) and `test -x /out/digup-server`.
+Re-measured after the fix: CPU rebuild exit 0 printing `digup: search your files by meaning
+(DigUp developer CLI)` from `/out` (the $ORIGIN shape), and the CUDA flavor rebuilding on the
+same lines.
+
 ## 2026-11-10 — The shell's own Rust gate finally ran here (and the one warning it found)
 
 `shell/src-tauri` was blocked on the GTK/WebKit `-dev` packages all review long (§6 item 1 of the

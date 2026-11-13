@@ -419,10 +419,12 @@ COPY .ci-vendor /ci-vendor
 
 # Same vendor seeding as engine-builder: CI passes a prebuilt Vendor through the context,
 # the scripts land on their stamps (Vendor/VENDOR, ffmpeg/BUILD, llama/BUILD) and skip.
+# bash for pipefail (Ubuntu's /bin/sh is dash, which has no `set -o pipefail`).
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN --mount=type=cache,target=/src/Vendor \
     --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root/.cargo/registry \
-    set -eux; \
+    set -euxo pipefail; \
     if [ -f /ci-vendor/llama/BUILD ]; then cp -a /ci-vendor/. /src/Vendor/; fi; \
     export CC="${CC:-cc}" CXX="${CXX:-c++}"; \
     scripts/fetch-vendor.sh; \
@@ -442,10 +444,16 @@ RUN --mount=type=cache,target=/src/Vendor \
     tries=0; until scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
       echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
     cargo build --release -p digup-cli -p digup-server; \
-    # The engine answers in the payload's own shape: --help carries the version line.
-    LD_LIBRARY_PATH="/src/Vendor/llama/lib:/src/Vendor/pdfium/lib" \
-      PATH="/src/Vendor/ffmpeg/bin:$PATH" ./target/release/digup --help > /dev/null; \
-    ./target/release/digup --help | sed -n '2p;3p'
+    # The engine answers with the C libraries beside Vendor/ (the payload's own $ORIGIN
+    # shape is gated in rust-engine-payload below). PIPEFAIL is the point: the usage is
+    # CAPTURED and checked non-empty, because `./digup --help | sed -n '2p'` reports SED's
+    # exit status — a binary that dies "error while loading shared libraries" prints nothing
+    # and the RUN passes (measured 2026-11-13 on this stage's CPU run: a green image with an
+    # empty probe). Line 1 is the CLI's own title, line 3 its first verb (line 2 is blank).
+    usage="$(LD_LIBRARY_PATH="/src/Vendor/llama/lib:/src/Vendor/pdfium/lib" \
+      PATH="/src/Vendor/ffmpeg/bin:$PATH" ./target/release/digup --help)"; \
+    test -n "$(printf '%s\n' "$usage" | sed -n '1p')"; \
+    printf '%s\n' "$usage" | sed -n '1p;3p'
 
 # The payload: the CLI + the native libraries it asks for (PDFium, llama.cpp, ffmpeg),
 # rpath'd $ORIGIN — the same file set and layout engine-payload ships. The Rust engine
@@ -471,7 +479,11 @@ RUN --mount=type=cache,target=/src/Vendor \
       esac; \
     done; \
     for file in /out/digup /out/*.so*; do patchelf --set-rpath '$ORIGIN' "$file"; done; \
-    PATH="/out:$PATH" /out/digup --help | sed -n '2p'
+    # The gate is the payload answering from its own folder (the $ORIGIN rpath above): line 1
+    # of --help, printed (line 2 is blank, so asking sed for '2p' proves nothing by itself),
+    # and PIPEFAIL so a loader failure fails the RUN. digup-server rides with digup.
+    test -x /out/digup-server; \
+    PATH="/out:$PATH" /out/digup --help | sed -n '1p'
 
 # The contract suite over the Rust payload: the server-test stage with the Swift payload
 # replaced (the directory is emptied first — the Swift-only libraries must NOT ride along
