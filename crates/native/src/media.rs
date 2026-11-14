@@ -453,8 +453,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the emit folder");
 
-        let hour_samples: usize = (16_000 * 3_600) as usize;
-        let chunk_samples: usize = (32_768) as usize; // 64 KiB of s16le, ffmpeg's read size
+        let hour_samples: usize = 16_000 * 3_600;
+        let chunk_samples: usize = 32_768; // 64 KiB of s16le, ffmpeg's read size
         let base = rss().expect("the process reports its resident size");
         let mut state = Windows {
             buffer: Vec::new(),
@@ -544,8 +544,8 @@ mod tests {
             odd: None,
         };
         let mut feed = vec![0u8; (45 * 16_000) * 2]; // 45 s of samples, one read
-        for pair in feed.chunks_exact_mut(2) {
-            pair.copy_from_slice(&20_000i16.to_le_bytes());
+        for i in (0..feed.len()).step_by(2) {
+            feed[i..i + 2].copy_from_slice(&20_000i16.to_le_bytes());
         }
         state.feed(&feed, &dir).expect("45 s in one read");
         // 45 s of samples, 30 s window, 15 s hops: the FIRST window emits at 30 s and

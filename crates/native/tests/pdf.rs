@@ -874,8 +874,38 @@ fn fixture_bytes_match_the_factory() {
 
 /// The engine's answers, every (fixture, scenario): pages/total/title, refusal texts, the meta
 /// tags, `Estimator.pages` counts, and the SHA-256 of every rendered page PNG / preview JPEG.
+///
+/// The replay runs in a FRESH CHILD PROCESS (`--ignored --exact`), serially, exactly as the
+/// cross-check driver measured the table: a live PDFium keeps a PROCESS-GLOBAL fallback-font
+/// cache, and the page whose font resource is broken renders by it — measured on this box
+/// (2026-11-14, `brokenfont.pdf` page 2 under scenario "all"): the FIRST render in a fresh
+/// process answers `945be28e…` (the pinned bytes); any render after the cache has warmed
+/// answers different pixels (`86271d6c…` when warmed by the same fixture's own first render,
+/// `06f9a565…` when warmed by other fixtures' renders in a parallel-suite process). The Swift
+/// driver measured every scenario once, in one serial process, starting cold — so the replay
+/// must start cold too. Running the table inside the suite's own process made the pixel pins
+/// depend on which sibling tests had already rendered (the suite grew pixel-rendering pins
+/// over the audit; the replay silently inherited their warm state).
 #[test]
 fn engine_answers_match() {
+    let exe = std::env::current_exe().expect("the test binary");
+    let status = std::process::Command::new(exe)
+        .arg("--ignored")
+        .arg("--exact")
+        .arg("engine_answers_match_core")
+        .arg("--test-threads=1")
+        .status()
+        .expect("the replay child runs");
+    assert!(
+        status.success(),
+        "the cold-process replay of the pinned answers exited nonzero (child output above)"
+    );
+}
+
+/// The replay itself — runs ONLY in the driver's child process (`--ignored`).
+#[test]
+#[ignore = "driven by engine_answers_match in a fresh cold process"]
+fn engine_answers_match_core() {
     let fixtures = write_fixtures("answers");
     let out = fixtures.join("out");
     std::fs::create_dir_all(&out).expect("out dir");
