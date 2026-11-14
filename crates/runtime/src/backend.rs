@@ -164,14 +164,24 @@ pub fn has_gpu() -> bool {
 
 /// The threads llama.cpp computes on (what runs on the CPU: all of it on a machine without a GPU):
 /// every logical processor up to 8, where llama.cpp's default is 4; `DIGUP_THREADS` says otherwise.
+/// Cached on the first call — the engine's `static let threads` (`LlamaEmbedder.swift:351-355`)
+/// reads the environment ONCE per process, and this feeds `n_threads`/`n_threads_batch` at every
+/// model-load and media-encoder creation: the audit-base re-read `DIGUP_THREADS` per call, so a
+/// process that changed its environment mid-run (a helper that exports it, a test harness) got
+/// the second model loaded on a different thread count than the first — the engine cannot, and
+/// the vectors carry the difference (batch partitioning is thread-count-sensitive). Same
+/// stance as the ffmpeg lookup (ffmpeg.rs:118-124: "the engine's `static let` never re-reads").
 pub fn threads() -> i32 {
-    let chosen = std::env::var(THREADS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<i32>().ok());
-    let logical = std::thread::available_parallelism()
-        .map(|n| n.get() as i32)
-        .unwrap_or(1);
-    chosen.unwrap_or(logical.min(8)).max(1)
+    static ONCE: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *ONCE.get_or_init(|| {
+        let chosen = std::env::var(THREADS_ENV)
+            .ok()
+            .and_then(|value| value.parse::<i32>().ok());
+        let logical = std::thread::available_parallelism()
+            .map(|n| n.get() as i32)
+            .unwrap_or(1);
+        chosen.unwrap_or(logical.min(8)).max(1)
+    })
 }
 
 /// The backend names ggml loaded, for logs and `digup status`.
