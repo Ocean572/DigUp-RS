@@ -177,12 +177,35 @@ impl MeasuredCosts {
     }
 
     /// `MeasuredCosts.save`: pretty and key-sorted, as the Swift `JSONEncoder` writes it.
+    ///
+    /// Atomic, as Foundation's `writeReplacing` is (`Data.write(options: .atomic)`,
+    /// MeasuredCosts.swift:139): the payload is written beside the destination and renamed
+    /// onto it. The writer is the index helper, and the watchdog ends that process with
+    /// `_exit(75)` at the 15-minute cap — a `fs::write` truncated by that death leaves a
+    /// half-written `costs.json`, and `load` answers "nothing measured yet" for a file it
+    /// cannot parse, so the run silently drops every tally the index earned. The rename
+    /// rides the DIRECTORY's permissions, not the file's, which is also the bind-mount
+    /// shape (deploy/ mounts the index folder from the host): a costs.json the container's
+    /// uid cannot truncate, it can replace.
     fn save(&self, folder: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(folder)?;
         let value = serde_json::to_value(self).map_err(std::io::Error::other)?;
         let text =
             serde_json::to_string_pretty(&sort_json(value)).map_err(std::io::Error::other)?;
-        std::fs::write(Self::file(folder), text)
+        let file = Self::file(folder);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = folder.join(format!("costs.json.{}.{stamp}.tmp", std::process::id()));
+        std::fs::write(&tmp, text)?;
+        match std::fs::rename(&tmp, &file) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(e)
+            }
+        }
     }
 
     /// `MeasuredCosts.setSpeed`: saves this machine's speed beside what's measured, and forgets
