@@ -161,6 +161,11 @@ impl Windows {
     /// The read callback: carry the odd byte, spell the pairs as little-endian Int16, and cut
     /// every whole window the buffer now holds.
     fn feed(&mut self, data: &[u8], folder: &Path) -> Result<(), ExtractError> {
+        // The fresh `bytes` Vec per read is Swift's OWN shape: the engine's callback starts
+        // `var bytes: [UInt8] = []` + `reserveCapacity(data.count + 1)` for every pipe read
+        // (`Media+Portable.swift:112-115`), prepending the odd byte the same way. A
+        // reused scratch buffer would be CHEAPER than the engine and would drift the
+        // append arithmetic away from the twin; the allocation is the parity, not sloppiness.
         let mut bytes: Vec<u8> = Vec::with_capacity(data.len() + 1);
         if let Some(first) = self.odd.take() {
             bytes.push(first);
