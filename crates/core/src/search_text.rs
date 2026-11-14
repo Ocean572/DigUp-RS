@@ -34,20 +34,19 @@ pub fn normalized(text: &str) -> String {
     out
 }
 
-fn is_letter(scalar: char) -> bool {
-    matches!(
-        get_general_category(scalar),
-        GeneralCategory::UppercaseLetter
-            | GeneralCategory::LowercaseLetter
-            | GeneralCategory::TitlecaseLetter
-            | GeneralCategory::ModifierLetter
-            | GeneralCategory::OtherLetter
-    )
-}
-
 /// True when text says something in words: at least a fifth of the non-space characters are
 /// letters (marks count, such as Bengali vowel signs). A table of numbers is not, so it gets
 /// keyword search only (SearchText.swift:37).
+///
+/// The set is Foundation's `CharacterSet.letters` — the Letters AND the combining Marks
+/// (`is_letter_mark`, measured on the ⑩a probe's `facts-sets`), which is what the doc
+/// above says and what `hasWords` counts (`CharacterSet.letters.contains(scalar)`,
+/// SearchText.swift:39). Counting L* alone made a Devanagari or harakat-heavy Arabic page
+/// answer "no letters worth a vector" where the engine embeds it: `has_prose` gates the
+/// chunk/page/OCR embedding (`indexer.rs:663/1078/1248`) and `migrate_long_files`, so the
+/// two engines embedded different files from the same corpus. `has_prose`'s per-word test
+/// is the same set (`word.unicodeScalars.contains(where: CharacterSet.letters.contains)`,
+/// SearchText.swift:51).
 pub fn has_words(text: &str) -> bool {
     let mut letters = 0u64;
     let mut others = 0u64;
@@ -55,7 +54,7 @@ pub fn has_words(text: &str) -> bool {
         if scalar == '\n' || scalar.is_whitespace() {
             continue;
         }
-        if is_letter(scalar) {
+        if is_letter_mark(scalar) {
             letters += 1;
         } else {
             others += 1;
@@ -74,7 +73,7 @@ pub fn has_prose(text: &str) -> bool {
     }
     let mut words = 0;
     for word in text.split_whitespace() {
-        if word.chars().any(is_letter) {
+        if word.chars().any(is_letter_mark) {
             words += 1;
             if words >= 4 {
                 return true;
@@ -128,9 +127,9 @@ pub(crate) fn is_letter_mark_number(c: char) -> bool {
     )
 }
 
-/// Foundation's `CharacterSet.letters` membership (`SearchText.hasWords` counts letters):
-/// the Letters and the combining Marks — the Numbers are NOT letters (measured, ⑩a
-/// `facts-sets`).
+/// Foundation's `CharacterSet.letters` membership (`SearchText.hasWords`/`hasProse` count
+/// letters with it, SearchText.swift:39/51): the Letters and the combining Marks — the
+/// Numbers are NOT letters (measured, ⑩a `facts-sets`).
 pub fn is_letter_mark(c: char) -> bool {
     matches!(
         get_general_category(c),
@@ -502,6 +501,19 @@ fn arabic(value: u32) -> bool {
     (0x0600..=0x06FF).contains(&value)
 }
 
+/// Swift's `Script.arabic.contains(value) && scalar.properties.isAlphabetic`
+/// (SearchText.swift:198) inside the block `arabic` names. Measured 2026-11-13 with Perl's
+/// Unicode 16 data (`/\p{Alphabetic}/` over every scalar of U+0600-U+06FF): the block holds
+/// 52 combining marks, 46 of them alphabetic (the harakat, the dagger alef, the Quranic
+/// small-high marks U+06D6-U+06DC, U+06E1-U+06E4, U+06E7-U+06E8, U+06ED), and exactly six are
+/// not — U+0658, U+06DF, U+06E0, U+06EA, U+06EB, U+06EC. No alphabetic scalar in the block is
+/// outside the letters-and-marks set, so the letters-and-marks set minus those six IS the
+/// Alphabetic property here; the plain set would count six shapes Swift does not.
+fn is_arabic_alphabetic(value: u32) -> bool {
+    char::from_u32(value).is_some_and(is_letter_mark)
+        && !matches!(value, 0x0658 | 0x06DF | 0x06E0 | 0x06EA..=0x06EC)
+}
+
 fn is_indic_vowel_sign(value: u32) -> bool {
     matches!(
         value,
@@ -519,9 +531,11 @@ fn is_indic_consonant_or_nukta(value: u32) -> bool {
 }
 
 impl PageTextProblem {
-    /// Ported from SearchText.swift:188. `isAlphabetic` for the Arabic lam check is approximated by
-    /// the Letter category (every alphabetic scalar in the Arabic block is a letter); the check only
-    /// gates which garbled PDFs are re-queued for OCR, and only on a v1→v2 migration.
+    /// Ported from SearchText.swift:197-199: the lam-ligature shape is `Script.arabic` AND
+    /// `properties.isAlphabetic`, which inside the block the port's `arabic` gate names is
+    /// `is_arabic_alphabetic` — measured against Perl's Unicode 16 data, not approximated.
+    /// The check only gates which garbled PDFs are re-queued for OCR, and only on a v1→v2
+    /// migration.
     pub fn check(text: &str) -> Option<PageTextProblem> {
         let nfc: String = text.nfc().collect();
         let mut vowel_signs = 0u64;
@@ -540,7 +554,7 @@ impl PageTextProblem {
             if before_previous == '\u{0627}'
                 && (previous == '?' || previous == '.' || previous == '\u{FFFD}')
                 && arabic(value)
-                && is_letter(scalar)
+                && is_arabic_alphabetic(value)
             {
                 lost_letters += 1;
             }
