@@ -62,11 +62,6 @@ pub fn duration_of(url: &Path) -> Option<f64> {
     (seconds.is_finite() && seconds > 0.0).then_some(seconds)
 }
 
-/// `Estimator.duration(of:)`: the estimate's media measure, 0 when ffprobe can't say.
-pub fn media_duration(path: &Path) -> f64 {
-    duration_of(path).unwrap_or(0.0)
-}
-
 /// `MediaInfo.streams(of:)`: which kinds of streams the file has.
 pub fn streams_of(url: &Path) -> (bool, bool) {
     let Ok(text) = ffmpeg::output(

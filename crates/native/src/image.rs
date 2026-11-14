@@ -27,13 +27,6 @@ pub const DRAWS_VECTOR_PICTURES: bool = false;
 /// `oriented` copies it, and the scaling copies it again. Estimated, not measured.
 pub const PORTABLE_DECODE_BYTES_PER_PIXEL: u64 = 8;
 
-/// `ImageExtractor.rawDecodeBytesPerPixel` — measured on macOS, and RAW is read on that side only.
-/// The constant travels with the preflight so both sides of the port read the same note.
-pub const RAW_DECODE_BYTES_PER_PIXEL: u64 = 192;
-
-/// `ImageExtractor.layeredTIFFBytesPerPixel`: every full-resolution layer decoded with its masks.
-pub const LAYERED_TIFF_BYTES_PER_PIXEL: u64 = 16;
-
 /// `ImageExtractor.decodeMemoryBudget`: what reading one picture may cost this helper in memory,
 /// set at its start from `--memory-limit`. 0 = no preflight, for the tools that don't index under
 /// a watchdog. The engine's `nonisolated(unsafe) static var` is an atomic here.
@@ -81,7 +74,7 @@ pub fn decode_size(bytes: u64) -> String {
 }
 
 /// A path's `pathExtension` lowercased, the way `prepare` asks the question.
-pub fn lower_extension(path: &Path) -> String {
+pub(crate) fn lower_extension(path: &Path) -> String {
     digup_core::code::extension_of(&path.to_string_lossy()).to_lowercase()
 }
 
