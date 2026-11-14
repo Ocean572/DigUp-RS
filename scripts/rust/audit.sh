@@ -18,7 +18,7 @@
 # .github/, docs/, Cargo.*, LICENSE, README, CONTRIBUTING. The Swift/Python/shell trees are
 # upstream's; AGENTS.md keeps them read-only here, so they are out of this battery's scope.
 set -uo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../.." || exit 1
 ROOT="$PWD"
 QUICK=${1:-}
 fails=0
