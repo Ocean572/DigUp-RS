@@ -786,7 +786,10 @@ impl Indexer {
                     chunks: chunks[read.clone()].to_vec(),
                     read,
                     total: chunks.len(),
-                    characters: text.chars().count(),
+                    // Swift's `text.count` (Indexer.swift:446) counts grapheme clusters, and
+                    // the number lands in `files.info` as "chars": a Devanagari / Tamil /
+                    // Thai text file indexes half the characters the engine says it has.
+                    characters: digup_core::xmlscan::grapheme_len(&text),
                 };
                 Ok(())
             })(),
@@ -1019,16 +1022,16 @@ impl Indexer {
                 if let Some(taken) = &item.image.taken {
                     info.insert("taken".to_string(), taken.clone());
                 }
+                // Swift counts graphemes for both (`item.ocr.count`, Indexer.swift:563, 565):
+                // an OCR line of marks-on-letters says half the characters the engine says.
+                let ocr_chars = digup_core::xmlscan::grapheme_len(&item.ocr);
                 if screenshot {
-                    info.insert(
-                        "ocr_chars".to_string(),
-                        item.ocr.chars().count().to_string(),
-                    );
+                    info.insert("ocr_chars".to_string(), ocr_chars.to_string());
                 }
                 // The ocr line is the event's note; the file's detail stays nil — Swift's
                 // `finish(file.id, state: "done", info: info)` carries no detail (Indexer.swift:565).
                 let note = if screenshot {
-                    Some(format!("ocr {} chars", item.ocr.chars().count()))
+                    Some(ocr_note(&item.ocr))
                 } else {
                     None
                 };
@@ -1549,6 +1552,12 @@ impl Indexer {
     }
 }
 
+/// The screenshot event's note (`Indexer.swift:565`: `"ocr \(item.ocr.count) chars"`) —
+/// the character count is grapheme clusters, as Swift's `String.count` is.
+fn ocr_note(ocr: &str) -> String {
+    format!("ocr {} chars", digup_core::xmlscan::grapheme_len(ocr))
+}
+
 /// `String.prefix(4000)` — Swift counts grapheme clusters, so combining marks ride with their
 /// base letter (`unicode-segmentation`, the same rule the search text side follows).
 fn grapheme_prefix(text: &str, count: usize) -> String {
@@ -1570,5 +1579,71 @@ impl Drop for Indexer {
     fn drop(&mut self) {
         self.close_worker();
         let _ = std::fs::remove_dir_all(&self.scratch);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Job, Payload};
+    use digup_core::options::IndexOptions;
+    use digup_core::{FileKind, FileRecord};
+
+    fn record(path: &str, kind: FileKind) -> FileRecord {
+        FileRecord {
+            id: 1,
+            path: path.to_string(),
+            kind,
+            size: 1_000,
+            mtime: 1.0,
+            inode: 7,
+            device: 3,
+            state: "pending".to_string(),
+            detail: None,
+        }
+    }
+
+    /// `characters: text.count` (Indexer.swift:446) — Foundation counts grapheme clusters,
+    /// and the number is a wire fact: it lands in `files.info` as "chars" (Indexer.swift:
+    /// 650), the doc's progress lines and its cost forecast read it, and the code index's
+    /// "big file" rule does. A Devanagari / Tamil / Thai text file (base letter + matra
+    /// pairs) has HALF the characters the scalar count reports: 40 pairs = 40 characters,
+    /// 80 scalars.
+    #[test]
+    fn doc_characters_count_grapheme_clusters() {
+        let devanagari = "\u{915}\u{93F}".repeat(40); // 40 clusters, 80 scalars
+
+        let dir = std::env::temp_dir().join(format!("digup-indexer-chars-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch folder");
+        let file = dir.join("note.txt");
+        std::fs::write(&file, format!("{devanagari}\n")).expect("the doc");
+
+        let job = Job {
+            files: vec![record(&file.to_string_lossy(), FileKind::Doc)],
+            step: None,
+        };
+        let prepared =
+            super::Indexer::prepare_static(&job, &IndexOptions::default(), &dir.join("batch-0"));
+        // The file is 40 base+matra pairs and a newline: 41 characters, 81 scalars.
+        match prepared.payload {
+            Payload::Doc { characters, .. } => assert_eq!(
+                characters, 41,
+                "the engine's character count (40 clusters + the newline), not the scalar \
+                 count (81)"
+            ),
+            _ => panic!("a doc job prepares a doc payload"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The screenshot note (`Indexer.swift:565`: `"ocr \(item.ocr.count) chars"`) counts
+    /// graphemes too — an OCR line read off a Hindi / Thai screenshot says half the
+    /// characters the engine says, in the event line the UI shows.
+    #[test]
+    fn the_ocr_note_counts_grapheme_clusters() {
+        let ocr = "\u{915}\u{93F}".repeat(12); // 12 clusters, 24 scalars
+        assert_eq!(super::ocr_note(&ocr), "ocr 12 chars");
+        assert_eq!(super::ocr_note(""), "ocr 0 chars");
+        assert_eq!(super::ocr_note("hello"), "ocr 5 chars");
     }
 }

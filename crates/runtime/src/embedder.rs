@@ -201,7 +201,12 @@ impl LlamaEmbedder {
             Ok(vector) => Embedding::made(vector),
             Err(e) => {
                 let text = e.to_string();
-                Embedding::failed(text.chars().take(300).collect::<String>())
+                // `String("\(error)".prefix(300))` (LlamaEmbedder.swift:163): `prefix(300)`
+                // cuts 300 grapheme CLUSTERS, so a mark never parts from its base letter.
+                // 300 scalars would cut mid-cluster on a Devanagari or Arabic message and
+                // land 150 characters' worth of text in `files.detail`.
+                use unicode_segmentation::UnicodeSegmentation;
+                Embedding::failed(text.graphemes(true).take(300).collect::<String>())
             }
         }
     }
@@ -575,4 +580,42 @@ fn cstring(path: &Path) -> CString {
 /// engine hands it the text's UTF-8 bytes with one terminating NUL.
 fn cstring_str(text: &str) -> CString {
     CString::new(text.replace('\0', "")).unwrap_or_else(|_| CString::new("").expect("empty text"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LlamaEmbedder;
+    use crate::{Embedding, Error};
+
+    /// `String("\(error)".prefix(300))` (LlamaEmbedder.swift:163): `prefix` counts grapheme
+    /// CLUSTERS, so the cap lands on a cluster boundary and a mark never parts from its base
+    /// letter. 300 scalars cuts mid-cluster — a Devanagari batch message (base + matra pairs,
+    /// the shape llama reports for Indic corpora) keeps 150 characters where the engine keeps
+    /// 300, and the halves land in `files.detail`.
+    #[test]
+    fn the_failure_text_is_capped_at_300_graphemes() {
+        let pairs = "\u{915}\u{93F}".repeat(400); // 400 graphemes, 800 scalars
+        assert_eq!(digup_core::xmlscan::grapheme_len(&pairs), 400);
+        assert_eq!(pairs.chars().count(), 800);
+        let made = LlamaEmbedder::one(Err(Error::Worker(pairs.clone())));
+        let text = made.error.expect("the reason the vector has none");
+        assert_eq!(
+            digup_core::xmlscan::grapheme_len(&text),
+            300,
+            "the cap is Swift's `prefix(300)`: 300 grapheme clusters"
+        );
+        assert_eq!(
+            text,
+            "\u{915}\u{93F}".repeat(300),
+            "and the cut lands on a cluster boundary: no orphan matra at the tail"
+        );
+        let _ = Embedding::made(Vec::new());
+    }
+
+    /// The short messages ride whole (the cap is a cap, not a pad).
+    #[test]
+    fn a_short_failure_text_is_kept_whole() {
+        let made = LlamaEmbedder::one(Err(Error::Worker("llama batch filled".into())));
+        assert_eq!(made.error.as_deref(), Some("llama batch filled"));
+    }
 }

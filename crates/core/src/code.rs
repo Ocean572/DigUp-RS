@@ -477,7 +477,8 @@ pub fn place(path: &str) -> (Option<String>, String) {
     let home = home_folder();
     let mut folder = parent_of(path);
     let mut repo: Option<String> = None;
-    while folder.chars().count() > 1 && folder != home {
+    // `folder.count > 1` (CodeExtractor.swift:205): Swift counts grapheme clusters.
+    while crate::xmlscan::grapheme_len(&folder) > 1 && folder != home {
         if Path::new(&folder).join(".git").exists() || rules::is_project_root(&folder) {
             repo = Some(folder.clone());
             break;
@@ -486,8 +487,18 @@ pub fn place(path: &str) -> (Option<String>, String) {
     }
     if let Some(repo) = repo {
         let parent = parent_of(&repo);
-        let skip = parent.chars().count() + 1;
-        return (Some(repo), path.chars().skip(skip).collect::<String>());
+        // Swift: `path.dropFirst(parent.count + 1)` (CodeExtractor.swift:214) drops
+        // Characters (grapheme clusters). `parent` is a prefix of `path`, so the byte right
+        // after it is exactly the cut after the grapheme whose length Swift counts: slicing
+        // at `parent.len() + 1` (the slash) lands on the same cluster boundary a scalar
+        // count would miss on a decomposed folder name (macOS stores names NFD).
+        let cut = parent.len() + 1;
+        let title = if path.len() >= cut {
+            path[cut..].to_string()
+        } else {
+            String::new()
+        };
+        return (Some(repo), title);
     }
     let components = path_components(path);
     let tail = if components.len() >= 2 {
@@ -673,4 +684,76 @@ static LANGUAGES: LazyLock<std::collections::BTreeMap<&'static str, &'static str
 /// The extension → language table, for tests that want it as the engine's dictionary.
 pub fn known_language(extension: &str) -> Option<&'static str> {
     languages().get(extension).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::place;
+
+    /// The code title is `path.dropFirst(parent.count + 1)` (CodeExtractor.swift:214): Swift
+    /// drops the parent's CHARACTERS (grapheme clusters) and the one slash after it, so the
+    /// title keeps the repo segment ("its path from the repo's folder, the repo's name
+    /// first"). The trap this pin guards is **unit mixing**: `parent.count` in Swift is a
+    /// grapheme number, and a Rust port that computes the skip in graphemes but applies it
+    /// with `chars().skip(..)` drops one grapheme SHORT when the parent folder carries a
+    /// combining mark (macOS stores names NFD; Linux sees it in decomposed checkouts) —
+    /// "roj/main.rs" on this fixture, the repo's first letter eaten with the slash. The port
+    /// slices at the byte right after the parent prefix (the slash): the prefix IS parent,
+    /// so the cut always lands on the cluster boundary Swift's Character count lands on.
+    /// (The audit-base's unit-CONSISTENT scalar skip landed on the same boundary too — this
+    /// pin keeps the rule honest so a future "tidy" cannot mix units on the way.)
+    #[test]
+    fn the_repo_title_starts_where_the_parent_ends() {
+        let root = std::env::temp_dir().join(format!("digup-place-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // parent: "dev" + o+acute + "work" — 8 graphemes, 9 scalars inside the name.
+        let parent = root.join("dev\u{6f}\u{301}work");
+        let repo = parent.join("proj");
+        std::fs::create_dir_all(repo.join(".git")).expect("the repo");
+        let file = repo.join("main.rs");
+        std::fs::write(&file, "fn main() {}").expect("the file");
+
+        let (repo_found, title) = place(&file.to_string_lossy());
+        assert_eq!(
+            repo_found.as_deref(),
+            Some(repo.to_string_lossy().as_ref()),
+            "the .git folder marks the repo"
+        );
+        assert_eq!(
+            title, "proj/main.rs",
+            "the title begins where the parent ends, at a cluster boundary: the parent's \
+             characters and the one slash after it are dropped, keeping the repo segment. A \
+             grapheme count applied as a scalar skip answers roj/main.rs on this 9-scalar \
+             parent - the first letter eaten with the slash."
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The loop's `folder.count > 1` (CodeExtractor.swift:205) is a Character count too.
+    /// The rule is LATENT on real paths — a walk always reaches "/" (one grapheme, one
+    /// scalar) or home, where both units agree — so no fixture can tell a grapheme floor
+    /// from a scalar floor. What the fixture pins is the engine's ANSWER around a
+    /// one-cluster repo name (o + acute): the repo is found, and the title keeps the repo's
+    /// name whole (`\u{6f}\u{301}/a.rs`) — the walk and the title cut stay in the same
+    /// counting units, whichever those end up being.
+    #[test]
+    fn a_one_cluster_folder_stops_the_repo_walk_as_swift_does() {
+        let root = std::env::temp_dir().join(format!("digup-place1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let repo = root.join("\u{6f}\u{301}"); // ONE cluster, TWO scalars
+        std::fs::create_dir_all(repo.join(".git")).expect("the repo");
+        let file = repo.join("a.rs");
+        std::fs::write(&file, "a").expect("the file");
+        let (repo_found, title) = place(&file.to_string_lossy());
+        assert_eq!(
+            repo_found.as_deref(),
+            Some(repo.to_string_lossy().as_ref()),
+            "the repo with a one-cluster name is found"
+        );
+        assert_eq!(
+            title, "\u{6f}\u{301}/a.rs",
+            "the repo name stands whole at the title's head"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

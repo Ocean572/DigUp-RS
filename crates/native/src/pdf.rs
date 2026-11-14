@@ -390,7 +390,15 @@ fn made_page(
     let mut garbled: Option<String> = None;
     match PageTextProblem::check(&text) {
         Some(PageTextProblem::LostLetters) | None => {
-            if text.chars().count() >= min_text {
+            // `text.count` (PDF+Portable.swift:102) counts grapheme clusters: a base letter
+            // with its combining marks is ONE character. The scalar count would call a page
+            // of Devanagari / Bengali / Thai text twice as long as the engine says it is,
+            // and keep as text the page the engine renders for the vision encoder.
+            // (Measured 2026-11-14 on this box's PDFium: the seam's text extraction drops
+            // combining marks — a fixture of e + U+0301 ×30 extracts 30 scalars — so on
+            // this engine the two counts coincide for every text PDFium hands this seam;
+            // the rule is the engine's, and a PDFium that keeps the marks keeps the parity.)
+            if digup_core::xmlscan::grapheme_len(&text) >= min_text {
                 return Ok(Page {
                     number: index + 1,
                     text,

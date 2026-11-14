@@ -1056,3 +1056,57 @@ fn a_page_copy_that_cannot_be_written_fails_the_extraction() {
         drawn.len()
     );
 }
+
+/// `minText` is a CHARACTER test (`text.count >= minText`, PDF+Portable.swift:102):
+/// Foundation's `String.count` counts **grapheme clusters**, so a base letter with its
+/// combining marks counts ONCE. The port tested `text.chars().count()` — scalars — and a
+/// page of Devanagari/Bengali/Thai text (base + matra pairs) reads TWICE as long as the
+/// engine says it is: the page the engine renders as a picture for the vision encoder
+/// (its text layer "too thin"), the port keeps as a text page — no picture, no page_image
+/// segment, no vision vector. The seam is real on the scripts the vendored fonts carry.
+///
+/// The fixture is built here (not in the pinned 13): 30 base+combining pairs = 30
+/// graphemes, 60 scalars, DejaVu's own cmap answers the glyph ids (e = 72, U+0301 = 690).
+/// `min_text = 31` sits exactly between the two counts:
+///   graphemes 30 < 31 -> Swift RENDERS the page (picture + text);
+///   scalars 60 >= 31  -> the scalar test answers a bare text page.
+/// The pin is Swift's shape: `image_path` Some, text kept, `ocr` false.
+#[test]
+fn the_min_text_test_counts_graphemes_not_scalars() {
+    let line: String = "e\u{301}".repeat(30);
+    assert_eq!(line.chars().count(), 60);
+    assert_eq!(digup_core::xmlscan::grapheme_len(&line), 30);
+    let spec = FontSpec {
+        font_bytes: 759720,
+        length1: 759703,
+        ascent: 1901,
+        descent: -483,
+        cap: 1901,
+        glyphs: &[(101, 72, 1260), (769, 690, 100)],
+    };
+    let (pages, fonts) = type0_objects(&line, &spec, DEJAVU);
+    let dir = std::env::temp_dir().join(format!("digup-pdf-combining-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("combining.pdf");
+    std::fs::write(&path, doc(&pages, &fonts, None, None)).expect("write the fixture");
+    let out = dir.join("renders");
+    std::fs::create_dir_all(&out).expect("render folder");
+
+    let (pages, _total, _title) = pdf::pages(&path, 0..usize::MAX, 31, 1400, &out).expect("read");
+    assert_eq!(pages.len(), 1, "one page");
+    let page = &pages[0];
+    assert_eq!(
+        digup_core::xmlscan::grapheme_len(&page.text),
+        30,
+        "the seam read the fixture it wrote: 30 graphemes (60 scalars)"
+    );
+    assert!(
+        page.image_path.is_some(),
+        "the engine counts CHARACTERS: 30 graphemes < the min_text 31, so the page's text \
+         layer is too thin and it renders a picture for the vision encoder (the scalar test \
+         answers 60 >= 31 and keeps a bare text page: no picture, no page_image segment, \
+         no vision vector)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
