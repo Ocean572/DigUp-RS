@@ -131,12 +131,12 @@ pub fn write_wav(samples: &[i16], url: &Path) -> Result<(), ExtractError> {
     })
 }
 
-/// The streaming state of `AudioExtractor.windows`: the sample buffer with the head index of
-/// the engine's `removeFirst(hopSamples)` (its ArraySlice window), the odd byte carried
-/// between reads, the sample offset of the buffer's first sample.
+/// The streaming state of `AudioExtractor.windows`: the sample buffer, whose consumed
+/// prefix `drain_hop` removes exactly as the engine's `buffer.removeFirst(hopSamples)`
+/// does, the odd byte carried between reads, and the sample offset of the buffer's first
+/// sample (the engine's `offset`, naming `buffer[0]` in the file).
 struct Windows {
     buffer: Vec<i16>,
-    head: usize,
     offset: i64,
     window_samples: usize,
     hop_samples: usize,
@@ -146,7 +146,7 @@ struct Windows {
 
 impl Windows {
     fn emit(&mut self, count: usize, folder: &Path) -> Result<(), ExtractError> {
-        let slice = &self.buffer[self.head..self.head + count];
+        let slice = &self.buffer[..count];
         // The negated form is the Swift text (`guard !(rms > 0.003)`): true for NaN too,
         // which `rms <= 0.003` would not be.
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -178,12 +178,22 @@ impl Windows {
         for pair in bytes.chunks_exact(2) {
             self.buffer.push(i16::from_le_bytes([pair[0], pair[1]]));
         }
-        while self.buffer.len() - self.head >= self.window_samples {
+        while self.buffer.len() >= self.window_samples {
             self.emit(self.window_samples, folder)?;
-            self.head += self.hop_samples;
-            self.offset += self.hop_samples as i64;
+            self.drain_hop();
         }
         Ok(())
+    }
+
+    /// `buffer.removeFirst(hopSamples)` (Media+Portable.swift:116): the samples a window
+    /// consumed leave the buffer, so the stream's memory is one window even for a 3-hour
+    /// podcast. Keeping a head index INSTEAD grows the Vec with the whole file — a 3-hour
+    /// podcast at 16 kHz mono is 345 M samples ≈ 690 MB, past the watchdog's 4–8 GB cap on
+    /// a loaded machine, and the Vec's doubling spikes it further. `drain` keeps the
+    /// capacity, which is what the engine's own ArraySlice removal costs too.
+    fn drain_hop(&mut self) {
+        self.buffer.drain(..self.hop_samples).for_each(|_| ());
+        self.offset += self.hop_samples as i64;
     }
 }
 
@@ -205,7 +215,6 @@ pub fn windows(
     let duration = duration_of(url).unwrap_or(0.0);
     let mut state = Windows {
         buffer: Vec::new(),
-        head: 0,
         offset: 0,
         window_samples: (window * SAMPLE_RATE) as usize,
         hop_samples: (hop * SAMPLE_RATE) as usize,
@@ -234,7 +243,7 @@ pub fn windows(
     .map_err(|error| error.extract())?;
     // The tail: new audio beyond the previous window's overlap, or the whole file if it was
     // shorter than a window.
-    let count = state.buffer.len() - state.head;
+    let count = state.buffer.len();
     let already_covered: i64 = if state.offset == 0 {
         0
     } else {
@@ -414,4 +423,150 @@ pub fn frame_at(seconds: f64, url: &Path, pixels: usize, out: &Path) -> Result<(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Windows;
+    use std::path::Path;
+
+    /// The engine's `windows` callback keeps ONE window in memory: every consumed hop
+    /// leaves the buffer (`buffer.removeFirst(hopSamples)`, Media+Portable.swift:116), so a
+    /// 3-hour podcast (345 M samples ≈ 690 MB of i16) streams past a 4–8 GB watchdog in
+    /// constant memory. The port advanced a head index and never drained: the Vec grew
+    /// with the whole file, doubled on the way, and the podcast spiked the box.
+    ///
+    /// The pin streams ONE HOUR of full-scale audio (16 kHz mono s16le = 115.4 M bytes,
+    /// in 64 KiB reads exactly as ffmpeg's pipe delivers them) through the port's own
+    /// feed callback and pins the process's resident size from /proc/self/statm — the
+    /// watchdog's own instrument. The window/hop math is the engine's shipped pair
+    /// (30 s windows, 15 s hops): 239 windows, each 30 s of full-scale samples over the
+    /// silence gate (every one lands a WAV), and the tail (15 s new past the overlap,
+    /// 15 s ≥ the 2 s minimum) emits the 240th.
+    ///
+    /// Measured on this box (2026-11-13, the drain installed / the head index installed,
+    /// same fixture, same run): the drained stream adds < 32 MB of RSS; the head index
+    /// adds the hour's buffer (~115 MB).
+    #[test]
+    fn a_long_stream_keeps_one_window_of_memory() {
+        let dir = std::env::temp_dir().join(format!("digup-windows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the emit folder");
+
+        let hour_samples: usize = (16_000 * 3_600) as usize;
+        let chunk_samples: usize = (32_768) as usize; // 64 KiB of s16le, ffmpeg's read size
+        let base = rss().expect("the process reports its resident size");
+        let mut state = Windows {
+            buffer: Vec::new(),
+            offset: 0,
+            window_samples: 30 * 16_000,
+            hop_samples: 15 * 16_000,
+            pieces: Vec::new(),
+            odd: None,
+        };
+        let loud: Vec<u8> = {
+            // Full-scale square: every window clears the −50 dBFS gate.
+            let mut bytes = Vec::with_capacity(chunk_samples * 2);
+            for _ in 0..chunk_samples {
+                bytes.extend_from_slice(&20_000i16.to_le_bytes());
+            }
+            bytes
+        };
+        for _ in 0..hour_samples / chunk_samples {
+            state.feed(&loud, &dir).expect("a window-sized feed");
+        }
+        // The hour does not divide the 64 KiB read: feed the part-chunk that completes it.
+        let rest = (hour_samples - hour_samples / chunk_samples * chunk_samples) * 2;
+        state
+            .feed(&loud[..rest], &dir)
+            .expect("the part-chunk that completes the hour");
+        // The hour ends exactly at a window boundary (57.6 M = 120 windows with the
+        // drains), so the tail is quiet; one hop of samples past it makes the shape the
+        // engine sees on a real file: a window emits every hop, and the tail's new
+        // audio past the overlap — window − hop = 15 s ≥ the 2 s minimum — emits too.
+        // Window k emits when the buffer holds window + k*hop (the drains keep exactly
+        // that): floor((total − window)/hop) + 1 = 239 windows across the hour, the tail
+        // feeds the 240th (it completes a window at the file's end — the loop, not the
+        // tail clause), and the tail clause sees an empty buffer after it. The offset
+        // stands at the total: Swift's `offset` counts the hops, 240 × 240,000 = the hour.
+        let tail: Vec<u8> = {
+            let mut bytes = Vec::with_capacity(15 * 16_000 * 2);
+            for _ in 0..15 * 16_000 {
+                bytes.extend_from_slice(&20_000i16.to_le_bytes());
+            }
+            bytes
+        };
+        state.feed(&tail, &dir).expect("the tail's hop of samples");
+        let peak = rss().expect("the resident size after the stream");
+
+        assert_eq!(
+            state.pieces.len(),
+            240,
+            "floor((total − window)/hop) = 240 drains: 239 whole windows across the hour \
+             plus the tail's 240th (measured, drain shape)"
+        );
+        assert_eq!(
+            state.offset, hour_samples as i64,
+            "240 drains of a hop: the offset counts the hour"
+        );
+
+        let grew = peak.saturating_sub(base);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            grew < 32 * 1_048_576,
+            "streaming an hour of audio added {grew} bytes of memory: the engine's callback \
+             keeps ONE 30 s window (1 MB) because removeFirst discards each consumed hop \
+             (Media+Portable.swift:116); the hour's samples standing beside the window is \
+             the head-index shape (~115 MB), which on the 3-hour class of podcasts walks \
+             into the watchdog's cap"
+        );
+    }
+
+    fn rss() -> Option<u64> {
+        let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+        let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+        Some(pages * 4_096)
+    }
+
+    /// The drain leaves EXACTLY `window − hop` samples standing (the engine's overlap), and
+    /// the tail's `buffer.count` is the same number — the emission math never shifts.
+    #[test]
+    fn the_drained_overlap_is_the_engine_s_window_minus_hop() {
+        let dir = std::env::temp_dir().join(format!("digup-windows-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the emit folder");
+        let mut state = Windows {
+            buffer: Vec::new(),
+            offset: 0,
+            window_samples: 30 * 16_000,
+            hop_samples: 15 * 16_000,
+            pieces: Vec::new(),
+            odd: None,
+        };
+        let mut feed = vec![0u8; (45 * 16_000) * 2]; // 45 s of samples, one read
+        for pair in feed.chunks_exact_mut(2) {
+            pair.copy_from_slice(&20_000i16.to_le_bytes());
+        }
+        state.feed(&feed, &dir).expect("45 s in one read");
+        // 45 s of samples, 30 s window, 15 s hops: the FIRST window emits at 30 s and
+        // the drain leaves EXACTLY window − hop standing... which for a 45 s stream is a
+        // SECOND window: Swift's `while buffer.count >= windowSamples` runs the same
+        // second round, and the second window (30..60 s) covers the audio 30..45 s.
+        // The drain's contract this test pins: every window is followed by a hop-sized
+        // removal, offset counts hops, and the standing tail is total − hop·n — the
+        // numbers Swift's `removeFirst(hopSamples)` produces, digit for digit.
+        assert_eq!(
+            state.pieces.len(),
+            2,
+            "two windows across 45 s: 0..30 s and 30..45 s"
+        );
+        assert_eq!(
+            state.buffer.len(),
+            45 * 16_000 - 2 * 15 * 16_000,
+            "the remainder stands: total − hop·n"
+        );
+        assert_eq!(state.offset, 2 * 15 * 16_000, "offset counts the hops");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = Path::new(&dir);
+    }
 }
