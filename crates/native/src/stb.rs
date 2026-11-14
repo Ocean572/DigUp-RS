@@ -76,6 +76,9 @@ fn c_path(path: &Path) -> Option<CString> {
 pub fn info(path: &Path) -> Option<(i32, i32, i32)> {
     let name = c_path(path)?;
     let (mut width, mut height, mut channels) = (0 as c_int, 0 as c_int, 0 as c_int);
+    // SAFETY: `name` is a NUL-terminated CString that outlives the call; the three
+    // `&mut c_int` are live, aligned, initialized locals — stbi_info writes ints through
+    // them and reads `name` only up to the NUL. stb's public API: a failed read returns 0.
     let read = unsafe { stbi_info(name.as_ptr(), &mut width, &mut height, &mut channels) };
     (read != 0).then_some((width, height, channels))
 }
@@ -84,6 +87,10 @@ pub fn info(path: &Path) -> Option<(i32, i32, i32)> {
 pub fn load(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     let name = c_path(path)?;
     let (mut width, mut height, mut channels) = (0 as c_int, 0 as c_int, 0 as c_int);
+    // SAFETY: `name` is a NUL-terminated CString alive for the call; the `&mut c_int` are
+    // live initialized locals; `take` below is the only consumer of the returned pointer
+    // and frees it with stbi_image_free. stbi_load returns malloc'd pixels (req_comp 3
+    // forces RGB) or NULL.
     let pixels = unsafe { stbi_load(name.as_ptr(), &mut width, &mut height, &mut channels, 3) };
     take(pixels, width, height)
 }
@@ -95,6 +102,10 @@ pub fn load_bytes(data: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
         return None;
     }
     let (mut width, mut height, mut channels) = (0 as c_int, 0 as c_int, 0 as c_int);
+    // SAFETY: `data` is borrowed immutably for the whole call (the decode reads its bytes
+    // synchronously), its length is guarded above to `1..=i32::MAX` (stb's length
+    // argument is an Int32 — the engine's own ceiling), the `&mut c_int` are live
+    // initialized locals, and `take` frees the returned buffer.
     let pixels = unsafe {
         stbi_load_from_memory(
             data.as_ptr(),
@@ -117,6 +128,12 @@ fn take(pixels: *mut c_uchar, width: c_int, height: c_int) -> Option<(usize, usi
         return None;
     }
     let count = width as usize * height as usize * 3;
+    // SAFETY: stbi_load/stbi_load_from_memory with req_comp 3 returns a buffer of
+    // `width * height * 3` initialized bytes (checked positive above) owned by stb;
+    // the slice borrows it only for the `to_vec()` copy, and `stbi_image_free` (the
+    // library's own free, called after the copy and never a second time on this
+    // pointer) returns it. `count` cannot overflow: width/height are checked `> 0` and
+    // stb caps each at STBIR__MAX (well below usize::MAX/3 on every supported target).
     let out = unsafe { std::slice::from_raw_parts(pixels, count).to_vec() };
     unsafe { stbi_image_free(pixels as *mut c_void) };
     Some((width as usize, height as usize, out))
@@ -132,6 +149,11 @@ pub fn resize(
     to_height: usize,
 ) -> Option<Vec<u8>> {
     let mut out = vec![0u8; to_width * to_height * 3];
+    // SAFETY: the source slice is read within `width * height * 3` bytes, the destination
+    // buffer is exactly `to_width * to_height * 3` initialized bytes with matching strides
+    // (0 = natural), and both live for the call; stbir writes only inside the destination
+    // (it fills the whole buffer when it succeeds, leaves it untouched and returns NULL
+    // when it refuses). Callers pass the sizes the picture was decoded with.
     let done = unsafe {
         stbir_resize_uint8_srgb(
             pixels.as_ptr(),
@@ -153,6 +175,11 @@ pub fn write(path: &Path, width: usize, height: usize, pixels: &[u8], png: bool)
     let Some(name) = c_path(path) else {
         return false;
     };
+    // SAFETY: `name` is a NUL-terminated CString alive for the call; `pixels` is read as
+    // `width * height * 3` bytes (the callers pass the decoded picture's own numbers, and
+    // `RgbImage` guarantees its vector is exactly that long); stb writes only to the file
+    // named and returns 0/1. The engine's writer uses quality 90 for JPEG
+    // (`jpeg(pixels:quality:90)`), which is the literal below.
     let written = if png {
         unsafe {
             stbi_write_png(
