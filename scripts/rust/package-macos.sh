@@ -5,7 +5,9 @@
 # and llama.cpp links statically from Vendor/llama/lib/libllamacpp.a, so the payload
 # carries no .so files at all (the same fact the Swift payload relies on).
 #
-#   scripts/rust/package-macos.sh [--shell]      → dist/digup-<version>-macos-<arch>.tar.gz
+#   scripts/rust/package-macos.sh [--shell]      → dist/digup-<version>-macos.tar.gz
+#                                                 (payload/, universal when both
+#                                                 toolchains are present)
 #                                                 (+ the Tauri .app/.dmg, --shell)
 #
 # Run it on a Mac, on the CPU architecture the package is for (§11: native builds;
@@ -21,19 +23,18 @@
 # nothing for appcast.py to sign. A Rust-built macOS app updates through Tauri's
 # feed; the Sparkle path is not ported by pretending to be one.
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../.." || exit 1
 # The version regexes in scripts/rust/notices-rust.py read scripts/build-ffmpeg.sh, so
 # it runs here too (its stamp makes it a no-op when the small ffmpeg is already built).
 scripts/build-ffmpeg.sh > /dev/null
 scripts/build-llama.sh > /dev/null
 targets=()
 for arch in arm64 x86_64; do
-  if rustup target list --installed 2>/dev/null | grep -q "apple-darwin"; then :; fi
   target=$arch-apple-darwin
   rustup target list --installed | grep -q "^$target$" || { echo "no $target toolchain (rustup target add $target)"; exit 1; }
   cargo build --release --target "$target" -p digup-cli -p digup-server
   targets+=("$target")
-}
+done
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
 out=dist/digup-$version-macos

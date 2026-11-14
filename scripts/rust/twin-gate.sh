@@ -28,8 +28,7 @@
 # (or DIGUP_MODELS), DIGUP_BACKENDS at the llama libraries, DIGUP_FFMPEG at the pinned ffmpeg
 # folder — the same recipe the suites measure with.
 set -uo pipefail
-cd "$(dirname "$0")/../.."
-ROOT="$PWD"
+cd "$(dirname "$0")/../.." || exit 1
 SWIFT=${1:?usage: twin-gate.sh <swift-digup> <rust-digup> <corpus> [--eval <testbed>>}
 RUST=${2:?usage: twin-gate.sh <swift-digup> <rust-digup> <corpus>}
 CORPUS=${3:?usage: twin-gate.sh <swift-digup> <rust-digup> <corpus>}
