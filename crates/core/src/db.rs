@@ -100,6 +100,19 @@ pub struct Database {
     depth: Cell<usize>,
 }
 
+/// Swift's `defer { transactionDepth -= 1 }` (Database.swift:88): one per `transaction`
+/// call, and it runs on every exit — the body's failure, a `COMMIT` that fails, a `BEGIN`
+/// that fails. Only `transaction` makes one, and it holds the guard for its whole body.
+struct Depth<'a> {
+    db: &'a Database,
+}
+
+impl Drop for Depth<'_> {
+    fn drop(&mut self) {
+        self.db.depth.set(self.db.depth.get().saturating_sub(1));
+    }
+}
+
 impl Database {
     /// Opens readwrite|create, sets `busy_timeout`, switches to WAL (retrying the WAL switch for
     /// up to five seconds — two processes opening a new index can dead-lock the WAL switch,
@@ -192,9 +205,21 @@ impl Database {
 
     /// Nested transaction (Database.swift:86): depth 0 is `BEGIN IMMEDIATE`, deeper is a savepoint
     /// whose failure undoes only its own writes and lets the outer one continue.
+    ///
+    /// `Database.swift:88`'s `defer { transactionDepth -= 1 }` runs on EVERY exit, and its
+    /// `catch` covers a `COMMIT` that throws as well as a body that fails. Both halves
+    /// matter. A `BEGIN IMMEDIATE` that fails with the depth left behind makes the NEXT
+    /// transaction take the savepoint branch — no `BEGIN` runs, its writes ride the leaked
+    /// transaction, and its `RELEASE digup1` COMMITS everything, including the writes a
+    /// failed body was supposed to discard. A `COMMIT` that fails (WAL: a reader's SHARED
+    /// lock past `busy_timeout`) leaves the write transaction open for the life of a
+    /// long-lived daemon. Measured 2026-11-13: `tests/storage.rs` blocks a `COMMIT` with a
+    /// second reader at `busy_timeout = 0` and pins depth, the vanished writes, and that
+    /// the following transaction is a real top-level one.
     pub fn transaction<T>(&self, body: impl FnOnce() -> Result<T>) -> Result<T> {
         let depth = self.depth.get();
         self.depth.set(depth + 1);
+        let _depth = Depth { db: self };
         let savepoint = format!("digup{depth}");
         let begin = if depth == 0 {
             "BEGIN IMMEDIATE".to_string()
@@ -202,28 +227,43 @@ impl Database {
             format!("SAVEPOINT {savepoint}")
         };
         self.execute(&begin)?;
-        match body() {
-            Ok(v) => {
-                let commit = if depth == 0 {
-                    "COMMIT".to_string()
-                } else {
-                    format!("RELEASE {savepoint}")
-                };
-                self.execute(&commit)?;
-                self.depth.set(depth);
-                Ok(v)
-            }
-            Err(e) => {
-                if depth == 0 {
-                    let _ = self.execute("ROLLBACK");
-                } else {
-                    let _ = self.execute(&format!("ROLLBACK TO {savepoint}"));
-                    let _ = self.execute(&format!("RELEASE {savepoint}"));
+        let result = body();
+        let finish = if depth == 0 {
+            "COMMIT".to_string()
+        } else {
+            format!("RELEASE {savepoint}")
+        };
+        match result {
+            Ok(value) => match self.execute(&finish) {
+                Ok(()) => Ok(value),
+                Err(error) => {
+                    self.end_early(depth, &savepoint);
+                    Err(error)
                 }
-                self.depth.set(depth);
-                Err(e)
+            },
+            Err(error) => {
+                self.end_early(depth, &savepoint);
+                Err(error)
             }
         }
+    }
+
+    /// Swift's `catch` arm (`try? execute("ROLLBACK")`, and the savepoint pair): the
+    /// transaction is ended, and the error that was already there is what stands.
+    fn end_early(&self, depth: usize, savepoint: &str) {
+        if depth == 0 {
+            let _ = self.execute("ROLLBACK");
+        } else {
+            let _ = self.execute(&format!("ROLLBACK TO {savepoint}"));
+            let _ = self.execute(&format!("RELEASE {savepoint}"));
+        }
+    }
+
+    /// The nesting depth, for the tests' window: a leaked depth is what turns the next
+    /// top-level transaction into a savepoint (see `transaction`), and that is exactly
+    /// the state a `COMMIT` failure leaves behind.
+    pub fn transaction_depth(&self) -> usize {
+        self.depth.get()
     }
 
     pub fn last_insert_rowid(&self) -> i64 {

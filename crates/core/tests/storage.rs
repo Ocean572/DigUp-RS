@@ -354,3 +354,178 @@ fn meta_roundtrips() {
     store.set_meta("fingerprint", None).unwrap();
     assert_eq!(store.meta("fingerprint").unwrap(), None);
 }
+
+/// `Database.transaction`'s exits, each measured: Swift's `defer { transactionDepth -= 1 }`
+/// (Database.swift:88) runs on EVERY exit, and its `catch` (95-103) ends the transaction —
+/// `ROLLBACK` at depth 0, `ROLLBACK TO` + `RELEASE` deeper — before the error is rethrown.
+///
+/// The defect this pins (`audit-base`) incremented the depth BEFORE the `BEGIN` and restored
+/// it only in the arms that reach the end of its own `match`, so a `BEGIN` that is refused
+/// left the daemon at depth 1. The next top-level `transaction` then takes the SAVEPOINT
+/// branch: no `BEGIN` runs, its writes ride the leaked transaction, and its `RELEASE digup1`
+/// COMMITS everything — including the writes a failed body was supposed to discard. A
+/// long-lived index helper would persist rows the engine discards, permanently, and never
+/// say so.
+///
+/// The `COMMIT`-that-fails arm (`SQLITE_FULL`, a read-only mount, a share that drops a
+/// handle mid-run) is the same code as the body-failure arm — `end_early` + the depth
+/// guard — and is measured through it: in WAL a reader CANNOT produce a failing `COMMIT`
+/// (readers read at their snapshot while the writer appends — that is the mode's point,
+/// measured here: a reader mid-scan let the `COMMIT` land), and the frame write on an
+/// already-open `-wal` handle ignores file permissions (measured: `chmod 444` on
+/// `index.sqlite-wal` still committed). The reachable injections are the ones below.
+#[test]
+fn a_blocked_begin_leaves_no_depth_behind() {
+    use digup_core::db::Database;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("begins.sqlite");
+    let db = Database::open(&path).unwrap();
+    db.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+        .unwrap();
+    db.set_busy_timeout_ms(0).unwrap();
+
+    let writer = Connection::open(&path).unwrap();
+    writer
+        .busy_timeout(Duration::from_millis(0))
+        .expect("a writer with no patience");
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let mut ran = false;
+    let outcome = db.transaction(|| -> digup_core::db::Result<()> {
+        ran = true;
+        Ok(())
+    });
+    assert!(
+        outcome.is_err() && !ran,
+        "BEGIN IMMEDIATE is refused by the other writer, and no body runs"
+    );
+    assert_eq!(
+        db.transaction_depth(),
+        0,
+        "a failed BEGIN does not keep the daemon at depth 1 (Database.swift:88's defer)"
+    );
+    drop(writer);
+
+    db.set_busy_timeout_ms(digup_core::db::BUSY_TIMEOUT_MS)
+        .unwrap();
+    db.transaction(|| -> digup_core::db::Result<()> {
+        db.execute("INSERT INTO t(v) VALUES('landed')")?;
+        Ok(())
+    })
+    .expect("the next transaction is top-level again: BEGIN runs");
+    let left: i64 = db
+        .conn()
+        .query_row("SELECT count(*) FROM t", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(left, 1, "and its write commits");
+}
+
+/// The depth-0 `catch` (`try? execute("ROLLBACK")`): a body's error discards its writes and
+/// stands as the transaction's error.
+#[test]
+fn a_failing_body_at_depth_zero_rolls_back_and_its_error_stands() {
+    use digup_core::db::{Database, Error};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::open(&tmp.path().join("bodies.sqlite")).unwrap();
+    db.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+        .unwrap();
+    db.execute("INSERT INTO t(v) VALUES('committed')").unwrap();
+
+    let outcome = db.transaction(|| -> digup_core::db::Result<()> {
+        db.execute("INSERT INTO t(v) VALUES('the write that must vanish')")?;
+        Err(Error::Failure("a body that fails".to_string()))
+    });
+    assert!(
+        matches!(&outcome, Err(Error::Failure(_))),
+        "the body's error stands: {outcome:?}"
+    );
+    assert_eq!(db.transaction_depth(), 0);
+    let left: i64 = db
+        .conn()
+        .query_row("SELECT count(*) FROM t", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(left, 1, "the ROLLBACK discards the body's write");
+}
+
+/// The savepoint arm (Database.swift:90-102): inside a transaction, a nested block is a
+/// `SAVEPOINT digup1`, and its failure undoes ONLY its own writes — the outer transaction
+/// goes on and commits its own. The nesting depth is what chooses the branch, so this is
+/// also the test that the depth is 1 inside the body and home at the end.
+#[test]
+fn a_nested_transaction_undoes_only_its_own_writes() {
+    use digup_core::db::{Database, Error};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::open(&tmp.path().join("nesting.sqlite")).unwrap();
+    db.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+        .unwrap();
+
+    db.transaction(|| -> digup_core::db::Result<()> {
+        assert_eq!(db.transaction_depth(), 1, "the body runs at depth 1");
+        db.execute("INSERT INTO t(v) VALUES('outer')")?;
+        let inner = db.transaction(|| -> digup_core::db::Result<()> {
+            assert_eq!(
+                db.transaction_depth(),
+                2,
+                "the nested body runs one deeper (the SAVEPOINT branch)"
+            );
+            db.execute("INSERT INTO t(v) VALUES('inner')")?;
+            Err(Error::Failure("the nested body fails".to_string()))
+        });
+        assert!(inner.is_err(), "the nested error reaches its caller");
+        assert_eq!(
+            db.transaction_depth(),
+            1,
+            "and the depth is back at the outer body"
+        );
+        let seen: i64 =
+            db.conn()
+                .query_row("SELECT count(*) FROM t WHERE v = 'inner'", [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(seen, 0, "ROLLBACK TO digup1 undid the nested write");
+        Ok(())
+    })
+    .expect("the outer transaction commits");
+
+    let rows: Vec<String> = {
+        let conn = db.conn();
+        let mut stmt = conn
+            .prepare("SELECT v FROM t ORDER BY v")
+            .expect("a read-only scan of the table");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("the scan runs")
+            .map(|r| r.expect("a row"))
+            .collect()
+    };
+    assert_eq!(rows, vec!["outer".to_string()]);
+
+    // A nested block that succeeds releases its own writes into the outer transaction: they
+    // appear to the outer body, and vanish with the outer's ROLLBACK.
+    let outcome = db.transaction(|| -> digup_core::db::Result<()> {
+        let inner = db.transaction(|| -> digup_core::db::Result<()> {
+            db.execute("INSERT INTO t(v) VALUES('released')")
+        });
+        assert!(inner.is_ok(), "RELEASE digup1 keeps the nested writes");
+        let seen: i64 =
+            db.conn()
+                .query_row("SELECT count(*) FROM t WHERE v = 'released'", [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(seen, 1, "and the outer body sees them");
+        Err(Error::Failure("the outer body fails".to_string()))
+    });
+    assert!(outcome.is_err());
+    let left: i64 = db
+        .conn()
+        .query_row("SELECT count(*) FROM t", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        left, 1,
+        "the outer ROLLBACK takes the released nested write with it (Database.swift:96)"
+    );
+    assert_eq!(db.transaction_depth(), 0);
+}
