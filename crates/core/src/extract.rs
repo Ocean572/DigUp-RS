@@ -30,9 +30,13 @@ pub enum ExtractError {
 /// `excerpt(_:limit:)` — the engine's one-line preview of a match.
 pub fn excerpt(text: &str, limit: usize) -> String {
     let take = limit * 8;
-    let graphemes: Vec<&str> = text.graphemes(true).collect();
-    let has_more = graphemes.len() > take;
-    let start: String = graphemes.iter().take(take).copied().collect();
+    // Swift's `text.prefix(limit * 8)` (Extractors.swift:251) walks only the graphemes it
+    // shows, and `start.endIndex < text.endIndex` needs one more to know there was more.
+    // `graphemes(true).collect()` walked and boxed the WHOLE text per call — document
+    // chunks run to 4,000 characters, and this runs per hit on every search answer.
+    let mut graphemes = text.graphemes(true);
+    let start: String = graphemes.by_ref().take(take).collect();
+    let has_more = graphemes.next().is_some();
     let collapsed = crate::search_text::collapse_whitespace(&start);
     let line = crate::search_text::trim_whitespaces(&collapsed);
     if line.graphemes(true).count() > limit || has_more {
@@ -40,5 +44,58 @@ pub fn excerpt(text: &str, limit: usize) -> String {
         head + "…"
     } else {
         line.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExtractError;
+
+    /// The refusal texts are contract bytes: `ExtractError.description`
+    /// (Extractors.swift:11-17) is what lands in `files.detail`, shows in the UI, and
+    /// the ⑩ cross-check scenarios compare byte for byte. The multiplication sign is
+    /// U+00D7 — an ASCII "x" in `small image 30×20` passes the Rust suite alone and
+    /// fails the cross-check, so it is pinned here at the source.
+    #[test]
+    fn refusal_texts_match_the_engines_description() {
+        assert_eq!(
+            ExtractError::Unreadable {
+                why: "can't decode image".into()
+            }
+            .to_string(),
+            "unreadable: can't decode image"
+        );
+        assert_eq!(
+            ExtractError::TooSmall {
+                width: 0,
+                height: 0
+            }
+            .to_string(),
+            "small image 0\u{d7}0"
+        );
+        assert_eq!(
+            ExtractError::TooSmall {
+                width: 30,
+                height: 20
+            }
+            .to_string(),
+            "small image 30\u{d7}20",
+            "the sign is × (U+00D7), as Extractors.swift:14 spells it"
+        );
+        assert_eq!(ExtractError::Locked.to_string(), "password-protected");
+        assert_eq!(
+            ExtractError::Empty {
+                why: "no pages".into()
+            }
+            .to_string(),
+            "no pages"
+        );
+        assert_eq!(
+            ExtractError::LeftOut {
+                why: "generated code".into()
+            }
+            .to_string(),
+            "generated code"
+        );
     }
 }
