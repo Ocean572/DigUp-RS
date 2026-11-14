@@ -388,14 +388,38 @@ impl LlamaEmbedder {
     /// images for `budget` (`ImageSizing`: mtmd sees the pixels the reference saw) and cuts sound
     /// at 30 s, as the reference does. The caller frees the bitmap.
     fn load_media(&self, path: &str, image: bool, budget: i32) -> Result<*mut ffi::mtmd_bitmap> {
-        let c_path = CString::new(path).map_err(|_| Error::Llama(format!("can't open {path}")))?;
-        let wrapper = unsafe {
-            ffi::mtmd_helper_bitmap_init_from_file(
-                self.media,
-                c_path.as_ptr(),
-                false,
-                ffi::mtmd_helper_init_opt_default(),
-            )
+        // Windows shape (`LlamaEmbedder.swift:202-209`): mtmd's file variant opens the
+        // path with C `fopen`, which on Windows decodes the name in the ANSI code page —
+        // a temp folder under a Bengali user name does not open. The engine reads the
+        // bytes and hands them to `mtmd_helper_bitmap_init_from_buf`, whose file variant
+        // does exactly the same internally (`mtmd-helper.h:56-57`: "it calls
+        // mtmd_helper_bitmap_init_from_buf() internally"); this branch does the same.
+        #[cfg(windows)]
+        let wrapper = {
+            let bytes =
+                std::fs::read(path).map_err(|_| Error::Llama(format!("can't open {path}")))?;
+            unsafe {
+                ffi::mtmd_helper_bitmap_init_from_buf(
+                    self.media,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    false,
+                    ffi::mtmd_helper_init_opt_default(),
+                )
+            }
+        };
+        #[cfg(not(windows))]
+        let wrapper = {
+            let c_path =
+                CString::new(path).map_err(|_| Error::Llama(format!("can't open {path}")))?;
+            unsafe {
+                ffi::mtmd_helper_bitmap_init_from_file(
+                    self.media,
+                    c_path.as_ptr(),
+                    false,
+                    ffi::mtmd_helper_init_opt_default(),
+                )
+            }
         };
         if !wrapper.video_ctx.is_null() {
             // A video's frames and sound come through as their own files, as the engine's video
