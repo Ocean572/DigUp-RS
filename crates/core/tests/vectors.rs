@@ -26,7 +26,16 @@ fn swift_blobs_reencode_exactly() {
         return;
     }
 
-    let conn = Connection::open(&file).unwrap();
+    // READ-ONLY, as `scoring.rs` opens this fixture: the file is a user's live index (the
+    // cross-check's folder), the tests only ever read blobs from it. The measured shape
+    // is `reading_the_fixture_never_recovers_the_users_index` below: a read-write open of
+    // a crashed index (dirty `-wal`) recovers AND checkpoints as it opens and closes —
+    // the fixture's bytes move under a test that claims to read it.
+    let conn = rusqlite::Connection::open_with_flags(
+        &file,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .unwrap();
     let blobs: Vec<Vec<u8>> = conn
         .prepare("SELECT vec FROM segments WHERE vec IS NOT NULL")
         .unwrap()
@@ -141,4 +150,155 @@ fn halves_round_trip() {
             "{a} vs {b}: half precision keeps ~3 decimals"
         );
     }
+}
+
+/// The fixture open is READ-ONLY, and this is the pin that measures it: a fixture file
+/// the process cannot write. The shared Swift-built indexes of the cross-checks live on
+/// shared storage (the box's fixture folder, another uid's file), and the tests only
+/// ever read blobs out of them. With mode 0444 on the file, the body of
+/// `swift_blobs_reencode_exactly` must run; a read-write open (`O_RDWR`) dies at open
+/// with EACCES. The fixture here is written by this port — the re-encode and length
+/// assertions the body makes are encoder facts, and a unit-length vector built here
+/// exercises the same body, which is what the pin targets. (Measured 2026-11-13: the
+/// read-write open panics `unable to open database file` on the 0444 fixture.)
+/// The fixture keeps its bytes: a suite that READS a user's index must not be the one
+/// that recovers it. The shape is the engine's own crash: `Database::open` runs with
+/// `synchronous = NORMAL` (db.rs:127), so committed frames sit in `-wal` while the main
+/// database is behind — the index helper SIGKILLed by the watchdog (its `_exit(75)`)
+/// leaves exactly that on disk. The child below creates such an index and kills itself
+/// with SIGKILL, no close, no checkpoint.
+///
+/// The two opens measured against that fixture (this box, 2026-11-13):
+///
+///   * READ-ONLY: the frames are readable (SQLite builds the wal-index in heap memory —
+///     a read-only connection is barred from checkpointing by design), the blobs
+///     re-encode, and the main database is BYTE-IDENTICAL afterwards, its `-wal`
+///     standing as the crash left it;
+///   * read-write (rusqlite's `Connection::open`): opening the file takes the recovery
+///     write, and the connection's close CHECKPOINTS — the frames fold into the main
+///     database, whose bytes change. The suite silently REBUILDS the user's fixture,
+///     then reads what it just rewrote: the parity test of a file it repaired is not
+///     the parity test of the file the cross-check handed over. Measured on this box
+///     (2026-11-13, the test below with the read-write open installed): the main file
+///     grew 4,096 → 81,920 bytes and the `-wal` was truncated to 0.
+///
+/// The pin is the fixture's own bytes: unchanged by a test that only reads.
+#[cfg(unix)]
+#[test]
+fn reading_the_fixture_never_recovers_the_users_index() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let tmp = tempfile::tempdir().expect("a temp folder");
+    let dir = tmp.path().join("fixture");
+    std::fs::create_dir(&dir).expect("the fixture folder");
+
+    let exe = std::env::current_exe().expect("the test binary, re-run as the crashed writer");
+    let status = std::process::Command::new(&exe)
+        .args([
+            "--ignored",
+            "--exact",
+            "writes_the_fixture_and_dies_mid_run",
+            "--nocapture",
+        ])
+        .env("DIGUP_FIXTURE_DIR", &dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("the child starts");
+    let signal = status
+        .signal()
+        .expect("the child was killed by the signal it sent itself");
+    assert_eq!(signal, 9, "SIGKILL, as the watchdog's owner would send");
+
+    let index = dir.join(digup_core::MAIN_FILE);
+    let main_before = std::fs::read(&index).expect("the main database as the crash left it");
+    let wal = dir.join("index.sqlite-wal");
+    assert!(
+        wal.is_file() && std::fs::metadata(&wal).unwrap().len() > 0,
+        "the crash left a dirty -wal: the committed frames live there, not in the main file"
+    );
+
+    std::env::set_var("DIGUP_SWIFT_INDEX", &dir);
+    swift_blobs_reencode_exactly();
+    std::env::remove_var("DIGUP_SWIFT_INDEX");
+
+    let main_after = std::fs::read(&index).expect("the main database after the read");
+    assert_eq!(
+        main_after.len(),
+        main_before.len(),
+        "a read-only open cannot checkpoint, so the main file keeps its size; the \
+         read-write open folded the frames in (measured: 4,096 -> 81,920 bytes, -wal truncated)"
+    );
+    assert!(
+        main_after == main_before,
+        "the suite read the fixture, it did not RECOVER it: a read-write open runs WAL \
+         recovery on opening and checkpoints on close, folding the crash's frames into \
+         the user's main database ({} changed bytes)",
+        main_after
+            .iter()
+            .zip(&main_before)
+            .filter(|(a, b)| a != b)
+            .count()
+    );
+    assert!(
+        wal.is_file() && std::fs::metadata(&wal).unwrap().len() > 0,
+        "the crash's -wal stands: the next engine open resumes the run, with its counters"
+    );
+}
+
+/// The child half: create an index the crashed engine left behind — a committed vector
+/// row whose frames sit in `-wal`, the main database behind — and die by SIGKILL mid-run
+/// (the index helper's `_exit(75)` shape; `synchronous = NORMAL` writes frames to `-wal`
+/// and lets the checkpoint come, which a killed process never runs). `#[ignore]` keeps
+/// it out of a plain `cargo test` run.
+#[cfg(unix)]
+#[test]
+#[ignore = "run by reading_the_fixture_never_recovers… as a child: writes, then SIGKILL"]
+fn writes_the_fixture_and_dies_mid_run() {
+    use digup_core::{Candidate, FileKind, Modality, SegmentKind};
+    use std::collections::HashMap;
+
+    let dir = std::env::var("DIGUP_FIXTURE_DIR").expect("the fixture folder");
+    let store = digup_core::index_store::IndexStore::open(
+        std::path::Path::new(&dir),
+        digup_core::MAIN_FILE,
+    )
+    .expect("an index");
+    let file = store
+        .insert(&Candidate {
+            path: "/data/a.jpg".to_string(),
+            kind: FileKind::Image,
+            size: 10,
+            mtime: 1.0,
+            inode: 1,
+            device: 1,
+        })
+        .expect("a file row");
+    store
+        .finish(file, "done", None, HashMap::new())
+        .expect("the file is done");
+    let unit = {
+        let mut v = [0.0f32; DIMENSION];
+        v[0] = 1.0;
+        v
+    };
+    store
+        .add_segment(
+            file,
+            SegmentKind::Image,
+            Modality::Image,
+            None,
+            None,
+            Some("a unit vector"),
+            Some("a unit vector"),
+            Some(&unit),
+        )
+        .expect("a segment with a vector");
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+    unsafe {
+        // The crash: no close, no checkpoint, no atexit — the OS drops the locks and
+        // leaves the WAL exactly as the commits left it.
+        libc::kill(libc::getpid(), libc::SIGKILL);
+    }
+    std::process::exit(0); // not reached: SIGKILL has no handler
 }

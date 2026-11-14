@@ -25,6 +25,8 @@ regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# the vectors fixture test SIGKILLs its own child (the watchdog's crash shape)
+libc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { workspace = true }
