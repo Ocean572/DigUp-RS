@@ -6,6 +6,7 @@
 //! (`mark`, `setFolder`, `folders`, `effectiveSkips`, `searchedAs`) land with
 //! the shell port, which is what shows the checkboxes.
 
+use crate::paths::is_inside;
 use crate::rules::SKIPPED_FOLDER_NAMES;
 
 /// Whether `path` (a folder or a file) is searched by `folders` minus `skipped`
@@ -35,14 +36,4 @@ pub fn reaches(path: &str, from: &str) -> bool {
     !path[cut..].split('/').any(|part| {
         part.starts_with('.') || part.ends_with(".noindex") || SKIPPED_FOLDER_NAMES.contains(&part)
     })
-}
-
-/// `path` is inside `folder` (`isInside(_:_:)`, :104).
-pub fn is_inside(path: &str, folder: &str) -> bool {
-    let bound = if folder.ends_with('/') {
-        folder.to_string()
-    } else {
-        format!("{folder}/")
-    };
-    path.starts_with(&bound)
 }

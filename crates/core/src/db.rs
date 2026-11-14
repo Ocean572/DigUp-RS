@@ -31,10 +31,6 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub fn ok<T>(v: T) -> Result<T> {
-    Ok(v)
-}
-
 /// Bind value, mirroring `SQLValue` (Database.swift:111): int / double / text / blob / null.
 pub enum Sql {
     Int(i64),

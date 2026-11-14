@@ -48,9 +48,19 @@ pub fn parent(path: &str) -> String {
     }
 }
 
-/// `FolderSelection.isInside`: is `path` a path under `folder`?
+/// `FolderSelection.isInside`: is `path` a path under `folder`? The workspace's ONE
+/// implementation (the engine spells it once, FolderSelection.swift:107): the prefix is the
+/// folder with its trailing slash kept, or one slash appended — so a folder is never inside
+/// itself ("a" is not under "a/"), and the filesystem root IS inside itself ("/" carries
+/// its own slash, and `files_under`'s covering rule uses that exactly as
+/// IndexStore.swift:607 does).
 pub fn is_inside(path: &str, folder: &str) -> bool {
-    path.starts_with(&format!("{}/", folder.trim_end_matches('/')))
+    let bound = if folder.ends_with('/') {
+        folder.to_string()
+    } else {
+        format!("{folder}/")
+    };
+    path.starts_with(&bound)
 }
 
 /// `FolderSelection.realPath` (FolderSelection.swift:116-124): the realpath of a path, the
@@ -247,7 +257,7 @@ pub fn home() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::real_path;
+    use super::{is_inside, real_path};
 
     /// The engine's fallback (`guard let real = realpath(path, nil) else { return path }`,
     /// FolderSelection.swift:120): a path the system cannot resolve keeps its own spelling,
@@ -264,6 +274,32 @@ mod tests {
     /// where the root says `/var/folders/…`, and `path_ranges` needs both spellings
     /// (IndexStore.swift:100-103). Compared against the target's own realpath so the
     /// platform's own `/tmp` → `/private/tmp` style rule is on both sides.
+    /// `FolderSelection.isInside` (FolderSelection.swift:107-109), pinned at the shapes
+    /// the workspace's callers depend on. The prefix is `folder` when it ends with `/`
+    /// and `folder + "/"` otherwise — which is what makes a folder NOT inside itself
+    /// ("a" does not start with "a/") while the filesystem root IS inside itself ("/"
+    /// carries its own slash, and `files_under`'s covering rule reads that exactly as
+    /// IndexStore.swift:607 does), and what makes a double-slash spelling refuse a
+    /// plain path ("a/x" is not under "a//").
+    #[test]
+    fn inside_follows_the_prefix_rule() {
+        assert!(is_inside("/data/in/a.jpg", "/data"));
+        assert!(is_inside("/data/in/a.jpg", "/data/"));
+        assert!(is_inside("/data/x//y", "/data/x//"));
+        assert!(
+            !is_inside("/data", "/data"),
+            "a folder is not inside itself: the prefix carries the slash the path lacks"
+        );
+        assert!(
+            !is_inside("/data/a.jpg", "/data//"),
+            "the hasSuffix branch: a doubled-slash folder demands the doubled spelling"
+        );
+        assert!(
+            is_inside("/", "/"),
+            "the root carries its own slash; `files_under` skips a listed root it covers (607)"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_symlink_is_answered_by_its_target() {

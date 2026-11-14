@@ -385,7 +385,10 @@ PRAGMA user_version = 5;"
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for root in roots {
-            if roots.iter().any(|other| is_inside(root, other)) {
+            if roots
+                .iter()
+                .any(|other| crate::paths::is_inside(root, other))
+            {
                 continue;
             }
             for range in path_ranges(root) {
@@ -904,7 +907,6 @@ PRAGMA user_version = 5;"
     /// again until it changes (`markStopped`, IndexStore.swift:832). A long file that was
     /// being finished keeps what was read of it — `partial` closes to `done` with the
     /// note; anything else becomes `failed`. False when no file has that path.
-    #[allow(dead_code)] // lands with the index-service daemon (Phase 3)
     pub fn mark_stopped(&self, path: &str, why: &str) -> Result<bool> {
         let mut found: Option<(i64, String)> = None;
         self.db.query(
@@ -1065,20 +1067,6 @@ fn folder_text(path: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// `FolderSelection.isInside(a, b)`: `a` sits strictly under `b` (a folder inside another listed is
-/// already covered).
-fn is_inside(a: &str, b: &str) -> bool {
-    if a == b {
-        return false;
-    }
-    let prefix = if b.ends_with('/') {
-        b.to_string()
-    } else {
-        format!("{b}/")
-    };
-    a.starts_with(&prefix)
 }
 
 /// Writes the merged ranges of one scope table in one transaction (IndexStore.swift:57). Multi-row
