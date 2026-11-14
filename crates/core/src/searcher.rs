@@ -332,19 +332,6 @@ impl Default for SearchOptions<'_> {
     }
 }
 
-/// One searchable stretch's row as `reload` reads it (the vector blob and the scale flags).
-struct VectorRow {
-    segment: i64,
-    file: i64,
-    modality: String,
-    vec: Option<Vec<u8>>,
-    kind: String,
-    loc_is_null: bool,
-    loc: f64,
-    file_kind: String,
-    pages: i64,
-}
-
 /// The hybrid searcher (Searcher.swift:31): meaning + words over one index. `is_code`
 /// is the code index's searcher — `IndexStore.codeFile` decides, as in the engine.
 pub struct Searcher<'a> {
@@ -411,56 +398,62 @@ impl<'a> Searcher<'a> {
             return Ok(());
         };
         let steps = IndexOptions::default();
-        let mut staged: Vec<VectorRow> = Vec::new();
+        // Streamed, as `Searcher.swift:74` does (`row.copyBlob(3, to: matrix.halves + row * dim, …)`
+        // inside the query callback): the rows are written into the matrix and the side arrays
+        // as they arrive, so the peak of a vector load is the matrix itself. Staging every
+        // row first (`Vec<VectorRow>`: a 1,536-byte blob plus three Strings per row) doubled
+        // the transient — ~350 MB alive at once on 100 k vectors, in the searcher daemon that
+        // prewarms for 20-30 s at boot and is the long-lived process on a shared box.
+        //
+        // The fields are taken out for the query because the closure writes them while
+        // `self.store` is borrowed to read; `matrix` and the counters are locals.
+        let mut row_file = std::mem::take(&mut self.row_file);
+        let mut row_segment = std::mem::take(&mut self.row_segment);
+        let mut row_modality = std::mem::take(&mut self.row_modality);
+        let mut row_sets_scale = std::mem::take(&mut self.row_sets_scale);
         self.store.db.query(
             "SELECT s.id, s.file, s.modality, s.vec, s.kind, s.loc, f.kind, CAST(json_extract(f.info, '$.pages') AS INTEGER) \
              FROM segments s JOIN files f ON f.id = s.file WHERE s.vec IS NOT NULL ORDER BY s.id",
             [],
             |row| {
-                staged.push(VectorRow {
-                    segment: row.int(0),
-                    file: row.int(1),
-                    modality: row.text(2).unwrap_or_default(),
-                    vec: row.blob(3),
-                    kind: row.text(4).unwrap_or_default(),
-                    loc_is_null: row.is_null(5),
-                    loc: row.double(5),
-                    file_kind: row.text(6).unwrap_or_default(),
-                    pages: row.int(7),
-                });
+                // Swift's guard `rowFile.count < rows, copyBlob(…)`: a full matrix is done;
+                // a blob that is not a vector is dropped (the row is NOT appended, the next
+                // row fills this matrix row).
+                if row_file.len() >= rows {
+                    return Ok(());
+                }
+                let Some(bytes) = row.blob(3) else {
+                    return Ok(());
+                };
+                if !matrix.set_row(row_file.len(), &bytes) {
+                    return Ok(());
+                }
+                let modality = row.text(2).unwrap_or_default();
+                let kind = row.text(4).unwrap_or_default();
+                let file_kind = row.text(6).unwrap_or_default();
+                let pages = row.int(7);
+                let loc_is_null = row.is_null(5);
+                let loc = row.double(5);
+                row_file.push(row.int(1));
+                row_segment.push(row.int(0));
+                row_modality.push(Modality::parse(&modality).unwrap_or(Modality::None));
+                // Past the first step of a long PDF (its pages) or document (its chunks).
+                let place = if loc_is_null { 0 } else { loc.trunc() as i64 };
+                let later = if file_kind == "pdf" {
+                    kind != SegmentKind::Chunk.as_str()
+                        && pages > steps.big_pdf_pages
+                        && place > steps.pdf_step
+                } else {
+                    kind == SegmentKind::Chunk.as_str() && place > steps.doc_step
+                };
+                row_sets_scale.push(!later);
                 Ok(())
             },
         )?;
-        for r in staged {
-            // Swift's guard `rowFile.count < rows, copyBlob(…)`: a full matrix is done;
-            // a blob that is not a vector is dropped (the row is NOT appended, the next
-            // row fills this matrix row).
-            if self.row_file.len() >= rows {
-                continue;
-            }
-            let Some(bytes) = &r.vec else { continue };
-            if !matrix.set_row(self.row_file.len(), bytes) {
-                continue;
-            }
-            self.row_file.push(r.file);
-            self.row_segment.push(r.segment);
-            self.row_modality
-                .push(Modality::parse(&r.modality).unwrap_or(Modality::None));
-            // Past the first step of a long PDF (its pages) or document (its chunks).
-            let place = if r.loc_is_null {
-                0
-            } else {
-                r.loc.trunc() as i64
-            };
-            let later = if r.file_kind == "pdf" {
-                r.kind != SegmentKind::Chunk.as_str()
-                    && r.pages > steps.big_pdf_pages
-                    && place > steps.pdf_step
-            } else {
-                r.kind == SegmentKind::Chunk.as_str() && place > steps.doc_step
-            };
-            self.row_sets_scale.push(!later);
-        }
+        self.row_file = row_file;
+        self.row_segment = row_segment;
+        self.row_modality = row_modality;
+        self.row_sets_scale = row_sets_scale;
         self.matrix = Some(matrix);
         self.vectors_loaded = true;
         Ok(())
@@ -943,5 +936,304 @@ impl<'a> Searcher<'a> {
             });
         }
         Ok(hits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Candidate, Modality, SegmentKind};
+
+    fn candidate(path: &str, kind: FileKind) -> Candidate {
+        Candidate {
+            path: path.to_string(),
+            kind,
+            size: 100,
+            mtime: 1.0,
+            inode: 7,
+            device: 3,
+        }
+    }
+
+    fn vector(value: f32) -> [f32; 768] {
+        [value; 768]
+    }
+
+    /// The streamed vector load (`reload`), pinned at the two rules the loop implements:
+    ///
+    /// * a blob that is not a vector is DROPPED, the row is not appended, and the next row
+    ///   takes the matrix slot it left (`Searcher.swift:74`'s guard + `copyBlob`), so the
+    ///   matrix rows and the side arrays stay index-aligned with a short blob in the middle
+    ///   of the crawl order;
+    /// * the scale flags: the FIRST step of a long PDF (page 5 of a 145-page book, step 30)
+    ///   and of a long document (chunk 1, step 40) is scale-corrected, and everything past
+    ///   the first step is not — a page 61's vector was made alone, so z must not compare it
+    ///   as part of the file's scale.
+    #[test]
+    fn reload_drops_a_short_blob_and_flags_the_rows_past_the_first_step() {
+        let tmp = tempfile::tempdir().expect("a temp folder");
+        let store = IndexStore::open(tmp.path(), crate::MAIN_FILE).expect("an index");
+
+        let photo = store
+            .insert(&candidate("/data/a.jpg", FileKind::Image))
+            .unwrap();
+        store
+            .finish(photo, "done", None, HashMap::new())
+            .expect("the photo is done");
+        for (kind, modality, excerpt, value) in [
+            (SegmentKind::Image, Modality::Image, "good image", 0.5f32),
+            (SegmentKind::Ocr, Modality::Text, "good ocr", 0.25),
+            (SegmentKind::Image, Modality::Image, "broken blob", 0.125),
+        ] {
+            store
+                .add_segment(
+                    photo,
+                    kind,
+                    modality,
+                    None,
+                    None,
+                    Some(excerpt),
+                    Some(excerpt),
+                    Some(&vector(value)),
+                )
+                .expect("a segment");
+        }
+        // A 3-byte blob in the middle of the id order: the engine's `copyBlob` guard drops it.
+        store
+            .db
+            .run(
+                "UPDATE segments SET vec = ? WHERE excerpt = ?",
+                [Sql::Blob(vec![1u8, 2, 3]), Sql::Text("broken blob".into())],
+            )
+            .expect("the blob is made too short to be a vector");
+
+        let book = store
+            .insert(&candidate("/data/books/long.pdf", FileKind::Pdf))
+            .unwrap();
+        store
+            .finish(
+                book,
+                "partial",
+                Some("read to page 60"),
+                [("pages".to_string(), "145".to_string())]
+                    .into_iter()
+                    .collect(),
+            )
+            .expect("the book is partial");
+        for page in [5.0, 61.0] {
+            store
+                .add_segment(
+                    book,
+                    SegmentKind::Page,
+                    Modality::Text,
+                    Some(page),
+                    Some(page),
+                    Some("page words"),
+                    Some("page words"),
+                    Some(&vector(0.2)),
+                )
+                .expect("a page");
+        }
+
+        let notes = store
+            .insert(&candidate("/data/notes/big.txt", FileKind::Doc))
+            .unwrap();
+        store
+            .finish(notes, "partial", None, HashMap::new())
+            .expect("the document is partial");
+        for chunk in [1.0, 45.0] {
+            store
+                .add_segment(
+                    notes,
+                    SegmentKind::Chunk,
+                    Modality::Text,
+                    Some(chunk),
+                    Some(chunk),
+                    Some("chunk words"),
+                    Some("chunk words"),
+                    Some(&vector(0.2)),
+                )
+                .expect("a chunk");
+        }
+
+        let searcher = Searcher::new(&store, true).expect("the searcher loads");
+        // The rowids: files 1, 2, 3 (photo, book, notes); the photo's segments 2,3,4 — 4
+        // carries the short blob — then pages 6,7 and chunks 9,10.
+        assert_eq!(
+            searcher.vector_count(),
+            6,
+            "the short blob is not in the matrix"
+        );
+        assert_eq!(
+            searcher.row_segment,
+            vec![2, 3, 6, 7, 9, 10],
+            "segment 4 is dropped, and segment 6 fills the matrix slot it left — the side \
+             arrays stay aligned with the matrix rows, which is what the streaming loop writes"
+        );
+        assert_eq!(
+            searcher.row_file,
+            vec![1, 1, 2, 2, 3, 3],
+            "each matrix row's file rides with it"
+        );
+        assert_eq!(
+            searcher.row_sets_scale,
+            vec![true, true, true, false, true, false],
+            "the first step of a long file is scale-corrected; page 61 of 145 and chunk 45 are not"
+        );
+        assert_eq!(
+            searcher.row_modality,
+            vec![
+                Modality::Image,
+                Modality::Text,
+                Modality::Text,
+                Modality::Text,
+                Modality::Text,
+                Modality::Text
+            ],
+            "the modality column rides along with the matrix row"
+        );
+
+        let mut searcher = searcher;
+        searcher.release_vectors();
+        assert_eq!(
+            searcher.vector_count(),
+            0,
+            "releaseVectors empties the matrix"
+        );
+        searcher.reload().expect("and reload loads it again");
+        assert_eq!(
+            searcher.vector_count(),
+            6,
+            "the same six rows, in the same order"
+        );
+    }
+
+    /// The child half of `the_vector_load_peaks_at_the_matrix`: open the index the parent
+    /// built, load its vectors, and print the process's high-water mark. A fresh process is
+    /// the point — `VmHWM` is the peak of everything that ran before it, so a child that
+    /// builds the fixture and loads it in one process measures the fixture, not the load.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "run by the_vector_load_peaks_at_the_matrix as a child: loads, then reports VmHWM"]
+    fn loads_the_vectors_of_the_index_it_is_given() {
+        let dir = std::env::var("DIGUP_PEAK_DB").expect("the index folder to load");
+        println!("BEFORE {}", peak_kilobytes());
+        let store =
+            IndexStore::open(std::path::Path::new(&dir), crate::MAIN_FILE).expect("an index");
+        let searcher = Searcher::new(&store, true).expect("the load runs");
+        println!("ROWS {}", searcher.vector_count());
+        println!("PEAK {}", peak_kilobytes());
+    }
+
+    /// The kernel's own high-water mark of this process (`VmHWM` in `/proc/self/status`).
+    #[cfg(target_os = "linux")]
+    fn peak_kilobytes() -> usize {
+        std::fs::read_to_string("/proc/self/status")
+            .expect("/proc/self/status")
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("VmHWM:")
+                    .and_then(|tail| tail.trim().trim_end_matches(" kB").parse::<usize>().ok())
+            })
+            .expect("the kernel's high-water mark")
+    }
+
+    /// The load's peak, measured in a process whose only work is the load: 8,192 segments of
+    /// real 1,536-byte float16 vectors is a 12.6 MB matrix, and the window must cost the
+    /// matrix plus a few MB of reader, not twice that. The shape at `audit-base` staged every
+    /// row first (`Vec<VectorRow>`: the blob, three Strings and the fields per row, with `Vec`
+    /// doubling on the way up), which is the searcher daemon's boot cost on top of a matrix
+    /// that is already the index's size — on the 3M-segment class of indexes, hundreds of MB.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_vector_load_peaks_at_the_matrix() {
+        use std::io::BufRead;
+
+        let rows: usize = 8_192;
+        let tmp = tempfile::tempdir().expect("a temp folder");
+        let store = IndexStore::open(tmp.path(), crate::MAIN_FILE).expect("an index");
+        let value = vector(0.5);
+        store
+            .db
+            .transaction(|| {
+                for n in 0..rows {
+                    let file = store
+                        .insert(&candidate(
+                            &format!("/data/pictures/{n}.jpg"),
+                            FileKind::Image,
+                        ))
+                        .expect("a file");
+                    store
+                        .finish(file, "done", None, HashMap::new())
+                        .expect("done");
+                    store
+                        .add_segment(
+                            file,
+                            SegmentKind::Image,
+                            Modality::Image,
+                            None,
+                            None,
+                            Some("a picture"),
+                            Some("a picture"),
+                            Some(&value),
+                        )
+                        .expect("a vector");
+                }
+                Ok(())
+            })
+            .expect("the fixture is built");
+        drop(store);
+
+        let mut child = std::process::Command::new(
+            std::env::current_exe().expect("the test binary, re-run as the loader"),
+        )
+        .args([
+            "--ignored",
+            "--exact",
+            "searcher::tests::loads_the_vectors_of_the_index_it_is_given",
+            "--nocapture",
+        ])
+        .env("DIGUP_PEAK_DB", tmp.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the loader child starts");
+        let reader = std::io::BufReader::new(child.stdout.take().expect("the child's stdout"));
+        let (mut before, mut peak) = (None, None);
+        for line in reader.lines() {
+            let line = line.expect("a line of the child's report");
+            if let Some(tail) = line.strip_prefix("BEFORE ") {
+                before = Some(tail.parse::<usize>().expect("a kilobyte count"));
+            }
+            if let Some(tail) = line.strip_prefix("PEAK ") {
+                peak = Some(tail.parse::<usize>().expect("a kilobyte count"));
+            }
+        }
+        let status = child.wait().expect("the child finished");
+        let (before, peak) = (
+            before.expect("the child reported its base"),
+            peak.expect("the child reported its peak"),
+        );
+        assert!(status.success(), "the loader child exited cleanly");
+
+        let matrix = rows * 768 * 2; // float16 halves; scored as float32
+                                     // The window's own floor is TWO matrix sizes: the vectors are read through the
+                                     // 1 GiB mmap (`db::MMAP_SIZE`), so touching the file's pages costs a second copy of
+                                     // the blobs, and SQLite's pages and the allocator add 12 MB on top. Measured on this
+                                     // box with this fixture and the same child shape: the streamed load costs 33,208 kB
+                                     // above the child's 4,296 kB base; the shape at `audit-base`, which staged every row
+                                     // (`Vec<VectorRow>`: the 1,536-byte blob, three Strings, and `Vec` doubling on the way
+                                     // up) before writing the matrix, costs 46,712 kB — 13,504 kB for 8,192 rows, 1.7 kB
+                                     // each, exactly the staged row's footprint. The pin is the difference.
+        let floor = matrix / 1024 * 2 + (12 << 10);
+        let grew = peak.saturating_sub(before);
+        assert!(
+            grew <= floor,
+            "loading {rows} vectors cost {grew} kB on top of the child's {before} kB base; the \
+             matrix is {} kB and the window's floor (file pages through the mmap, SQLite's \
+             pages, the allocator) is {floor} kB — the rows were staged beside the matrix, \
+             where the engine copies each blob straight into it (Searcher.swift:74)",
+            matrix / 1024
+        );
     }
 }
