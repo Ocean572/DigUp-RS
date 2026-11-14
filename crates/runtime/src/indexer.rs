@@ -742,19 +742,27 @@ impl Indexer {
             }
             FileKind::Pdf => {
                 // Long PDFs (books) get their first pages now and the rest after everything
-                // else. The range the closure picked is pre-computed with the page count.
-                let total_guess = pdf::pages_of(&url);
-                let wanted = prepared.step.clone().unwrap_or(
-                    if (total_guess as i64) > options.big_pdf_pages {
-                        0..options.pdf_step as usize
-                    } else {
-                        0..options.max_pages as usize
-                    },
-                );
-                let wanted = clamped(wanted, options.max_pages as usize);
-                match pdf::pages(
+                // else. The step range is PLANNED FROM THE DOCUMENT'S REAL TOTAL inside the
+                // one read that reads the pages (Swift's `range: { total in … }`,
+                // Indexer.swift:434-438): the audit-base opened the PDF twice per prepare
+                // — `pages_of` for the count, then the pages — and a book re-prepares for
+                // every step, so the extra full parse recurs per step.
+                let step = prepared.step.clone();
+                let big = options.big_pdf_pages;
+                let pdf_step = options.pdf_step as usize;
+                let max_pages = options.max_pages as usize;
+                let mut wanted = 0..0usize;
+                match pdf::pages_with_range(
                     &url,
-                    wanted.clone(),
+                    |total| {
+                        let raw = step.clone().unwrap_or(if (total as i64) > big {
+                            0..pdf_step
+                        } else {
+                            0..max_pages
+                        });
+                        wanted = clamped(raw, max_pages);
+                        wanted.clone()
+                    },
                     options.min_page_text as usize,
                     1400,
                     folder,

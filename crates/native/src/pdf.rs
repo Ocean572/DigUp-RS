@@ -351,8 +351,27 @@ pub fn pages(
     render_pixels: usize,
     folder: &Path,
 ) -> Result<(Vec<Page>, usize, Option<String>), ExtractError> {
+    pages_with_range(url, move |_| range, min_text, render_pixels, folder)
+}
+
+/// `PDFExtractor.pages(of:range:)` with the range PLANED BY THE DOCUMENT'S REAL TOTAL —
+/// Swift's `range: { total in … }` closure (Indexer.swift:434-438) computes which pages to
+/// read inside the one document read that reads them. A fixed range is the plan that ignores
+/// the total; the indexer's prepare uses the planning shape: a long book's step is chosen
+/// from the page count, and the audit-base read the count through a SEPARATE open
+/// (`pages_of`) before the pages open — two full `FPDF_LoadCustomDocument` parses per
+/// prepare, and a book's later steps re-prepare per step, so the extra parse recurs with
+/// every step.
+pub fn pages_with_range(
+    url: &Path,
+    plan: impl FnOnce(usize) -> std::ops::Range<usize>,
+    min_text: usize,
+    render_pixels: usize,
+    folder: &Path,
+) -> Result<(Vec<Page>, usize, Option<String>), ExtractError> {
     with_document(url, |document| {
         let total = unsafe { FPDF_GetPageCount(document) }.max(0) as usize;
+        let range = plan(total);
         // `.clamped(to: 0..<total)`: a range past the last page reads to it, an empty one reads none.
         let from = range.start.min(total);
         let to = range.end.min(total);
