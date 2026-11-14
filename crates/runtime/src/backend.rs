@@ -39,8 +39,18 @@ impl LlamaLog {
     }
 
     /// `send(to:)`: nil sends the log to stderr.
+    ///
+    /// `unwrap_or_else(into_inner)` everywhere below, NOT `unwrap()`: `write` is called
+    /// from INSIDE llama.cpp (`log_sink` is an `unsafe extern "C"` callback) — a panic
+    /// there unwinds across the C boundary, which is undefined behavior (an abort with
+    /// the model half-loaded, the run past the caller's `catch`). A poisoned lock is a
+    /// *record* of a panic on some other thread; `LogState` is plain data (a `File` and
+    /// a level), no multi-field invariant a panic could leave broken, so the right move
+    /// is to take the data and carry on logging, exactly as an NSLock-based Swift
+    /// `LlamaLog` carries on (Swift has no lock poisoning at all — the engine cannot
+    /// poison, the port can).
     fn send(&self, url: Option<&Path>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         drop(state.file.take());
         let Some(url) = url else { return };
         if !url.exists() {
@@ -54,7 +64,7 @@ impl LlamaLog {
     /// One of our own lines.
     fn line(&self, message: &str) {
         let text = format!("[llama.cpp worker] {message}\n");
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match state.file.as_mut() {
             Some(file) => {
                 let _ = file.write_all(text.as_bytes());
@@ -68,7 +78,7 @@ impl LlamaLog {
 
     /// A line from llama.cpp itself: only WARN and above, with `CONT` continuing at its level.
     fn write(&self, level: u32, text: &str) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if level != ffi::ggml_log_level_GGML_LOG_LEVEL_CONT {
             state.level = level;
         }
@@ -239,4 +249,37 @@ unsafe fn load_backends() {
         ""
     };
     LOG.line(&format!("backends: {}{suffix}", backend_summary()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LlamaLog, LOG};
+
+    /// The FFI hygiene the fix is about: a panic on a thread that HOLDS the log's lock
+    /// poisons it, and the audit-base `unwrap()` in `write`/`line` then panicked —
+    /// inside the `unsafe extern "C"` `log_sink`, unwinding across the C boundary llama.cpp
+    /// called through (UB; the engine's Swift `LlamaLog` has no poison state to reach).
+    /// The pins: after the poison, the log must take its data and carry on — the mutex
+    /// `into_inner` path — and not panic. (Measures the FIXED shape; the audit-base
+    /// `unwrap()` aborts this test process, which no libtest run can report.)
+    #[test]
+    fn the_log_survives_a_poisoned_state_lock() {
+        let poison = std::thread::spawn(|| {
+            let _state = LOG.state.lock().expect("the log lock, fresh");
+            panic!("the log's writer died holding the lock");
+        });
+        let _ = poison.join(); // the panic poisons; join swallows it
+        assert!(
+            LOG.state.lock().is_err(),
+            "the poison landed: the lock is poisoned"
+        );
+        // The callback path (what llama.cpp calls) and our own line: both must log,
+        // not panic.
+        LOG.send(None);
+        LOG.write(
+            crate::ffi::ggml_log_level_GGML_LOG_LEVEL_ERROR,
+            "logged after the poison\n",
+        );
+        LlamaLog::new(); // shape check: the type is still constructible
+    }
 }
