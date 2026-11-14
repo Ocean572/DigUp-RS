@@ -813,9 +813,7 @@ fn files_under_skips_covered_roots_and_answers_each_file_once() {
     let tmp = tempfile::tempdir().unwrap();
     let store = open(tmp.path(), digup_core::MAIN_FILE);
     for path in ["/data/a.jpg", "/data/in/b.jpg", "/other/c.jpg"] {
-        store
-            .insert(&cand(path, FileKind::Image))
-            .unwrap();
+        store.insert(&cand(path, FileKind::Image)).unwrap();
     }
 
     let mut paths: Vec<String> = store

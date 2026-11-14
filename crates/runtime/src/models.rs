@@ -40,10 +40,17 @@ impl ModelFiles {
     /// In download order.
     pub const ALL: [ModelFile; 2] = [Self::TEXT, Self::MEDIA];
 
-    /// Hugging Face's address for this file at the pinned revision.
+    /// Hugging Face's address for this file at the pinned revision — the `resolve`
+    /// route, as `ModelFiles.swift:23` spells it
+    /// (`https://huggingface.co/<repo>/resolve/<rev>/<name>`). Measured on this box
+    /// 2026-11-13: `/<repo>/<rev>/<file>` answers **404** (52,885 bytes of text/html —
+    /// the web UI's "not found" page), `/<repo>/resolve/<rev>/<file>` answers **200**,
+    /// `application/octet-stream`, content-length 309,855,456 — the file. Without
+    /// `resolve`, `download-model` downloads an HTML page into the models folder,
+    /// the sha256 gate rejects it, and the helper dies on the model it never fetched.
     pub fn url(file: &ModelFile) -> String {
         format!(
-            "https://huggingface.co/{}/{}/{}",
+            "https://huggingface.co/{}/resolve/{}/{}",
             Self::REPOSITORY,
             Self::REVISION,
             file.name
@@ -203,5 +210,56 @@ fn application_support() -> PathBuf {
         env_dir("XDG_DATA_HOME")
             .map(|dir| dir.join("digup"))
             .unwrap_or_else(|| home().join(".local/share/digup"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelFiles;
+
+    /// The download URL is a wire contract: `ModelFiles.swift:23` builds
+    /// `https://huggingface.co/<repo>/resolve/<rev>/<name>`, and the SHA is a
+    /// hex-only block (`[0-9a-f]{40}`, ModelFiles.swift) — the one spelling the
+    /// Hugging Face CDN serves. Measured on this box 2026-11-13:
+    ///
+    ///   /<repo>/<rev>/embeddinggemma-2-Q8_0.gguf ......... 404, 52,885 B text/html
+    ///   /<repo>/resolve/<rev>/embeddinggemma-2-Q8_0.gguf  200, application/
+    ///                                                        octet-stream, 309,855,456 B
+    ///
+    /// Without `resolve` the verb downloads the web UI's not-found page into the
+    /// models folder, the sha256 gate rejects it, and `download-model` dies on a
+    /// model it never fetched. Pinned at the source, byte for byte, for both files.
+    #[test]
+    fn the_download_url_is_the_resolve_route() {
+        for file in &ModelFiles::ALL {
+            let url = ModelFiles::url(file);
+            let expected = format!(
+                "https://huggingface.co/{}/resolve/{}/{}",
+                ModelFiles::REPOSITORY,
+                ModelFiles::REVISION,
+                file.name
+            );
+            assert_eq!(url, expected, "the download URL is Swift's URL: {url}");
+            assert!(
+                url.contains("/resolve/"),
+                "the CDN serves files only on the resolve route: {url}"
+            );
+            // The revision is the pinned commit hash: hex, 40 characters, no ref name.
+            let rev = ModelFiles::REVISION;
+            assert_eq!(rev.len(), 40);
+            assert!(rev.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+        // Both models, exact — the strings the `download-model` verb puts on curl's argv
+        // (crates/cli/src/main.rs: `ModelFiles::url(file)`).
+        assert_eq!(
+            ModelFiles::url(&ModelFiles::TEXT),
+            "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/\
+bfcd298762cc34d0357ece5ebdd31791a3a374d8/embeddinggemma-2-Q8_0.gguf"
+        );
+        assert_eq!(
+            ModelFiles::url(&ModelFiles::MEDIA),
+            "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/\
+bfcd298762cc34d0357ece5ebdd31791a3a374d8/mmproj-embeddinggemma-2-Q8_0.gguf"
+        );
     }
 }
