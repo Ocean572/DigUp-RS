@@ -2326,7 +2326,10 @@ mod tests {
             let owned: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
             parse(&owned).map(|args| args.store_file())
         };
-        assert_eq!(store_of(&["index", "some-folder"]), Ok(digup_core::MAIN_FILE));
+        assert_eq!(
+            store_of(&["index", "some-folder"]),
+            Ok(digup_core::MAIN_FILE)
+        );
         assert_eq!(
             store_of(&["index", "some-folder", "--code"]),
             Ok(digup_core::CODE_FILE)
@@ -2335,7 +2338,10 @@ mod tests {
             store_of(&["status", "--index", "/tmp/idx", "--code"]),
             Ok(digup_core::CODE_FILE)
         );
-        assert_eq!(store_of(&["status", "--index", "/tmp/idx"]), Ok(digup_core::MAIN_FILE));
+        assert_eq!(
+            store_of(&["status", "--index", "/tmp/idx"]),
+            Ok(digup_core::MAIN_FILE)
+        );
     }
 
     /// The number shapes are pinned from probing Swift 6.4's `JSONSerialization`

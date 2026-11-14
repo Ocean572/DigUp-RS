@@ -40,11 +40,9 @@ fn meta(store: &Path, file: &str, key: &str) -> Option<String> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .expect("the store opens read-only");
-    db.query_row(
-        "SELECT value FROM meta WHERE key = ?1",
-        [key],
-        |row| row.get::<_, String>(0),
-    )
+    db.query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| {
+        row.get::<_, String>(0)
+    })
     .ok()
 }
 
@@ -60,15 +58,21 @@ fn row_count(store: &Path, file: &str) -> i64 {
 
 #[test]
 fn code_indexing_is_the_code_stores_own_run() {
-    if LlamaModels::locate().map(|models| models.media.is_none()).unwrap_or(true) {
+    if LlamaModels::locate()
+        .map(|models| models.media.is_none())
+        .unwrap_or(true)
+    {
         eprintln!("skipped: the pinned model files are not installed (docs/implementation/gpu-handoff.md).");
         return;
     }
     let work = tempfile::tempdir().expect("a work folder");
     let corpus = work.path().join("corpus");
     std::fs::create_dir_all(&corpus).expect("the corpus folder");
-    std::fs::write(corpus.join("notes.txt"), "alpha beta\nretry the gateway twice\n")
-        .expect("notes.txt");
+    std::fs::write(
+        corpus.join("notes.txt"),
+        "alpha beta\nretry the gateway twice\n",
+    )
+    .expect("notes.txt");
     std::fs::write(corpus.join("list.txt"), "one two three\n").expect("list.txt");
     let corpus = corpus.to_string_lossy().into_owned();
     let store = work.path().join("index");

@@ -52,11 +52,21 @@ impl Embedder for Fake {
     fn embed_texts(&self, texts: &[String]) -> digup_runtime::Result<Vec<Vec<f32>>> {
         Ok(vec![vec![0.0; 768]; texts.len()])
     }
-    fn embed_images(&self, paths: &[String], _budget: i32) -> digup_runtime::Result<Vec<Embedding>> {
-        Ok(paths.iter().map(|_| Embedding::made(vec![0.0; 768])).collect())
+    fn embed_images(
+        &self,
+        paths: &[String],
+        _budget: i32,
+    ) -> digup_runtime::Result<Vec<Embedding>> {
+        Ok(paths
+            .iter()
+            .map(|_| Embedding::made(vec![0.0; 768]))
+            .collect())
     }
     fn embed_audio(&self, paths: &[String]) -> digup_runtime::Result<Vec<Embedding>> {
-        Ok(paths.iter().map(|_| Embedding::made(vec![0.0; 768])).collect())
+        Ok(paths
+            .iter()
+            .map(|_| Embedding::made(vec![0.0; 768]))
+            .collect())
     }
     fn close(&mut self) {}
 }
@@ -79,7 +89,10 @@ fn info_answers_from_the_shape_and_allocates_nothing_per_call() {
     let builds = Arc::new(Mutex::new(Vec::new()));
     let model = seam(&builds);
     let kept = model.embedder().expect("a text-only model starts");
-    assert!(kept.info().text_only, "a run that wants no media pays for none");
+    assert!(
+        kept.info().text_only,
+        "a run that wants no media pays for none"
+    );
 
     let before = footprint().expect("/proc/self/statm is readable on Linux");
     let mut seen = 0usize;
@@ -118,7 +131,10 @@ fn a_media_call_buys_the_encoders_once_and_text_calls_keep_them() {
     // shape on the spot (#155) — and the answer says so.
     kept.embed_images(&["/var/tmp/a/page-3.jpg".to_string()], 1)
         .expect("the media call runs on the full model");
-    assert!(!kept.info().text_only, "a media call brings the encoders in");
+    assert!(
+        !kept.info().text_only,
+        "a media call brings the encoders in"
+    );
     assert_eq!(
         counts(&builds),
         (2, 1),
@@ -139,7 +155,9 @@ fn a_media_call_buys_the_encoders_once_and_text_calls_keep_them() {
 
     // A second helper's `embedder()` on a shape already decided full: one more handle,
     // no third build (`!start && wants_full && !full` is the restart rule).
-    let _again = model.embedder().expect("the sticky shape serves the next handle");
+    let _again = model
+        .embedder()
+        .expect("the sticky shape serves the next handle");
     assert_eq!(counts(&builds), (2, 1), "no restart of a full model");
 }
 
