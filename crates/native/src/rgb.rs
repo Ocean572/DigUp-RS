@@ -44,12 +44,17 @@ impl RgbImage {
     }
 
     /// `oriented(_:)`: turned the way the camera held it (EXIF orientation 1–8); 1 (and any
-    /// nonsense value) answers the picture unchanged. The source pixel that lands at (x, y) is
-    /// the engine's table — `Images+Portable.swift:144-152` — with the swapped axes for the
-    /// orientations that transpose (5–8).
-    pub fn oriented(&self, orientation: i64) -> Self {
+    /// nonsense value) answers the picture unchanged — Swift's `return self` of a COW struct,
+    /// which is why this takes the picture BY VALUE: the unchanged answers are a MOVE, zero
+    /// copies. Orientation 1 is the most common value (every camera without a rotation stamp),
+    /// and the pipeline calls this for EVERY picture: the audit-base `&self` + `self.clone()`
+    /// deep-copied the pixel vector for the common case — a 4096×4096 picture is 50 MB
+    /// (the port's own decode ceiling is 80 MP, so 50 MB is the ordinary large-photo size),
+    /// copied per photo on an index run of millions. The turns still build a fresh pixel
+    /// vector; only the unchanged answers ride as moves.
+    pub fn oriented(self, orientation: i64) -> Self {
         if !(2..=8).contains(&orientation) {
-            return self.clone();
+            return self;
         }
         let swaps = orientation >= 5;
         let (w, h) = if swaps {

@@ -1275,7 +1275,7 @@ fn the_eight_camera_turns_are_the_engines() {
         let image = rgb::RgbImage::load(&folder.join(answer.name)).expect("decoded");
         let turned: Vec<(i64, usize, usize)> = (1..=8i64)
             .map(|orientation| {
-                let out = image.oriented(orientation);
+                let out = image.clone().oriented(orientation);
                 (orientation, out.width, out.height)
             })
             .collect();
@@ -1286,13 +1286,13 @@ fn the_eight_camera_turns_are_the_engines() {
             answer.name
         );
         assert_eq!(
-            digest(&image.oriented(6).pixels),
+            digest(&image.clone().oriented(6).pixels),
             answer.o6_sha,
             "{}: the pixels after the 90° clockwise turn",
             answer.name
         );
         // A turn is its own picture: the byte count is kept, and turning twice 90° is 180°.
-        let twice = image.oriented(6).oriented(6);
+        let twice = image.clone().oriented(6).oriented(6);
         assert_eq!(
             (twice.width, twice.height),
             (answer.dec.0, answer.dec.1),
@@ -1300,7 +1300,7 @@ fn the_eight_camera_turns_are_the_engines() {
             answer.name
         );
         assert_eq!(
-            image.oriented(0),
+            image.clone().oriented(0),
             image,
             "{}: an orientation outside 1…8 changes nothing",
             answer.name
