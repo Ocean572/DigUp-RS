@@ -66,18 +66,41 @@ pub fn run(
     let mut pipe = child.stdout.take().expect("the pipe the process was given");
     let mut buffer = [0u8; 1 << 16];
     loop {
-        // `readData(ofLength:)` returns what is available and an empty read at the end.
-        let read_any: usize = pipe.read(&mut buffer).unwrap_or_default();
+        // `readData(ofLength:)` returns what is available and an empty read at the END —
+        // and a read ERROR is a Foundation exception, which Swift cannot catch: the engine
+        // CRASHES there, so Swift never faces "error vs EOF". The audit-base folded every
+        // read error into EOF (`unwrap_or_default()`), which answers SUCCESS mid-stream: a
+        // disk fault mid-audio ends the window stream with `run` returning Ok, and the
+        // file indexes `done` with its windows truncated — a silent data loss the engine
+        // does not have (it dies loudly instead). The port's established IO shape (the
+        // spawn failure below): the file lands `failed` with the OS's text, and the index
+        // run carries on. std's File::read already restarts EINTR, so what surfaces here
+        // is a real fault. Killing the child first keeps the tool from sitting on a
+        // reader that is gone.
+        let read_any = match pipe.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(RunError::Io(error));
+            }
+        };
         if read_any == 0 {
-            break;
+            break; // the writer closed: the engine's empty read
         }
+        // DEVIATION, on purpose: when the reader throws, Swift's `try read(data)` leaves
+        // the tool RUNNING, writing into a pipe nobody reads — ffmpeg blocks on the full
+        // pipe forever (an orphan per failed file on a long index). The port ends it:
+        // kill, reap, and the reader's refusal propagates the same.
         if let Err(error) = read(&buffer[..read_any]) {
             let _ = child.kill();
             let _ = child.wait();
             return Err(RunError::Extract(error));
         }
     }
-    let _ = pipe.read(&mut []); // closing the reader's side
+    // EOF on the writer's side; the reader drops with the scope. (The audit-base carried a
+    // `let _ = pipe.read(&mut []);` here — a zero-byte read on a pipe answers 0 with no
+    // state change: the line did nothing.)
     let status = child.wait().map_err(RunError::Io)?;
     // Foundation's `terminationStatus` is the signal number when a signal ended the process;
     // `ExitStatus::code()` says nothing in that case, so the signal stands in for it.
