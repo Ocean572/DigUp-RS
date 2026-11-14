@@ -328,9 +328,13 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// `Media.duration(of:)`: ffprobe's format duration, 0 when it can't say (the engine's
 /// `MediaInfo.duration(of:) ?? 0`). ffprobe sits in `$DIGUP_FFMPEG`, beside this
-/// executable, or on PATH, as the engine's `FFmpeg.find` looks.
+/// executable, or on PATH, as the engine's `FFmpeg.find` looks — resolved once per process by
+/// `paths::find_program`, which is the whole workspace's one lookup (`native`'s ffmpeg seam
+/// uses the same function) and is cached exactly as the engine's `static let ffprobe` is:
+/// this call runs per media file, and a tree of thousands of video files must not re-scan
+/// every folder per file.
 pub fn duration_of(path: &str) -> f64 {
-    let Some(tool) = find_program("ffprobe") else {
+    let Some(tool) = crate::paths::find_program("ffprobe") else {
         return 0.0;
     };
     let Ok(output) = Command::new(&tool)
@@ -357,47 +361,7 @@ pub fn duration_of(path: &str) -> f64 {
     }
 }
 
-/// `FFmpeg.find` + `FileSystem.executable`: `$DIGUP_FFMPEG`, beside this executable, then PATH.
-pub fn find_program(name: &str) -> Option<String> {
-    let mut folders: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(chosen) = std::env::var("DIGUP_FFMPEG")
-        .ok()
-        .filter(|value| !value.is_empty())
-    {
-        folders.push(std::path::PathBuf::from(chosen));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(folder) = exe.parent() {
-            folders.push(folder.to_path_buf());
-        }
-    }
-    for folder in folders {
-        let candidate = folder.join(name);
-        if is_executable(&candidate) {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    let path = std::env::var("PATH").unwrap_or_default();
-    for folder in path.split(':') {
-        let candidate = std::path::Path::new(folder).join(name);
-        if is_executable(&candidate) {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    None
-}
-
-#[cfg(unix)]
-fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.is_file()
-        && path
-            .metadata()
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &std::path::Path) -> bool {
-    path.is_file()
-}
+/// `FFmpeg.find` + `FileSystem.executable`: the program lookup is `paths::find_program`,
+/// the workspace's one Windows-correct lookup (`.exe` suffix, `;` PATH separator, cached
+/// per process). Re-exported here because the estimate verb's own tests read it.
+pub use crate::paths::find_program;

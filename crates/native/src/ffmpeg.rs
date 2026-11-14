@@ -9,72 +9,15 @@ use std::process::{Command, Stdio};
 
 use digup_core::extract::ExtractError;
 
-/// `FileSystem.program(_:)`: the name as an OS program is spelled on this platform.
-pub fn program(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
-}
-
-/// `FileSystem.executable(_:)`: `name` on PATH.
-fn on_path(name: String) -> Option<String> {
-    let (key, separator, default) = if cfg!(windows) {
-        ("PATH", ';', "")
-    } else {
-        ("PATH", ':', "/usr/local/bin:/usr/bin:/bin")
-    };
-    let path = std::env::var(key)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default.to_string());
-    for folder in path.split(separator).filter(|folder| !folder.is_empty()) {
-        let candidate = format!("{folder}/{name}");
-        if is_executable(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-fn is_executable(path: &str) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path)
-            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::metadata(path)
-            .map(|meta| meta.is_file())
-            .unwrap_or(false)
-    }
-}
-
-/// `FFmpeg.find(_:)`: `$DIGUP_FFMPEG`, beside this executable, then PATH.
+/// `FFmpeg.find(_:)` (`Media+Portable.swift:9-18`): `$DIGUP_FFMPEG` (a FOLDER), the folder
+/// this executable sits in, then PATH — the workspace's one lookup,
+/// `digup_core::paths::find_program` (`.exe` on Windows, `;` PATH separator there, `/`-style
+/// with the engine's default PATH elsewhere, cached once per process as the engine's
+/// `static let` does). Two twins of this lookup drifted once already: core's copy lacked
+/// Windows' `.exe` suffix and `;` split, so the estimate's `duration_of` answered 0 for every
+/// media file on Windows. `crates/native` depends on `crates/core`, so the one copy lives here.
 pub fn find(name: &str) -> Option<String> {
-    let name = program(name);
-    let mut folders: Vec<String> = Vec::new();
-    if let Ok(chosen) = std::env::var("DIGUP_FFMPEG") {
-        if !chosen.is_empty() {
-            folders.push(chosen);
-        }
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(folder) = executable.parent() {
-            folders.push(folder.to_string_lossy().into_owned());
-        }
-    }
-    for folder in folders {
-        let candidate = format!("{folder}/{name}");
-        if is_executable(&candidate) {
-            return Some(candidate);
-        }
-    }
-    on_path(name)
+    digup_core::paths::find_program(name)
 }
 
 /// A tool ran, and why it did not: the engine's own refusal (`ffmpeg isn't installed …`,
@@ -171,17 +114,16 @@ pub fn output(tool: Option<&str>, arguments: &[String]) -> Result<String, RunErr
     Ok(String::from_utf8_lossy(&data).into_owned())
 }
 
-/// The tools themselves, found once per process as the engine's `static let` does.
+/// The tools themselves, found once per process as the engine's `static let` does —
+/// `paths::find_program` keeps the answer for the life of the process, so these are plain
+/// calls, and `$DIGUP_FFMPEG` set after the first lookup is deliberately not re-read (the
+/// engine's `static let ffmpeg` never re-reads it either).
 pub fn ffmpeg() -> Option<String> {
-    use std::sync::OnceLock;
-    static FFMPEG: OnceLock<Option<String>> = OnceLock::new();
-    FFMPEG.get_or_init(|| find("ffmpeg")).clone()
+    digup_core::paths::find_program("ffmpeg")
 }
 
 pub fn ffprobe() -> Option<String> {
-    use std::sync::OnceLock;
-    static FFPROBE: OnceLock<Option<String>> = OnceLock::new();
-    FFPROBE.get_or_init(|| find("ffprobe")).clone()
+    digup_core::paths::find_program("ffprobe")
 }
 
 /// The arguments of the picture decode: the first frame, 8-bit RGB, as PPM down the pipe.

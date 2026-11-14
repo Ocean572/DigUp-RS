@@ -96,6 +96,113 @@ pub fn real_path(path: &str) -> String {
     }
 }
 
+/// `FileSystem.program(_:)` (Files+Portable.swift:146-151): the name as an OS program is
+/// spelled here — `ffmpeg.exe` on Windows.
+pub fn program(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// `FileManager.isExecutableFile(atPath:)`: a file the OS will run. Off Windows that is the
+/// owner bits; on Windows `FileManager` asks for an executable extension, which is what the
+/// candidate's name already carries (`program` added `.exe`), so presence is the test.
+pub fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.is_file()
+            && path
+                .metadata()
+                .map(|meta| meta.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+/// `FileSystem.executable(_:)` (Files+Portable.swift:153-168): `name` on PATH. The split is
+/// the platform's (`;` on Windows, `:` elsewhere) and so is the fallback PATH
+/// (`/usr/local/bin:/usr/bin:/bin` when the environment has none, the empty list on Windows).
+fn on_path(name: &str) -> Option<String> {
+    let (separator, default): (char, &str) = if cfg!(windows) {
+        (';', "")
+    } else {
+        (':', "/usr/local/bin:/usr/bin:/bin")
+    };
+    let path = std::env::var("PATH")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_string());
+    let name = program(name);
+    for folder in path.split(separator).filter(|folder| !folder.is_empty()) {
+        let candidate = std::path::Path::new(folder).join(&name);
+        if is_executable(&candidate) {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+/// `FFmpeg.find(_:)` / `FileSystem.executable(_:)` (Media+Portable.swift:9-18):
+/// `$DIGUP_FFMPEG` (a FOLDER), the folder this executable sits in, then PATH.
+///
+/// The engine resolves each tool ONCE (`static let ffmpeg, ffprobe`), so the answer is
+/// cached here for the life of the process: the estimate asks per media file, and a tree of
+/// tens of thousands of video files would re-scan `$DIGUP_FFMPEG`, the executable's folder
+/// and every PATH folder per file — the estimate verb already races its own walk ceiling
+/// (`DIGUP_SERVER_ESTIMATE_TIMEOUT_S`). One lookup for the whole workspace: `crates/native`'s
+/// ffmpeg seam calls this too (it depends on core, not the reverse), which is the fix for the
+/// two twins drifting — the copy in core was the one missing Windows' `.exe` suffix and `;`
+/// PATH separator, so `duration_of` answered 0 for every media file on Windows.
+pub fn find_program(name: &str) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let found = {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(known) = cache.get(name) {
+            return known.clone();
+        }
+        lookup(name)
+    };
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(name.to_string(), found.clone());
+    found
+}
+
+fn lookup(name: &str) -> Option<String> {
+    let spelled = program(name);
+    let mut folders: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(chosen) = std::env::var("DIGUP_FFMPEG")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        folders.push(std::path::PathBuf::from(chosen));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(folder) = exe.parent() {
+            folders.push(folder.to_path_buf());
+        }
+    }
+    for folder in folders {
+        let candidate = folder.join(&spelled);
+        if is_executable(&candidate) {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    on_path(name)
+}
+
 /// `NSString.pathExtension` (empty for names without one, like ".hidden").
 pub fn extension(name: &str) -> &str {
     Path::new(name)
