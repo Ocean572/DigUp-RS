@@ -971,3 +971,58 @@ fn lock_serializes_concurrent_reads() {
         worker.join().expect("the worker finished");
     }
 }
+
+/// The engine's `extract` is `throws`: `PDF+Portable.swift:111` runs
+/// `try image.write(to: out, png: true)`, so a page whose rendered copy cannot be written
+/// throws out of the extraction — the file lands `failed` with the write's message, not
+/// `done` with the page's picture segment missing forever (an index that says a scanned
+/// book was read, with the pictures gone). The port swallowed the write error as `.ok()?`
+/// (a silent page skip). Pin: a render folder this process cannot write into — the
+/// bind-mounted render folder of a container, the read-only davfs2 mount of the Nextcloud
+/// pilot — must answer the refusal, in the port's "can't write …" convention
+/// (media.rs:129-131, 307-309).
+#[cfg(unix)]
+#[test]
+fn a_page_copy_that_cannot_be_written_fails_the_extraction() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = write_fixtures("writefail");
+    let scenario = dir.join("nofolder");
+    std::fs::create_dir(&scenario).expect("scenario folder");
+    std::fs::set_permissions(&scenario, std::fs::Permissions::from_mode(0o500))
+        .expect("the render folder becomes unwritable");
+
+    let answer = pdf::pages(&dir.join("blank.pdf"), 0..usize::MAX, 200, 1400, &scenario);
+
+    std::fs::set_permissions(&scenario, std::fs::Permissions::from_mode(0o700))
+        .expect("the scenario folder is deletable again");
+    let pages = match answer {
+        Ok(pages) => pages,
+        Err(digup_core::extract::ExtractError::Unreadable { why }) => {
+            assert!(
+                why.starts_with("can't write ") && why.ends_with(".png"),
+                "the refusal names the unwritable page copy, in the port's write-failure \
+                 convention: {why}"
+            );
+            return;
+        }
+        Err(other) => panic!("the refusal is the write's, in the port's convention: {other}"),
+    };
+    // Fails-before (the audit-base `.ok()?`): the extraction answers `Ok`, its pages carry
+    // no picture paths, and not one PNG landed in the unwritable folder — the file indexes
+    // `done` with the rendered segments missing, where Swift's file is `failed`.
+    let drawn: Vec<&pdf::Page> = pages
+        .0
+        .iter()
+        .filter(|page| page.image_path.is_some())
+        .collect();
+    let landed = std::fs::read_dir(&scenario)
+        .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+        .unwrap_or(0);
+    panic!(
+        "the seam swallowed the write error: {} pages with {} pictures, {landed} files on \
+         disk — Swift's extract THREW at PDF+Portable.swift:111 and the file is 'failed'",
+        pages.0.len(),
+        drawn.len()
+    );
+}

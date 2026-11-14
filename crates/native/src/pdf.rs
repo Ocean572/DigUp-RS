@@ -362,33 +362,36 @@ pub fn pages(
             if page.is_null() {
                 continue;
             }
+            // Swift's `try image.write` throws out of `extract`: the pages read so far go with
+            // it and the file is `failed`, not `done` with pictures missing.
             let made = made_page(page, index, min_text, render_pixels, folder);
             unsafe { FPDF_ClosePage(page) };
-            if let Some(page) = made {
-                out.push(page);
-            }
+            out.push(made?);
         }
-        (out, total, meta(document, "Title"))
-    })
+        Ok((out, total, meta(document, "Title")))
+    })?
 }
 
 /// One page's line (`PDF+Portable.swift:98-113`): text when its text layer is good enough, a
-/// rendered PNG in `folder` otherwise; a page that won't load its picture is `None` (the engine
-/// `continue`s). A copy that can't be written is the engine's thrown `write` — the error comes
-/// back through `pages`, because `?` and the surrounding lock are where `body` runs.
+/// rendered PNG in `folder` otherwise. A page whose PICTURE won't render is the engine's
+/// `guard let … else { continue }` — the page is skipped, the file goes on (the engine's
+/// render is a `nil` return, not a throw). A copy that can't be WRITTEN is the engine's
+/// `try image.write` (PDF+Portable.swift:111): the error propagates through `pages` and the
+/// file is `failed` with the write's text in `detail`, never `done` with the picture's
+/// segment missing. The `Ok(Page)` arm is text-only; the picture arms are the two below.
 fn made_page(
     page: *mut libc::c_void,
     index: usize,
     min_text: usize,
     render_pixels: usize,
     folder: &Path,
-) -> Option<Page> {
+) -> Result<Page, ExtractError> {
     let mut text = page_text(page).trim().to_string();
     let mut garbled: Option<String> = None;
     match PageTextProblem::check(&text) {
         Some(PageTextProblem::LostLetters) | None => {
             if text.chars().count() >= min_text {
-                return Some(Page {
+                return Ok(Page {
                     number: index + 1,
                     text,
                     image_path: None,
@@ -401,10 +404,23 @@ fn made_page(
             garbled = Some(std::mem::take(&mut text));
         }
     }
-    let image = render_page(page, render_pixels)?;
+    let image = render_page(page, render_pixels).ok_or_else(|| ExtractError::Unreadable {
+        why: format!("page {} has no picture", index + 1),
+    })?;
     let out = folder.join(format!("{}.png", uuid_string()));
-    image.write(&out, true).ok()?;
-    Some(Page {
+    // `PDF+Portable.swift:111` is `try image.write(to: out, png: true)`: a copy that cannot
+    // be written (the render folder is on a read-only mount, the disk is full, the folder
+    // vanished mid-run) THROWS out of `extract`. The engine's file then lands `failed` with
+    // the write's message in `detail`; a swallowed error lands it `done` with the page's
+    // picture segment missing forever — the index would say a scanned book was read. The
+    // "can't write …" shape is the port's convention for a child/encoder write failure
+    // (media.rs:129-131, 307-309), shared by ffmpeg's frames and the WAV windows.
+    image
+        .write(&out, true)
+        .map_err(|_| ExtractError::Unreadable {
+            why: format!("can't write {}", out.to_string_lossy()),
+        })?;
+    Ok(Page {
         number: index + 1,
         text,
         image_path: Some(out.to_string_lossy().into_owned()),
