@@ -53,21 +53,46 @@ pub fn is_inside(path: &str, folder: &str) -> bool {
     path.starts_with(&format!("{}/", folder.trim_end_matches('/')))
 }
 
-/// `FolderSelection.realPath`: the realpath of a path, the path itself when it can't be
-/// resolved (the walk reports real paths: /private/var where the root says /var).
+/// `FolderSelection.realPath` (FolderSelection.swift:116-124): the realpath of a path, the
+/// path itself when it can't be resolved (the walk reports real paths: /private/var where the
+/// root says /var). The engine's two branches are the two system calls, and the port mirrors
+/// the split: `realpath(3)` exists only in the libc crate's unix module (measured on this box
+/// 2026-11-13: `libc::realpath` on `x86_64-pc-windows-msvc` → `error[E0425]: cannot find
+/// function realpath in crate libc`, which is the whole `crates/core` Windows build dying at
+/// this line, and `.github/workflows/rust-release.yml:45` gates the Gates matrix on
+/// `windows-latest`), so Windows gets Foundation's branch —
+/// `URL(fileURLWithPath:).resolvingSymlinksInPath()`, whose Rust shape is
+/// `std::fs::canonicalize`. `canonicalize` answers a verbatim path (`\\?\C:\Users…`), which
+/// Foundation's URL does not, so the prefix is dropped; the comparison these values feed
+/// (`model.rs::path_ranges`, `crawler.rs`'s scope) is bytewise, and a `\\?\` spelling would
+/// never match the root the app stored.
 pub fn real_path(path: &str) -> String {
-    let Ok(c_path) = std::ffi::CString::new(path) else {
-        return path.to_string();
-    };
-    unsafe {
-        let resolved = libc::realpath(c_path.as_ptr(), std::ptr::null_mut());
-        if resolved.is_null() {
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = std::ffi::CString::new(path) else {
             return path.to_string();
+        };
+        unsafe {
+            let resolved = libc::realpath(c_path.as_ptr(), std::ptr::null_mut());
+            if resolved.is_null() {
+                return path.to_string();
+            }
+            let text =
+                String::from_utf8_lossy(std::ffi::CStr::from_ptr(resolved).to_bytes()).into_owned();
+            libc::free(resolved as *mut libc::c_void);
+            text
         }
-        let text =
-            String::from_utf8_lossy(std::ffi::CStr::from_ptr(resolved).to_bytes()).into_owned();
-        libc::free(resolved as *mut libc::c_void);
-        text
+    }
+    #[cfg(not(unix))]
+    {
+        let resolved = std::fs::canonicalize(Path::new(path)).ok().map(|real| {
+            let text = real.to_string_lossy().into_owned();
+            match text.strip_prefix(r"\\?\") {
+                Some(stripped) => stripped.to_string(),
+                None => text,
+            }
+        });
+        resolved.unwrap_or_else(|| path.to_string())
     }
 }
 
@@ -111,4 +136,38 @@ pub fn home() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/root"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::real_path;
+
+    /// The engine's fallback (`guard let real = realpath(path, nil) else { return path }`,
+    /// FolderSelection.swift:120): a path the system cannot resolve keeps its own spelling,
+    /// so the crawl's scope and the index's path ranges stay comparable.
+    #[test]
+    fn a_path_that_cannot_resolve_is_answered_as_given() {
+        assert_eq!(
+            real_path("/definitely-not-here/x"),
+            "/definitely-not-here/x"
+        );
+    }
+
+    /// The resolved spelling, not the one typed: the crawl reports `/private/var/folders/…`
+    /// where the root says `/var/folders/…`, and `path_ranges` needs both spellings
+    /// (IndexStore.swift:100-103). Compared against the target's own realpath so the
+    /// platform's own `/tmp` → `/private/tmp` style rule is on both sides.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_answered_by_its_target() {
+        let tmp = tempfile::tempdir().expect("a temp folder");
+        let target = tmp.path().join("target");
+        std::fs::create_dir(&target).expect("the target folder");
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("the symlink");
+        assert_eq!(
+            real_path(&link.to_string_lossy()),
+            real_path(&target.to_string_lossy())
+        );
+    }
 }

@@ -8,7 +8,6 @@
 //! decomposed name out of its precomposed folder.
 
 use std::cmp::Ordering;
-use std::path::Path;
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -275,10 +274,13 @@ pub fn bucket_of(path: &str) -> String {
 
 /// A folder's real path (symlinks resolved), when it's spelled differently than given
 /// (`standardizedFileURL` says /var where the walk says /private/var; IndexStore.swift:100).
+/// One implementation for the engine's one `FolderSelection.realPath`: `paths::real_path`
+/// answers the input when nothing resolves, which the caller's inequality check reads as
+/// "no second spelling" — the same thing Swift's `realPath` + comparison does
+/// (FolderSelection.swift:116-124, IndexStore.swift:100-103).
 fn real_path(folder: &str) -> Option<String> {
-    std::fs::canonicalize(Path::new(folder))
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
+    let real = crate::paths::real_path(folder);
+    (real.as_bytes() != folder.as_bytes()).then_some(real)
 }
 
 /// The ranges of the UNIQUE path index that hold the files under `folder` (IndexStore.swift:100):
