@@ -224,9 +224,12 @@ pub fn estimates_by_subfolder(
 /// The engine opens the file with PDFium; the port answers through this seam. `crates/native`
 /// installs the PDFium call at startup; until something installs it — a core-only test, a
 /// helper built without the C library — the header scan stands in: the trailer's `/Count` is
-/// the page tree's own number, `/Type /Page` tokens count the same objects, and an unreadable
-/// file is 1 as PDFium's failure is. The seam is a C-ABI pointer so any crate that links
-/// PDFium can hand one over (`crates/native::pdf::install_pages_hook`).
+/// the page tree's own number (it sits in the tail, where this scan looks, so it is the
+/// exact number for the trailer-bearing PDFs), the `/Type /Page` token count sees only the
+/// tail window (see `page_object_count` — past 32 KiB it can undercount, and the PDFium
+/// hook is what ships), and an unreadable file is 1 as PDFium's failure is. The seam is a
+/// C-ABI pointer so any crate that links PDFium can hand one over
+/// (`crates/native::pdf::install_pages_hook`).
 pub type PagesHook = unsafe extern "C" fn(*const libc::c_char) -> i64;
 static PAGES_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -288,8 +291,17 @@ fn parse_number(text: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
-/// A header-less count of page objects: `/Type /Page` tokens (not `/Pages`), scanning the
-/// whole file (xref-stream PDFs have no `trailer` keyword).
+/// A header-less count of page objects: `/Type /Page` tokens (not `/Pages`). It scans the
+/// TAIL WINDOW (the last 32 KiB `read_tail` hands it), not the whole file — so on a file
+/// past that window with no trailer `/Count` (xref-stream PDFs carry no `trailer` keyword),
+/// it counts the page objects that live IN the window: on a linearized PDF, whose first
+/// page sits at the head of the file, that is fewer than the document's pages, and a
+/// document whose objects all sit above the window counts zero and answers 1. The engine
+/// asks PDFium, which reads the page tree and cannot undercount. This fallback is what a
+/// core-only consumer sees (`crates/native::pdf` installs the PDFium hook at startup for
+/// every shipped helper, `pdf.rs:install_pages_hook`); the estimate is a forecast, so the
+/// window is deliberate — the estimate races its own walk ceiling
+/// (`DIGUP_SERVER_ESTIMATE_TIMEOUT_S`) and must not parse big PDFs whole.
 fn page_object_count(data: &[u8]) -> Option<i64> {
     let mut count = 0i64;
     let needle = b"/Type";

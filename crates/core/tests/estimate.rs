@@ -331,3 +331,102 @@ fn the_code_size_constants_are_the_engine_numbers() {
     assert_eq!(PER_CHARACTER, 2.4);
     assert_eq!(PER_STRETCH, 1_600.0);
 }
+
+/// A PDF built the way the tail-window scan reads it: `pages` page objects at the head of
+/// the file, a padding stream of `pad` bytes after them, `extra` page objects after the
+/// padding (inside the last 32 KiB — the linearized shape, where page 1 lives at the file's
+/// head), and a trailer that carries `/Count` only when `count` says so.
+fn pdf_with_pages_at(
+    root: &std::path::Path,
+    name: &str,
+    pages: usize,
+    pad: usize,
+    extra: usize,
+    count: Option<usize>,
+) -> String {
+    let mut bytes: Vec<u8> = Vec::new();
+    bytes.extend_from_slice(b"%PDF-1.4\n1 0 obj<</Type /Catalog /Pages 2 0 R>>endobj\n2 0 obj<</Type /Pages /Kids []>>endobj\n");
+    for n in 0..pages {
+        bytes.extend_from_slice(
+            format!("{} 0 obj<</Type /Page /Parent 2 0 R>>endobj\n", 3 + n).as_bytes(),
+        );
+    }
+    if pad > 0 {
+        bytes.extend_from_slice(
+            format!("{} 0 obj<</Length {}>>stream\n", 3 + pages, pad).as_bytes(),
+        );
+        bytes.extend_from_slice(&vec![b'a'; pad]);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    for n in 0..extra {
+        bytes.extend_from_slice(
+            format!(
+                "{} 0 obj<</Type /Page /Parent 2 0 R>>endobj\n",
+                4 + pages + n
+            )
+            .as_bytes(),
+        );
+    }
+    bytes.extend_from_slice(b"xref\n0 1\n0000000000 65535 f\n");
+    match count {
+        Some(c) => bytes.extend_from_slice(
+            format!(
+                "trailer\n<</Size {} /Root 1 0 R /Count {}>>\nstartxref\n0\n%%EOF\n",
+                3 + pages + extra,
+                c
+            )
+            .as_bytes(),
+        ),
+        None => bytes.extend_from_slice(
+            format!(
+                "trailer\n<</Size {} /Root 1 0 R>>\nstartxref\n0\n%%EOF\n",
+                3 + pages + extra
+            )
+            .as_bytes(),
+        ),
+    }
+    write(root, name, &bytes)
+}
+
+/// The fallback page count (no PDFium hook in a core-only run): what the trailer's
+/// `/Count` and the tail-window token scan each answer. The trailer's `/Count` is the
+/// page tree's own number and sits in the file's tail — exact whatever the file size.
+/// The token scan sees only the last 32 KiB: all objects inside the window (a small
+/// file) is exact; objects above the window are invisible, so a padded, trailer-less
+/// PDF counts 0 and answers 1 (the "PDFium can't read it" shape), and a linearized
+/// file — page 1 at the head, one page in the tail — counts only the tail's pages.
+/// The shipped helper installs the PDFium hook (`native::pdf::install_pages_hook`),
+/// which reads the tree and cannot undercount; this is the core-only consumer's number.
+#[test]
+fn the_fallback_page_count_sees_the_tail_window() {
+    let root = temp_tree("digup-estimate-tail");
+    let pages = 30usize;
+
+    let exact = pdf_with_pages_at(&root, "counted.pdf", pages, 40_000, 0, Some(pages));
+    assert_eq!(
+        estimator::pages_of(&exact),
+        pages as i64,
+        "the trailer's /Count is in the tail: exact on a big file"
+    );
+
+    let small = pdf_with_pages_at(&root, "small.pdf", pages, 0, 0, None);
+    assert_eq!(
+        estimator::pages_of(&small),
+        pages as i64,
+        "a file that fits the window whole: the token count is exact"
+    );
+
+    let above = pdf_with_pages_at(&root, "above-window.pdf", pages, 40_000, 0, None);
+    assert_eq!(
+        estimator::pages_of(&above),
+        1,
+        "objects above the 32 KiB window are invisible: 0 counted answers 1, not 30"
+    );
+
+    let linear = pdf_with_pages_at(&root, "linearized.pdf", pages, 40_000, 3, None);
+    assert_eq!(
+        estimator::pages_of(&linear),
+        3,
+        "the linearized shape — pages at the head, three in the tail — counts the tail's 3"
+    );
+}
