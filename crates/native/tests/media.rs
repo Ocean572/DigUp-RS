@@ -17,7 +17,7 @@
 //! writes is compared by SHA-256 — the model must hear and see the engine's exact bytes.
 //!
 //! Run with the pinned tools; a missing ffmpeg is an environment failure, not a skip:
-//! `DIGUP_FFMPEG=/tmp/opencode/ffmpeg44` (the 4.4.2 build the container's `ffmpeg` is).
+//! `DIGUP_FFMPEG=<the pinned 4.4.2 ffmpeg build>` (the same build the container's `ffmpeg` is).
 
 use std::path::{Path, PathBuf};
 
@@ -281,8 +281,8 @@ fn fixture_bytes_match_the_cross_check() {
 fn engine_answers_match() {
     if digup_native::ffmpeg::ffmpeg().is_none() || digup_native::ffmpeg::ffprobe().is_none() {
         panic!(
-            "ffmpeg/ffprobe not found: set DIGUP_FFMPEG=/tmp/opencode/ffmpeg44 \
-             (the pinned 4.4.2 build the Swift container's /usr/bin/ffmpeg is). \
+            "ffmpeg/ffprobe not found: point DIGUP_FFMPEG at the pinned 4.4.2 \
+             build (the same build the Swift container's /usr/bin/ffmpeg is). \
              An environment gap is a FAIL here, never a skip."
         );
     }

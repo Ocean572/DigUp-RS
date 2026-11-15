@@ -10,8 +10,9 @@
 //! the model, exactly as the measured gate did), and compares every answer: hit lists,
 //! scores, z, cosines, keyword ranks, segments, locations, focuses, excerpts, info.
 //!
-//! Comparisons normalize what the machine makes: the corpus root (the answers measured
-//! at `ANSWER_ROOT`, the suite indexes a temp folder — both sides print it `C`) and
+//! Comparisons normalize what the machine makes: the corpus root (`ANSWER_ROOT` — the
+//! placeholder the answers are vendored under, and the suite's own temp root; both
+//! sides print `C`) and
 //! number spelling (Swift's JSONSerialization writes a whole-valued Double as an
 //! integer, serde_json keeps `.0` — every number reads as an f64 before comparing).
 //! Floats compare at the engine's arithmetic noise floor — 2 ulps (see `numbers_close`:
@@ -59,9 +60,16 @@ const VECTORS: &str = include_str!(concat!(
     "/tests/fixtures/search-vectors.jsonl"
 ));
 
-/// Where the Swift answers were measured (the harness's corpus path — the vendored
-/// answers carry it; the suite replaces both engines' roots with `C` before comparing).
-const ANSWER_ROOT: &str = "/var/tmp/digup-check/suite-corpus";
+/// The root the vendored answers carry: a NEUTRAL PLACEHOLDER token, not a
+/// machine's path (ledger row 9 — the fixtures once carried the harness's
+/// scratch root, which made them comparable only on the machine that measured
+/// them, and put a local path in tracked content; the answers were RE-MEASURED
+/// there and vendored under this token, the 2026-11-15 rewrite). The suite
+/// indexes a temp folder and canonicalizes BOTH roots to `C`: the string
+/// replace in `normalize`, and the FTS name-excerpt prefix by token count
+/// (`canonicalize_hits` splits root and excerpt on `/` and `_` — the mechanism
+/// rides the constant, so a placeholder of any token count works).
+const ANSWER_ROOT: &str = "/fixtures/suite-corpus";
 
 fn rows(text: &str) -> Vec<Value> {
     text.lines()
@@ -187,9 +195,10 @@ fn normalize(mut value: Value, root: &str) -> Value {
 fn canonicalize_hits(value: &mut Value, root: &str) {
     // FTS tokenizes a path on `/` and `_` (dots and hyphens survive inside tokens), so
     // a name segment's excerpt carries the corpus root as WORDS: the root prefix is
-    // canonicalized back to `C` by token count (measured on s343: the pinned answer's
-    // "var tmp digup-check suite-corpus repo «billing» payments" vs the suite's
-    // "tmp .tmpfnrE2I corpus repo «billing» payments" — same row, same content).
+    // canonicalized back to `C` by token count (measured on s343: pinned vs suite
+    // "tmp .tmpfnrE2I corpus repo «billing» payments" — same row, same content; the
+    // pinned side carries the ANSWER_ROOT token, "fixtures suite-corpus repo
+    // «billing» payments", after the 2026-11-15 de-scratch rewrite).
     let root_tokens: Vec<&str> = root
         .split(['/', '_'])
         .filter(|token| !token.is_empty())

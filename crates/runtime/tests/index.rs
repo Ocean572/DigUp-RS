@@ -30,7 +30,7 @@
 //! The media seam runs the pinned ffmpeg 4.4.2 through `$DIGUP_FFMPEG` while indexing the
 //! 13 media fixtures; the four screenshots ride on vendored bytes. Run it pinned:
 //! `DIGUP_MODELS=… DIGUP_BACKENDS=…/Vendor/llama/lib LD_LIBRARY_PATH=…
-//! DIGUP_FFMPEG=/tmp/opencode/ffmpeg44 cargo test -p digup-runtime --test index`.
+//! DIGUP_FFMPEG=<the pinned 4.4.2 ffmpeg build> cargo test -p digup-runtime --test index`.
 //!
 //! Unix-only (utimes for the pinned mtimes): the suite measures the Linux engine box.
 
@@ -49,9 +49,13 @@ use digup_runtime::{Embedder, LlamaEmbedder, LlamaModels};
 mod corpus;
 use corpus::*;
 
-/// Where the Swift answers were measured (the factory's corpus path — the vendored files
-/// carry it; the suite replaces both engines' roots with `C` before comparing).
-const ANSWER_ROOT: &str = "/tmp/opencode/indexcheck/suite-corpus";
+/// The root the vendored answers carry: a NEUTRAL PLACEHOLDER token, not a machine's
+/// path (ledger row 9: these files once carried the harness's scratch root,
+/// measured there — the 2026-11-15 rewrite vendored them under this token). The
+/// suite indexes a temp folder and canonicalizes BOTH roots to `C`: the string
+/// replace (slash form) and `path_words` (the name-segment excerpt, which spells
+/// the root space-separated — the keyword normalizer turns slashes into spaces).
+const ANSWER_ROOT: &str = "/fixtures/suite-corpus";
 
 // MARK: Index + emit (the probe's lines)
 

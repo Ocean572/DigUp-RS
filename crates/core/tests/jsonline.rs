@@ -83,13 +83,13 @@ fn whole_doubles_and_integers_share_the_integer_spelling() {
 #[test]
 fn foundation_escapes_the_slash_in_every_path() {
     let fields = json!({
-        "folder": "/tmp/opencode/media-xcheck",
+        "folder": "/fixture/media-xcheck",
         "strings": { "a/b/c": "path/with/slash", "quote": "he said \"hi\"", "back": "a\\b",
                      "nl": "a\nb\tb\ru\u{0000}", "uni": "süß — 日本語 ✓", "emoji": "🙂 x" }
     });
     assert_eq!(
         line(fields),
-        r#"{"folder":"\/tmp\/opencode\/media-xcheck","strings":{"a\/b\/c":"path\/with\/slash","back":"a\\b","emoji":"🙂 x","nl":"a\nb\tb\ru\u0000","quote":"he said \"hi\"","uni":"süß — 日本語 ✓"}}"#
+        r#"{"folder":"\/fixture\/media-xcheck","strings":{"a\/b\/c":"path\/with\/slash","back":"a\\b","emoji":"🙂 x","nl":"a\nb\tb\ru\u0000","quote":"he said \"hi\"","uni":"süß — 日本語 ✓"}}"#
     );
 }
 

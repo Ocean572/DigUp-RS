@@ -508,7 +508,7 @@ mod tests {
             ServerConfig::from_env().unwrap_err(),
             "DIGUP_SERVER_INDEX: the index folder is required"
         );
-        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/opencode/f08-idx");
+        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/f08-idx");
         std::env::remove_var("DIGUP_SERVER_ROOTS");
         assert_eq!(
             ServerConfig::from_env().unwrap_err(),
@@ -538,13 +538,13 @@ mod tests {
         assert_eq!(cfg.roots, vec!["/tmp/a", "/tmp/b"]);
         std::env::set_var("DIGUP_SERVER_INDEX", "");
         assert!(ServerConfig::from_env().is_ok());
-        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/opencode/f08-idx");
+        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/f08-idx");
 
         // api.py:642 reads DIGUP_SERVER_ESTIMATE_TIMEOUT_S per request; a typo
         // must not kill the boot (the estimate call answers 500 - pinned at the
         // estimate handler test seam, tests/boot.rs shape).
         std::env::set_var("DIGUP_SERVER_ESTIMATE_TIMEOUT_S", "abc");
-        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/opencode/f08-idx");
+        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/f08-idx");
         std::env::set_var("DIGUP_SERVER_ROOTS", "/tmp/a");
         let cfg = ServerConfig::from_env().expect("the estimate knob is read per request");
         assert_eq!(cfg.estimate_timeout_s, 120.0); // the mirror defaults, no boot death
