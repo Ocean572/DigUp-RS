@@ -728,9 +728,6 @@ pub fn serve(config: SearchConfig) -> i32 {
 }
 
 fn run(config: SearchConfig) -> Result<i32, String> {
-    let previews = config.index.join("previews");
-    let _ = std::fs::remove_dir_all(&previews);
-    std::fs::create_dir_all(&previews).map_err(|e| e.to_string())?;
     let store = IndexStore::main(&config.index).map_err(|e| e.to_string())?;
     let store: &'static IndexStore = Box::leak(Box::new(store));
     let searcher = Searcher::new(store, false).map_err(|e| e.to_string())?;
@@ -752,6 +749,21 @@ fn run(config: SearchConfig) -> Result<i32, String> {
         warned_about_source: false,
         log: config.index.join("worker-query.log"),
     };
+    // `init` (SearchService.swift:61-73) in order: store, searcher, the
+    // fields, then the previews folder is REBUILT — `try? removeItem` (the
+    // removal's failure is dropped, as here) then `try createDirectory`
+    // (its failure throws: startup dies) — and only then `openCode()`.
+    // The order is a fact, not a style: the wipe rides AFTER the store
+    // open, so a start that fails to open the index leaves the operator's
+    // preview cache UNTOUCHED. Measured 2026-11-15 on a folder holding a
+    // non-database `index.sqlite` + `previews/marker.jpg` (this box,
+    // ai-ubuntu-computer): Swift exits 1 with the marker intact; the
+    // audit-base had already deleted the whole previews tree — a daemon
+    // start against a broken (or mid-migration) index destroyed rendered
+    // previews that survive the reference's identical failure.
+    let previews = config.index.join("previews");
+    let _ = std::fs::remove_dir_all(&previews);
+    std::fs::create_dir_all(&previews).map_err(|e| e.to_string())?;
     open_code(&mut state)?;
     write_out(
         serde_json::json!({"event": "ready", "index": config.index.to_string_lossy().into_owned()}),
@@ -867,5 +879,82 @@ impl Slots {
     fn release(&self) {
         *self.inner.lock().expect("the render slots") += 1;
         self.ready.notify_one();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run, IndexStore, SearchConfig};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    /// The F-13c probe folder: a `index.sqlite` that cannot open (not a
+    /// database) and a `previews` tree holding one rendered file — the
+    /// scenario measured 2026-11-15 against the Swift twin on this box.
+    fn scratch_index(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("digup-f13c-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("previews")).unwrap();
+        std::fs::write(dir.join("index.sqlite"), b"not a database at all").unwrap();
+        std::fs::write(dir.join("previews/marker.jpg"), b"keep me").unwrap();
+        dir
+    }
+
+    fn probe_config(index: PathBuf) -> SearchConfig {
+        SearchConfig {
+            index,
+            roots: vec![],
+            skipped: vec![],
+            types: HashSet::new(),
+            code_roots: vec![],
+            code_skipped: vec![],
+            idle_seconds: 300.0,
+        }
+    }
+
+    #[test]
+    fn a_failed_daemon_start_leaves_the_preview_cache_where_the_engine_leaves_it() {
+        // SearchService.swift:61-73 opens the store FIRST, builds the fields,
+        // and rebuilds the previews folder after them — a start that fails at
+        // the store open never reaches the wipe, so the operator's rendered
+        // previews survive. Measured on the Swift twin (search-service, a
+        // non-database index.sqlite): exit 1, stderr `file is not a database
+        // (in: PRAGMA …)`, stdout silent, previews/marker.jpg INTACT.
+        let dir = scratch_index("keep");
+        let outcome = run(probe_config(dir.clone()));
+        assert!(
+            outcome.is_err(),
+            "the probe needs the store open to fail: {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("previews/marker.jpg")).unwrap(),
+            b"keep me",
+            "the failed start must not touch the previews tree"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_audit_base_wiped_the_previews_before_opening_the_store() {
+        // F-13c's fails-before, recorded at the fixed tip: the audit-base
+        // statements verbatim (remove, create, THEN open). On the folder the
+        // Swift twin leaves untouched, the audit-base deletes the whole
+        // previews tree first and fails at the open after it — measured on
+        // the daemon binary: the marker survived in Swift, was gone in the
+        // audit-base (`previews/` an empty dir).
+        let dir = scratch_index("wipe");
+        let previews = dir.join("previews");
+        let _ = std::fs::remove_dir_all(&previews);
+        let _ = std::fs::create_dir_all(&previews);
+        let store_open = IndexStore::main(&dir).map(|_| ());
+        assert!(
+            store_open.is_err(),
+            "the probe needs the store open to fail"
+        );
+        assert!(
+            std::fs::read(dir.join("previews/marker.jpg")).is_err(),
+            "the audit-base: the marker is already gone"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
