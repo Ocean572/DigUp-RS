@@ -1,287 +1,283 @@
-<p align="center"><img src="docs/logo.png" width="96" alt=""></p>
+<p align="center"><img src="docs/logo.png" width="96" alt="DigUp Logo"></p>
 
 <h1 align="center">DigUp</h1>
 
-<p align="center"><b>Describe it. Dig it up.</b><br>
-Search the files on your computer by what's in them — photos, PDFs, documents, recordings,
-video, code — with Google DeepMind's
-<a href="https://huggingface.co/google/embeddinggemma-2">EmbeddingGemma 2</a>.<br>
-The engine, the server and the desktop app are <b>Rust</b>. Everything runs on your machine.</p>
-
-<p align="center"><a href="https://github.com/Ocean572/DigUp-RS/releases/latest"><b>Download</b></a> ·
-<a href="#the-docker-compose-app"><b>Docker Compose app</b></a> ·
-<a href="#command-line"><b>Command line</b></a><br>
-<sub>Free and open source, MIT. No account, no cloud.</sub></p>
-
 <p align="center">
-<a href="https://github.com/Ocean572/DigUp-RS/stargazers"><img src="https://img.shields.io/github/stars/Ocean572/DigUp-RS?style=flat-square" alt="GitHub stars"></a>
-<a href="https://github.com/Ocean572/DigUp-RS/releases"><img src="https://img.shields.io/github/downloads/Ocean572/DigUp-RS/total?style=flat-square" alt="Downloads"></a>
-<a href="https://github.com/Ocean572/DigUp-RS/releases/latest"><img src="https://img.shields.io/github/v/release/Ocean572/DigUp-RS?style=flat-square" alt="Latest release"></a>
-<a href="LICENSE"><img src="https://img.shields.io/github/license/Ocean572/DigUp-RS?style=flat-square" alt="MIT license"></a>
+  <b>Describe it. Dig it up.</b><br>
+  Local-first, multimodal semantic search for your files — photos, PDFs, documents, audio, video, and code — powered by Google DeepMind's <a href="https://huggingface.co/google/embeddinggemma-2">EmbeddingGemma 2</a>.<br>
+  Engine, HTTP server, and desktop runtime built in <b>pure Rust</b>. Everything executes locally on your machine.
 </p>
 
-<p align="center"><img src="docs/demo.gif" width="800" alt="DigUp's search panel: a zebra in a video, a podcast minute, a clause in a lease, a dog on the beach in English, Bengali and Arabic, and code that opens in Zed."></p>
+<p align="center">
+  <a href="https://github.com/Ocean572/DigUp-RS/releases/latest"><b>Download</b></a> ·
+  <a href="#docker-compose-deployment"><b>Docker Compose</b></a> ·
+  <a href="#command-line-usage"><b>CLI</b></a> ·
+  <a href="#architecture--workspace"><b>Architecture</b></a><br>
+  <sub>Free & open source (MIT). Zero accounts, zero telemetry, zero cloud.</sub>
+</p>
 
-EmbeddingGemma 2 is the multimodal embedding model Google DeepMind released in October 2026.
-It puts text, images, audio and video into one shared space: a photo of a dog on a beach lands
-next to the words "a dog on the beach", and a recording of someone talking about sleep lands next
-to "where they talk about sleep". It understands more than 100 languages, it's open (Apache 2.0),
-and at 740M parameters it's small enough to run on a laptop.
+<p align="center">
+  <a href="https://github.com/Ocean572/DigUp-RS/stargazers"><img src="https://img.shields.io/github/stars/Ocean572/DigUp-RS?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/Ocean572/DigUp-RS/releases"><img src="https://img.shields.io/github/downloads/Ocean572/DigUp-RS/total?style=flat-square" alt="Downloads"></a>
+  <a href="https://github.com/Ocean572/DigUp-RS/releases/latest"><img src="https://img.shields.io/github/v/release/Ocean572/DigUp-RS?style=flat-square" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Ocean572/DigUp-RS?style=flat-square" alt="MIT license"></a>
+</p>
 
-DigUp brings that to your files. Pick the folders to search, and it reads the pictures, PDFs,
-documents, recordings and videos in them. Then describe what you're looking for, in your own
-words, and it finds the match, whatever kind of file it is.
+<p align="center">
+  <img src="docs/demo.gif" width="800" alt="DigUp search interface finding video frames, podcast timestamps, PDF clauses, multilingual notes, and source code.">
+</p>
 
-## What you can find
+---
 
-- "zebra in a video" opens the clip at the moment the zebra shows up
-- "where they talk about sleep" jumps to that minute of a podcast
-- "the clause about pets in the lease" shows the PDF page
-- "a dog on the beach" finds the photo, and "payment declined error" the screenshot
-- a search in English can find a note written in Bengali, Arabic or any of the model's 100+
-  languages, and the other way around
-- "code: retry a failed call with backoff" finds the function in your projects, if you turn on
-  code search
+**EmbeddingGemma 2** is Google DeepMind's multimodal embedding model (released October 2026). It projects text, images, audio, and video into a unified vector space: a photo of a dog on a beach maps directly alongside the query *"a dog on the beach"*, and a podcast discussion on sleep maps directly to *"where they talk about sleep"*. At **740M parameters** under an Apache 2.0 license, it supports over **100 languages** while remaining lightweight enough to run locally on consumer hardware.
 
-Exact words count too. Invoice numbers, error codes and names are matched as written, in file
-names and document text, so a search gets both the meaning and the exact string. Start a search
-with `name:` and only file and folder names are searched — the exact words, with the model
-staying out.
+**DigUp** brings this capability directly to your local filesystem. Point it at the directories you want to index, and it extracts and embeds images, PDFs, office documents, audio recordings, video frames, and source code—letting you search everything using natural language.
 
-## Private
+---
 
-Nothing you index leaves your computer. DigUp goes online only to download the model, once.
-No account, no telemetry, no cloud. The index is a plain SQLite file on your disk.
+## Key Capabilities
 
-## Three ways to run it
+- **Timestamped Video & Audio Search:** Querying *"zebra in a video"* opens the clip at the exact frame the zebra appears; querying *"where they talk about sleep"* jumps directly to that timestamp in a podcast.
+- **Document & Page-Level Retrieval:** Querying *"the clause about pets in the lease"* navigates straight to the matching PDF page.
+- **Visual & Screenshot Matching:** Querying *"a dog on the beach"* retrieves matching photos, while *"payment declined error"* locates relevant UI screenshots.
+- **Cross-Language Retrieval:** Search in English to retrieve notes written in Bengali, Arabic, or any of the 100+ supported languages—and vice versa.
+- **Hybrid Exact-String & Keyword Matching:** Invoice numbers, error codes, and proper nouns are indexed verbatim alongside semantic vectors. Prefix any query with `name:` to bypass semantic embeddings and perform strict filename/directory matching.
+- **Dedicated Code Search (Opt-In):** Enable code indexing to search functions by intent (e.g., `code: retry a failed call with backoff` or `code: refreshAccessToken`) and open results directly in your editor at the defining line.
 
-| Way | What you get |
-|---|---|
-| [Docker Compose app](#the-docker-compose-app) | a self-hosted search server with a web UI, on your machine or your LAN |
-| [Command line](#command-line) | `digup` — indexes and searches from a terminal; `digup-server` — the same HTTP API |
-| Desktop app (beta) | the tray/panel app for Windows and Linux (Tauri), which runs the same `digup` binary as its helper |
+## Privacy by Design
 
-## The Docker Compose app
+Your files never leave your hardware. DigUp connects to the internet **only once** to download the model weights. There are no accounts, no analytics, and no external API calls. Your entire index resides in a single, portable SQLite database on your local disk, and indexed media directories are mounted strictly **read-only**.
 
-One container: the engine, the HTTP API (`/api/v1`), and a web app in the browser. Your index,
-the model and the settings live as plain folders on your host disk; the files you search are
-mounted **read-only** — DigUp reads them and never touches them. Search answers are the engine's
-own numbers: it never invents scores.
+---
 
-**Run it** (x86_64; the published image):
+## Deployment Options
 
-```sh
+| Option | Best For | Description |
+| :--- | :--- | :--- |
+| **[Docker Compose](#docker-compose-deployment)** | Self-hosting & LAN | Single-container deployment combining the Rust engine, HTTP API (`/api/v1`), and web UI. |
+| **[Command Line (`digup`)](#command-line-usage)** | Terminal & Scripting | Standalone cross-platform CLI (`digup`) and headless API daemon (`digup-server`). |
+| **Desktop App (Beta)** | Native Desktop | Lightweight tray/panel app (Tauri) for Windows and Linux backed by the `digup` binary. |
+
+---
+
+## Docker Compose Deployment
+
+Run the engine, REST API (`/api/v1`), and web frontend inside a single container. Your index, model weights, and configuration persist as standard host directories, while your media directories are mounted **read-only**.
+
+### 1. Start the Container (x86_64 Prebuilt Image)
+
+```bash
 git clone https://github.com/Ocean572/DigUp-RS && cd DigUp-RS/deploy
 mkdir -p data/index data/models data/config data/media
-sudo chown -R 990:990 data            # the container runs as uid 990 — this is required
+
+# Required: the container executes as unprivileged UID 990
+sudo chown -R 990:990 data
+
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
-**Get the model** (once, 865 MB) — the engine's own downloader, into the same folder the
-container mounts:
+### 2. Download the Model Weights (865 MB, One-Time)
 
-```sh
+Download the pinned EmbeddingGemma 2 weights into the mounted `data/models` directory using the native downloader:
+
+```bash
 scripts/fetch-vendor.sh && scripts/build-llama.sh && cargo build --release
 DIGUP_MODELS=$PWD/data/models ./target/release/digup download-model
 ```
 
-**Open it:** **http://127.0.0.1:8787** — the web app shows index status, an *Index now* button
-and search. Put the files you want to search under `data/media/photos` (the default root, mounted
-read-only at `/media/photos`), press **Index now**, and search when the job is done. The full HTTP
-contract is [`server/docs/API.md`](server/docs/API.md); the UI is a thin client — the engine
-decides everything.
+### 3. Open the Web Interface
 
-**Knobs** (all plain environment variables, all read by
-[`deploy/docker-compose.yml`](deploy/docker-compose.yml)):
+Navigate to **http://127.0.0.1:8787**. Place the files you want to search inside `data/media/photos` (mounted read-only at `/media/photos`), click **Index now**, and begin searching once indexing completes. See [`server/docs/API.md`](server/docs/API.md) for the complete HTTP API specification.
 
-| variable | default | what it is |
-|---|---|---|
-| `DIGUP_MEDIA_DIR` | `./data/media/photos` | the tree mounted read-only at `/media/photos` |
-| `DIGUP_INDEX_DIR` | `./data/index` | the index folder (`index.sqlite`, plain SQLite) |
-| `DIGUP_MODELS_DIR` | `./data/models` | the model folder |
-| `DIGUP_CONFIG_DIR` | `./data/config` | settings and the job log |
-| `DIGUP_PUBLISH_PORT` | `8787` | the host port |
-| `DIGUP_LAN_BIND` | — (loopback only) | publish on your LAN address; the server has no auth, so this is opt-in |
+### Environment Variables (`deploy/docker-compose.yml`)
 
-**Compose shapes** — small override files that merge, each opt-in:
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `DIGUP_MEDIA_DIR` | `./data/media/photos` | Host directory mounted read-only at `/media/photos` |
+| `DIGUP_INDEX_DIR` | `./data/index` | Host directory storing `index.sqlite` |
+| `DIGUP_MODELS_DIR` | `./data/models` | Host directory storing EmbeddingGemma 2 weights |
+| `DIGUP_CONFIG_DIR` | `./data/config` | Host directory storing configuration and job logs |
+| `DIGUP_PUBLISH_PORT` | `8787` | Host port exposed by the web server |
+| `DIGUP_LAN_BIND` | *(loopback only)* | Bind IP for LAN access (opt-in; server has no built-in auth) |
 
-| file | what it does |
-|---|---|
-| `docker-compose.yml` | the base: builds the server image from source |
-| `docker-compose.ghcr.yml` | pull the published image (`ghcr.io/ocean572/digup-server`) — no build, no toolchain |
-| `docker-compose.rust.yml` | the pure-Rust server: engine + API + UI in one binary, no Python |
-| `docker-compose.nvidia.yml` | the CUDA build + runtime for NVIDIA cards (`--profile nvidia`) |
-| `docker-compose.lan.yml` | publish on your LAN address: `DIGUP_LAN_BIND=192.168.1.20 …` |
+### Compose Override Profiles
 
-Examples:
+Combine modular Compose files to tailor your runtime environment:
 
-```sh
-# published image, pure Rust, on your LAN:
+| Override File | Purpose |
+| :--- | :--- |
+| `docker-compose.yml` | Base configuration (builds the server image from source) |
+| `docker-compose.ghcr.yml` | Pulls the prebuilt GHCR image (`ghcr.io/ocean572/digup-server`) without local compilation |
+| `docker-compose.rust.yml` | Pure-Rust runtime (`digup-server` binary serving engine + API + UI with zero Python) |
+| `docker-compose.nvidia.yml` | Enables CUDA build and GPU runtime (`--profile nvidia`) |
+| `docker-compose.lan.yml` | Exposes the server on your local network via `DIGUP_LAN_BIND` |
+
+**Example Deployments:**
+
+```bash
+# Pure-Rust server exposed on a local LAN IP:
 DIGUP_LAN_BIND=192.168.1.20 docker compose \
   -f docker-compose.yml -f docker-compose.rust.yml -f docker-compose.lan.yml up -d --build
 
-# NVIDIA GPU (the image is built for your driver's CUDA; see the file's header):
+# NVIDIA CUDA-accelerated build and runtime:
 docker compose -f docker-compose.yml -f docker-compose.nvidia.yml --profile nvidia up -d --build
 ```
 
-GPU is a measured decision, never an assumption: `digup speed --model --json` reports the device
-the engine picked and the agreement between GPU and CPU (0.999 agreement required), and the full
-procedure is [`docs/implementation/gpu-handoff.md`](docs/implementation/gpu-handoff.md).
+> **Hardware Acceleration Note:** GPU acceleration is verified empirically rather than assumed. Run `digup speed --model --json` to inspect the active compute backend and verify cosine similarity agreement against CPU execution ($\ge 0.999$ required). See [`docs/implementation/gpu-handoff.md`](docs/implementation/gpu-handoff.md) for details.
 
-## Command line
+---
 
-The [Releases page](https://github.com/Ocean572/DigUp-RS/releases/latest) carries a payload
-tarball per platform — Linux x86_64 / aarch64, macOS arm64 / x86_64, Windows x86_64 — with the
-native libraries beside the binary: untar anywhere and run. Homebrew:
-`brew install ocean572/tap/digup`.
+## Command Line Usage
 
-```sh
-digup download-model                    # fetch the pinned model, once
-digup estimate ~/photos                 # file count + a cost forecast, measured on your box
-digup index ~/photos                    # the first pass
-digup search "a dog on the beach"       # results ranked by z: the engine's own score
-digup speed --model                     # GPU-vs-CPU measurement (device + agreement)
-digup --help                            # all verbs
+Prebuilt release tarballs for **Linux** (`x86_64`, `aarch64`), **macOS** (`arm64`, `x86_64`), and **Windows** (`x86_64`) are available on the [Releases page](https://github.com/Ocean572/DigUp-RS/releases/latest). Each archive bundles the `digup` binaries alongside their required native shared libraries—extract anywhere and run.
+
+**macOS / Linux via Homebrew:**
+```bash
+brew install ocean572/tap/digup
 ```
 
-Every UI — the web app, the desktop shell — talks to `digup` over its published JSON-lines
-interfaces. Nothing above it re-ranks, re-stores, or invents scores.
-
-## What it reads
-
-Only the folders you choose:
-
-- pictures and screenshots (JPEG, PNG, HEIC, WebP and more), by what they show
-- PDFs, page by page, scans included (a long one gets its first 30 pages right away, up to 5,000
-  pages a file)
-- documents: txt, md, typ, rtf, docx, odt, html
-- spreadsheets and presentations: xlsx, ods, pptx, odp — each sheet's rows, each slide's text and
-  speaker notes
-- audio of any length: the model listens in 30-second windows, a match points to its moment
-- video of any length: a frame every few seconds, one per shot, plus the soundtrack like audio
-
-It never reads keys, certificates, password files, hidden folders like `.ssh`, apps or caches,
-and it skips folders that look like datasets. It only reads; it never changes, moves, or uploads
-files. After the first pass (one-time; a big photo library can take hours, so `estimate` shows
-the time first), a new file is searchable seconds after it lands.
-
-## Code search
-
-Off until you turn it on. Then `code:` searches find functions by what they do —
-"code: refreshAccessToken" goes to the line that defines it, not the places that call it — and
-results open in your editor at the line. Code keeps its own index and never shows up in media
-searches. It reads source, notebooks (without outputs) and repo docs; it skips what git ignores,
-vendored code, and anything that looks like a key.
-
-## How it works
-
-```
-your folders ─► readers: PDFium (PDF), ffmpeg (audio/video), stb (images), miniz (zip/OOXML)
-                  ─► EmbeddingGemma 2 on llama.cpp, in a helper that quits when it's done
-                  ─► one SQLite file: a 768-dim float16 vector per picture, page, passage,
-                     video frame and 30 s of sound, plus an FTS5 keyword index
-                     (code search keeps a second index)
-your words   ─► the model's text part (~250 MB, only while you search)
-                  ─► nearest vectors + exact-word boost ─► ranked results with z-scores
+**Core CLI Workflow:**
+```bash
+digup download-model                  # Fetch pinned model weights (one-time)
+digup estimate ~/photos               # Preview file counts and estimated indexing time
+digup index ~/photos                  # Build the initial semantic + FTS5 index
+digup search "a dog on the beach"     # Query the index (ranked by engine z-score)
+digup speed --model                   # Benchmark GPU vs. CPU speed and cosine agreement
+digup --help                          # List all available subcommands
 ```
 
-The Rust workspace:
+All frontends (the web UI and Tauri desktop shell) communicate with `digup` strictly over documented JSON-lines protocols. All ranking, scoring, and filtering happen exclusively inside the Rust engine.
 
-| crate | what it is |
-|---|---|
-| `crates/core` | extraction: documents, mail, scoring, vectors, zip |
-| `crates/native` | the llama.cpp / ffmpeg / PDFium / stb seams |
-| `crates/runtime` | the embedders, the index loop, the search engine |
-| `crates/services` | the JSON-lines services (`search-service`, `index-service`, the shared embedder) |
-| `crates/cli` | the `digup` binary |
-| `crates/server` | the `digup-server` binary: the HTTP API, jobs, media, targets |
-| `shell/` | the Tauri desktop app (its Rust + a plain JS UI) |
+---
 
-The index remembers which model made its vectors; a reference-vector test checks every llama.cpp
-update before it ships. The SQLite schema is byte-compatible with the Swift original (schema v6:
-FTS5, counters, triggers), so an index built by one engine is read and searched unchanged by the
-other — measured, not assumed.
+## Supported File Formats & Indexing Scope
 
-## Releases
+DigUp scans only the directories you explicitly configure, never modifies or moves source files, and automatically skips sensitive paths (`.ssh`, keys, certificates, password stores, application bundles, caches, and ML dataset directories):
 
-A release is gated, then built, by CI ([`.github/workflows/rust-release.yml`](.github/workflows/rust-release.yml)):
-the workspace suite and the contract suite run **on the tagged commit** — the contract suite with
-zero skips, against the real payload — and only then the payload tarballs for Linux, macOS and
-Windows are compiled natively per platform and attached to the release, with the Homebrew
-formula. The server image publishes to `ghcr.io/ocean572/digup-server` on every merge to `main`
-([`.github/workflows/server.yml`](.github/workflows/server.yml)), which is what the
-`docker-compose.ghcr.yml` shape pulls. The audit ledger for the port is
-[`docs/RUST_PORT_AUDIT.md`](docs/RUST_PORT_AUDIT.md).
+- **Images & Screenshots:** JPEG, PNG, HEIC, WebP, and other standard raster formats.
+- **PDFs:** Page-by-page extraction including scanned documents (prioritizes the first 30 pages immediately; supports up to 5,000 pages per file).
+- **Documents:** `.txt`, `.md`, `.typ`, `.rtf`, `.docx`, `.odt`, `.html`.
+- **Spreadsheets & Presentations:** `.xlsx`, `.ods`, `.pptx`, `.odp` (indexes cell rows, slide text, and speaker notes).
+- **Audio:** Any duration, segmented into 30-second sliding windows with timestamped match pointers.
+- **Video:** Any duration, sampling keyframes per shot alongside full soundtrack audio indexing.
+- **Source Code (Opt-In):** Isolated in a separate index (`code:` prefix). Indexes source files, Jupyter notebooks (excluding outputs), and documentation while respecting `.gitignore` and skipping vendored dependencies or secrets.
 
-## Build from source
+---
 
-You need Rust 1.88+ (CI pins 1.99.1), a C/C++ toolchain, CMake, and Python 3; `cargo` does the
-rest.
+## Architecture & Workspace
 
-```sh
+```text
+Indexed Folders ─► Native Readers: PDFium (PDF), FFmpeg (Audio/Video), stb (Images), miniz (OOXML)
+                      │
+                      ▼
+                   EmbeddingGemma 2 via llama.cpp (isolated worker subprocess)
+                      │
+                      ▼
+                   SQLite Database (index.sqlite)
+                   ├── 768-dim float16 vector embeddings (per image, page, passage, frame, 30s audio)
+                   └── FTS5 full-text keyword index (separate DB for code search)
+
+Search Query ───► Text Encoder (~250 MB, loaded on demand)
+                      │
+                      ▼
+                   Cosine Nearest-Neighbor + Exact-Keyword Boost ─► Ranked Results (z-scores)
+```
+
+### Cargo Workspace Layout
+
+| Crate / Directory | Responsibility |
+| :--- | :--- |
+| `crates/core` | Document/mail extraction, vector math, scoring, and archive handling |
+| `crates/native` | FFI bindings and safe shims for `llama.cpp`, `FFmpeg`, `PDFium`, and `stb` |
+| `crates/runtime` | Embedding pipelines, indexing event loops, and the search engine |
+| `crates/services` | JSON-lines IPC daemons (`search-service`, `index-service`, `SharedEmbedder`) |
+| `crates/cli` | The `digup` command-line interface |
+| `crates/server` | The `digup-server` Axum HTTP API, background job runner, and media streamer |
+| `shell/` | Cross-platform Tauri desktop wrapper (Rust backend + lightweight JS frontend) |
+
+### Schema & Twin Parity
+
+Each index tracks the exact model version that generated its vectors, and automated reference-vector tests validate every `llama.cpp` update prior to release. The SQLite schema (`v6`: tables, triggers, counters, and FTS5 virtual tables) is **100% byte-compatible** with the original Swift implementation—allowing indexes created by either implementation to be queried interchangeably without re-indexing.
+
+---
+
+## Build from Source
+
+### Prerequisites
+- **Rust:** `1.88+` (CI pins `1.99.1`)
+- **Build Tools:** C/C++ compiler toolchain (`gcc`/`clang`/`MSVC`), `CMake`, and `Python 3`
+
+```bash
 git clone https://github.com/Ocean572/DigUp-RS && cd DigUp-RS
-scripts/fetch-vendor.sh          # llama.cpp, SQLite/FTS5, PDFium, stb, miniz — pinned, sha256-checked
-scripts/build-llama.sh           # llama.cpp at the pinned tag
-cargo build --release            # → target/release/digup, target/release/digup-server
-cargo test --workspace           # the engine's suites: schema, vectors, protocol, CLI
+
+# 1. Fetch pinned, SHA-256 verified C/C++ dependencies (llama.cpp, SQLite/FTS5, PDFium, stb, miniz)
+scripts/fetch-vendor.sh
+
+# 2. Compile llama.cpp at the pinned revision
+scripts/build-llama.sh
+
+# 3. Build release binaries (target/release/digup and target/release/digup-server)
+cargo build --release
+
+# 4. Run the workspace test suite
+cargo test --workspace
 ```
 
-The web app is the [Compose app](#the-docker-compose-app) above (it builds the same payload).
-The web UI is [`server/ui`](server/ui) (Lit + Vite): `npm ci && npm test && npm run build`.
-Contributions: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+To build or test the web frontend (`server/ui`, Lit + Vite):
+```bash
+cd server/ui && npm ci && npm test && npm run build
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflows and PR guidelines.
+
+---
+
+## CI/CD & Releases
+
+Releases are automated and gated via GitHub Actions:
+- **Tagged Releases ([`.github/workflows/rust-release.yml`](.github/workflows/rust-release.yml)):** Pushing a version tag executes the full Rust workspace suite and the 139-test language-neutral contract suite against the compiled binary with zero skips. Once green, native builds compile tarballs for Linux, macOS, and Windows and update the Homebrew tap.
+- **Container Images ([`.github/workflows/server.yml`](.github/workflows/server.yml)):** Every merge to `main` builds and publishes updated container images to `ghcr.io/ocean572/digup-server`.
+- **Port Verification Ledger:** Full architectural parity benchmarks and audit logs are documented in [`docs/RUST_PORT_AUDIT.md`](docs/RUST_PORT_AUDIT.md).
+
+---
 
 ## FAQ
 
-**How is this different from Spotlight or Windows Search?** They find files by names, text and
-metadata. DigUp also finds them by what they show or say, and takes you to the page or moment.
-They work fine side by side.
+**How does DigUp differ from macOS Spotlight or Windows Search?**  
+Built-in OS search tools index filenames, metadata, and embedded text. DigUp understands semantic visual and audio content—allowing you to search inside images, silent video frames, and spoken audio while jumping directly to the matching timestamp or page. It runs cleanly alongside native OS search tools.
 
-**Why Rust?** The engine runs on Linux, Windows and in Docker, with no Swift toolchain anywhere
-in the build. The port reproduces the Swift engine's published interfaces byte-for-byte — the
-JSON-lines verbs, the SQLite schema, the vector layout — and the twin gate compares the two
-engines' answers file by file, query by query.
+**Why rewrite the engine in Rust?**  
+Porting the engine to Rust eliminates the macOS/Swift toolchain dependency, enabling native compilation and deployment across Linux servers, Docker containers, and Windows desktops. The Rust port reproduces the original JSON-lines protocols, SQLite schema, and vector layouts byte-for-byte, verified continuously against the Swift reference suite.
 
-**I have an index from the Swift app. Does it work?** Yes. The schema is byte-compatible; the
-Rust engine opens, migrates and searches Swift-built indexes unchanged (measured: a 131,973-file
-Swift-built index serving searches from a Rust compose app, zero re-indexing). Keep the same
-folder paths — index rows are root-scoped.
+**Can I use an existing index created by the Swift version of DigUp?**  
+Yes. Because the SQLite schema is byte-compatible, the Rust engine opens and searches Swift-built indexes directly with zero re-indexing (verified against a 131,973-file Swift index running on the Rust Docker stack). Ensure your mounted folder paths match the original root paths.
 
-**Why is the download 865 MB?** That's the model: the text part (310 MB) and the image and
-audio encoders (555 MB). The app is a few tens of MB; the payload tarballs carry the binary plus
-the PDF/video/image readers it uses.
+**Why is the model download 865 MB?**  
+The download contains the complete multimodal EmbeddingGemma 2 weights: the text encoder (~310 MB) and the vision/audio encoders (~555 MB). The compiled `digup` binaries themselves are only a few tens of megabytes.
 
-**Will it slow my computer down?** Only the first pass is heavy; after that it reads new files.
-The model runs in a separate process that quits when it's done, and the search side only loads
-while you're searching.
+**Will indexing slow down my system?**  
+Only the initial indexing pass is compute-intensive; subsequent incremental updates process new files in seconds. The heavy multimodal encoders run inside an isolated worker subprocess that exits immediately after indexing finishes, while search queries load only the lightweight ~250 MB text encoder on demand.
 
-**Which languages?** The model knows more than 100, and searches cross-language. Two limits hit
-exact words, not meaning: the text inside screenshots is read on a Mac only (Apple's text
-recognition), and languages written without spaces — Chinese, Japanese, Thai — aren't split into
-words for the keyword boost.
+**What languages are supported?**  
+EmbeddingGemma 2 supports semantic and cross-language search across 100+ languages. Note two platform-specific limits on exact-keyword boosting: on-device OCR for text inside screenshots is currently macOS-only (via Apple Vision), and unsegmented scripts without spaces (e.g., Chinese, Japanese, Thai) rely on semantic vector matching rather than whitespace-delimited FTS5 token boosting.
 
-**How do I remove it?** Delete what DigUp owns: the app, and its data folder — the index and the
-model. On the server stack, that's the `data/` folders you created: `docker compose down`, then
-delete them. Your files are never touched.
+**How do I uninstall DigUp?**  
+Remove the `digup` binaries and delete your local data directories (`index.sqlite`, model weights, and config). For Docker deployments, run `docker compose down` and delete the `deploy/data/` folder. Your indexed source media folders are never altered.
 
-## The Swift reference, and thanks
+---
 
-DigUp was originally created by Abdurrahim ([`ARahim3/DigUp`](https://github.com/ARahim3/DigUp),
-support: [arahim3.gumroad.com/l/support](https://arahim3.gumroad.com/l/support)) — the Swift
-engine and Mac app. This repository is the **Rust remake**: `main` is the Rust core; the Swift
-original lives on the branch [`swift-reference`](../../tree/swift-reference) as the parity
-reference the twin gate measures against, and the macOS app (`Sources/DigUpApp`, SwiftUI) stays
-Swift.
+## Acknowledgments & Credits
 
-Built on [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) by Google DeepMind
-(Apache 2.0) and [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT). The Windows/Linux
-app is built with [Tauri](https://tauri.app) (MIT or Apache 2.0) and reads files with
-[PDFium](https://pdfium.googlesource.com/pdfium/) (BSD), [FFmpeg](https://ffmpeg.org) (LGPL),
-[stb](https://github.com/nothings/stb) (public domain) and
-[miniz](https://github.com/richgel999/miniz) (MIT). Their license notices ship with the payload.
+DigUp was originally created by Abdurrahim ([`ARahim3/DigUp`](https://github.com/ARahim3/DigUp) · [Support the original creator](https://arahim3.gumroad.com/l/support)). This repository (`Ocean572/DigUp-RS`) is the **pure-Rust port**: `main` houses the Rust engine, CLI, server, and Tauri shell, while the original Swift codebase is preserved on the [`swift-reference`](../../tree/swift-reference) branch as the byte-parity reference baseline (alongside the native SwiftUI macOS app in `Sources/DigUpApp`).
 
-DigUp isn't affiliated with Google, Apple or Microsoft. Gemma is a trademark of Google LLC; Mac
-and Spotlight are trademarks of Apple Inc.; Windows is a trademark of Microsoft Corporation.
+Powered by open-source technology:
+- [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) by Google DeepMind (Apache 2.0)
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT)
+- [Tauri](https://tauri.app) (MIT / Apache 2.0)
+- [PDFium](https://pdfium.googlesource.com/pdfium/) (BSD), [FFmpeg](https://ffmpeg.org) (LGPL), [stb](https://github.com/nothings/stb) (Public Domain), and [miniz](https://github.com/richgel999/miniz) (MIT)
+
+*DigUp is an independent open-source project and is not affiliated with Google, Apple or Microsoft. Gemma is a trademark of Google LLC; Mac and Spotlight are trademarks of Apple Inc.; Windows is a trademark of Microsoft Corporation.*
 
 ## License
 
-MIT
+[MIT](LICENSE)
