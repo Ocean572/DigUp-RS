@@ -1506,35 +1506,33 @@ async fn estimate(
         return detail_response(errors);
     }
     let target = request_target(&ctx);
-    let scope = match app.scope_for(&target) {
-        Ok(scope) => scope,
-        Err(error) => return error.into_response(),
-    };
-    if app
-        .estimate_busy
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return ApiError::http(
-            StatusCode::CONFLICT,
-            "an estimate is already running — the engine walks every folder once at a time",
-        )
-        .into_response();
-    }
-    let task = {
-        let app = app.clone();
-        tokio::task::spawn_blocking(move || {
-            cli::estimate_lines(
-                &scope.cfg,
-                Duration::from_secs_f64(app.cfg.estimate_timeout_s),
-            )
+    // `sc = scope_for(request_target(request))` FIRST (api.py:1516), the busy gate
+    // after it — and BOTH on the blocking pool: FastAPI runs its sync endpoints in a
+    // threadpool, `scope_for` on a cold target spawns the target's searcher and waits
+    // for the `ready` handshake (20–30 s of engine warm, AGENTS.md), which must never
+    // run on a tokio worker (the audit-base ran it there, stalling every request parked
+    // on that worker). `in_scope` is the port's established shape (the media endpoints
+    // ride it). The gate opens on every ending, inside the same task.
+    let timeout = Duration::from_secs_f64(app.cfg.estimate_timeout_s);
+    let outcome = in_scope(app.clone(), target, move |scope| {
+        if app
+            .estimate_busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(ApiError::http(
+                StatusCode::CONFLICT,
+                "an estimate is already running — the engine walks every folder once at a time",
+            ));
+        }
+        let result = cli::estimate_lines(&scope.cfg, timeout)
             .map(|folders| json!({"folders": folders}))
-            .map_err(ApiError::from)
-        })
-    };
-    let outcome = task.await.map_err(|_| ApiError::Internal).and_then(|r| r);
-    // `finally: estimate_busy.release()` — the gate opens on every ending.
-    app.estimate_busy.store(false, Ordering::SeqCst);
+            .map_err(ApiError::from);
+        // `finally: estimate_busy.release()` — the gate opens on every ending.
+        app.estimate_busy.store(false, Ordering::SeqCst);
+        result
+    })
+    .await;
     match outcome {
         Ok(value) => Json(value).into_response(),
         Err(error) => error.into_response(),
@@ -1552,13 +1550,21 @@ async fn index(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body: 
         Err(errors) => return detail_response(errors),
     };
     let target = request_target(&ctx);
-    let scope = match app.scope_for(&target) {
-        Ok(scope) => scope,
-        Err(error) => return error.into_response(),
-    };
-    match scope.jobs.start(prune) {
-        Ok(job) => (StatusCode::ACCEPTED, Json(json!({"ok": true, "job": job}))).into_response(),
-        Err(busy) => ApiError::from(busy).into_response(),
+    // `sc = scope_for(...)` then `sc.jobs.start(prune=prune)` (api.py) — on the
+    // blocking pool (`in_scope`): a cold target's first index request pays the
+    // searcher spawn, and `jobs.start` takes the flock + starts the runner's queue
+    // (the flock wait is blocking IO, the same class as the searcher spawn).
+    let outcome = in_scope(app, target, move |scope| {
+        scope
+            .jobs
+            .start(prune)
+            .map(|job| json!({"ok": true, "job": job}))
+            .map_err(ApiError::from)
+    })
+    .await;
+    match outcome {
+        Ok(value) => (StatusCode::ACCEPTED, Json(value)).into_response(),
+        Err(error) => error.into_response(),
     }
 }
 
@@ -1566,11 +1572,17 @@ async fn index(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body: 
 /// in-memory state of `jobs.jsonl`'s story, replayed at boot).
 async fn jobs_endpoint(State(app): State<Shared>, Extension(ctx): Extension<Ctx>) -> Response {
     let target = request_target(&ctx);
-    let scope = match app.scope_for(&target) {
-        Ok(scope) => scope,
-        Err(error) => return error.into_response(),
-    };
-    Json(json!({"jobs": scope.jobs.jobs()})).into_response()
+    // `scope_for` first (api.py:1575), on the blocking pool: the lazy supervision
+    // spawns this target's searcher + runner on the first look (a runtime-registered
+    // target sees its first GET /jobs here).
+    let outcome = in_scope(app, target, move |scope| {
+        Ok(json!({"jobs": scope.jobs.jobs()}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
 /// `GET /api/v1/jobs/{job_id}` — one job record (states
@@ -1582,13 +1594,18 @@ async fn job_show(
     axum::extract::Path(job_id): axum::extract::Path<String>,
 ) -> Response {
     let target = request_target(&ctx);
-    let scope = match app.scope_for(&target) {
-        Ok(scope) => scope,
-        Err(error) => return error.into_response(),
-    };
-    match scope.jobs.job(&job_id) {
-        Some(found) => Json(json!({"job": found})).into_response(),
-        None => ApiError::http(StatusCode::NOT_FOUND, format!("no job {job_id}")).into_response(),
+    // `scope_for(...).jobs.job(job_id)` (api.py), on the blocking pool.
+    let outcome = in_scope(app, target, move |scope| {
+        scope
+            .jobs
+            .job(&job_id)
+            .map(|found| json!({"job": found}))
+            .ok_or_else(|| ApiError::http(StatusCode::NOT_FOUND, format!("no job {job_id}")))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
     }
 }
 
