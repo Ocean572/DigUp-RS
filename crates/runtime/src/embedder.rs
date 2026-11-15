@@ -92,7 +92,7 @@ impl LlamaEmbedder {
         let text_path = cstring(&models.text);
         let model = unsafe { ffi::llama_model_load_from_file(text_path.as_ptr(), model_params) };
         if model.is_null() {
-            return Err(Error::Llama(format!(
+            return Err(Error::Worker(format!(
                 "can't load {}",
                 models.text.display()
             )));
@@ -117,7 +117,9 @@ impl LlamaEmbedder {
         let context = unsafe { ffi::llama_init_from_model(model, params) };
         if context.is_null() {
             unsafe { ffi::llama_model_free(model) };
-            return Err(Error::Llama("can't create a llama.cpp context".to_string()));
+            return Err(Error::Worker(
+                "can't create a llama.cpp context".to_string(),
+            ));
         }
 
         let mut media: *mut ffi::mtmd_context = std::ptr::null_mut();
@@ -138,7 +140,10 @@ impl LlamaEmbedder {
                     ffi::llama_free(context);
                     ffi::llama_model_free(model);
                 }
-                return Err(Error::Llama(format!("can't load {}", media_file.display())));
+                return Err(Error::Worker(format!(
+                    "can't load {}",
+                    media_file.display()
+                )));
             }
         }
 
@@ -148,7 +153,7 @@ impl LlamaEmbedder {
                 ffi::llama_free(context);
                 ffi::llama_model_free(model);
             }
-            return Err(Error::Llama("can't create a llama.cpp batch".to_string()));
+            return Err(Error::Worker("can't create a llama.cpp batch".to_string()));
         }
 
         let known = model_info();
@@ -290,7 +295,7 @@ impl LlamaEmbedder {
         };
         if status != 0 {
             self.reset();
-            return Err(Error::Llama(format!("llama_process failed ({status})")));
+            return Err(Error::Worker(format!("llama_process failed ({status})")));
         }
         let vectors = (0..sequences)
             .map(|sequence| self.pooled(sequence))
@@ -304,7 +309,7 @@ impl LlamaEmbedder {
     fn pooled(&self, sequence: i32) -> Result<Vec<f32>> {
         let pooled = unsafe { ffi::llama_get_embeddings_seq(self.context, sequence) };
         if pooled.is_null() {
-            return Err(Error::Llama(format!(
+            return Err(Error::Worker(format!(
                 "no pooled embedding for input {sequence}"
             )));
         }
@@ -621,7 +626,9 @@ mod tests {
         let pairs = "\u{915}\u{93F}".repeat(400); // 400 graphemes, 800 scalars
         assert_eq!(digup_core::xmlscan::grapheme_len(&pairs), 400);
         assert_eq!(pairs.chars().count(), 800);
-        let made = LlamaEmbedder::one(Err(Error::Worker(pairs.clone())));
+        // LlamaError rides RAW (F-13b: LlamaEmbedder.swift:391-394 — the
+        // per-input family), so the cap rides the message as written.
+        let made = LlamaEmbedder::one(Err(Error::Llama(pairs.clone())));
         let text = made.error.expect("the reason the vector has none");
         assert_eq!(
             digup_core::xmlscan::grapheme_len(&text),
@@ -636,10 +643,17 @@ mod tests {
         let _ = Embedding::made(Vec::new());
     }
 
-    /// The short messages ride whole (the cap is a cap, not a pad).
+    /// The short messages ride whole (the cap is a cap, not a pad) — and the
+    /// Worker family rides its `worker error: ` prefix (F-13b: Swift's
+    /// `embedding()` catch prints the Display, Worker.swift:88).
     #[test]
     fn a_short_failure_text_is_kept_whole() {
         let made = LlamaEmbedder::one(Err(Error::Worker("llama batch filled".into())));
-        assert_eq!(made.error.as_deref(), Some("llama batch filled"));
+        assert_eq!(
+            made.error.as_deref(),
+            Some("worker error: llama batch filled")
+        );
+        let made = LlamaEmbedder::one(Err(Error::Llama("batch full (32)".into())));
+        assert_eq!(made.error.as_deref(), Some("batch full (32)"));
     }
 }

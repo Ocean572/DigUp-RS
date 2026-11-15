@@ -43,14 +43,29 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{0}")]
+    /// `WorkerError.failed` (Worker.swift:86-92) — its Display is a PREFIXED
+    /// string: `"worker error: \(why)"`. Every relay carries it: the worker
+    /// daemon's `error` field (`String("\(error)".prefix(500))`), the search
+    /// daemon's `encoder`-unavailable event (prefix 300), the indexer's
+    /// per-file `Embedding.error` (prefix 300), the server's EngineRefused
+    /// text. The audit-base spelled the message raw — every failure reply
+    /// lost the prefix the reference mints. (F-13b, measured against
+    /// Worker.swift:88.)
+    #[error("worker error: {0}")]
     Worker(String),
-    /// A model file is missing, so an indexing run stops and its files stay pending
-    /// (`WorkerError.notFound`, LlamaModels.swift:36).
-    #[error("not found: {0}")]
+    /// A model file is missing, so an indexing run stops and its files stay
+    /// pending (`WorkerError.notFound`, LlamaModels.swift:36; Worker.swift:87
+    /// displays it as `"worker not found: \(why)"` — the relayed strings ride
+    /// that shape, `the model is closed` included, IndexService.swift:511).
+    #[error("worker not found: {0}")]
     NotFound(String),
-    /// llama.cpp said no (a model that won't load, a batch that filled, a failed encode).
-    #[error("llama.cpp: {0}")]
+    /// `LlamaError` (LlamaEmbedder.swift:391-394): `init(_ description)` —
+    /// the description is the RAW string, NO prefix. This family is the
+    /// per-input failures (a batch that filled, a file that won't read, a
+    /// video sent whole, an image too thin): the daemon answers them as the
+    /// input's `Embedding.error`, verbatim. The audit-base prefixed them
+    /// "llama.cpp: " — where the engine answers the bare message. (F-13b.)
+    #[error("{0}")]
     Llama(String),
     #[error("io: {path}: {source}")]
     Io {
@@ -104,4 +119,39 @@ pub mod ffi {
     #![allow(dead_code)]
     #![allow(clippy::all)]
     include!(concat!(env!("OUT_DIR"), "/llama_bindings.rs"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn the_error_displays_are_the_swift_strings() {
+        // Worker.swift:86-92 (WorkerError: NOT a raw string) and
+        // LlamaEmbedder.swift:391-394 (LlamaError: a raw string) — the
+        // relays (worker daemon reply `error`, search daemon `encoder`
+        // event, per-file `Embedding.error`, server EngineRefused text)
+        // print exactly these. F-13b: the audit-base had Worker raw /
+        // Llama prefixed — the two families swapped.
+        assert_eq!(
+            Error::Worker("budget must be one of [70, 140, 280, 560, 1120]".into()).to_string(),
+            "worker error: budget must be one of [70, 140, 280, 560, 1120]"
+        );
+        assert_eq!(
+            Error::Worker("this embedder was started text-only".into()).to_string(),
+            "worker error: this embedder was started text-only"
+        );
+        assert_eq!(
+            Error::NotFound("the model is closed".into()).to_string(),
+            "worker not found: the model is closed"
+        );
+        assert_eq!(
+            Error::Llama("can't read /a/b.png".into()).to_string(),
+            "can't read /a/b.png"
+        );
+        assert_eq!(
+            Error::Llama("batch full (32)".into()).to_string(),
+            "batch full (32)"
+        );
+    }
 }
