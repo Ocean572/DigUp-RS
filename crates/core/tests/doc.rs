@@ -720,3 +720,42 @@ fn rtf_codepage_undefined_bytes() {
         "{out}"
     );
 }
+
+#[test]
+fn rtf_hex_escapes_follow_swift_radix_parsing() {
+    // F7's `\'hh` window is Swift's `UInt8(two chars, radix: 16)` over the TWO
+    // scalars the reader slices (`RTF.text`, Docs+Portable.swift). Measured
+    // exhaustively (swift-corelibs 6.4, 2026-11-15): a Swift oracle over ALL 1,089
+    // windows of the window alphabet (hex, space, '+', '-', '_', tab, NBSP, 'x',
+    // 'z', quote, 'g' - f7all.swift) against `u8::from_str_radix` (f7all.rs):
+    // 1,088 of 1,089 windows AGREE. Accepted on both sides: the sign ("+4"->4,
+    // "+41"->65) and the hex digits; refused on both sides: spaces (" 4"),
+    // underscores ("4_", "_4", "1_", "+_"), '-', quote, NBSP, "0x". The ONE
+    // divergence: Swift answers 0 for "-0" - a negative zero fits UInt8 - where
+    // from_str_radix refuses. Fails-before (measured at 881d0c2, the raw
+    // from_str_radix shape): `\'-0A` answers the literal "-0A" where the engine
+    // answers NUL + "A". (An earlier spot-probe over-read `Int(_:radix:)` over
+    // THREE-character slices - "4_"->4, "_41"->65 are 3-char facts; the reader's
+    // window is TWO characters and the engine refuses both shapes. The ledger
+    // records the refutation.)
+    //
+    // A refused window is skipped by ONE character (the quote) and its two
+    // characters stay literal text; an accepted window eats two (Swift's i += 3).
+    // `\'5\'\'` refuses TWICE (window "5\", then the tail): a window never
+    // spans a quote into the NEXT escape - the second backslash starts one. The
+    // fixture uses `\'5''` to put a real quote inside a window, and the space
+    // after \ansicpg1252 is the control word's own (consumed, not text).
+    let out = rtf::text("{\\rtf1\\ansi\\ansicpg1252 \\'41\\' +41A\\'5''\\' +_4\\'1_234\\'4_ \\' 4\\'ff\\'1234\\'_4\\'-4\\'0x4\\'1.2\\' \u{a0}4\\'-0A}");
+    // Traced window by window against the oracle:
+    // "41"->0x41 "A" | " +" refused -> " +41A" (plain tail) | "5'" refused (the
+    // quote is not a hex digit) -> "5''" | " +" refused -> " +_4" | "1_" refused
+    // -> "1_234" | "4_" refused -> "4_ " | " 4" refused -> " 4" |
+    // "ff"->0xFF Latin-1 y-umlaut | "12"->0x12 + "34" | "_4" refused |
+    // "-4" refused (underflow: -4 is not a UInt8) | "0x" refused -> "0x4" |
+    // "1." refused -> "1.2" | " \u{a0}" refused -> " \u{a0}4" | "-0"->0 + "A".
+    let want = concat!(
+        "A", " +41A", "5''", " +_4", "1_234", "4_ ", " 4", "\u{ff}", "\u{12}", "34", "_4", "-4",
+        "0x4", "1.2", " \u{a0}4", "\u{0}", "A",
+    );
+    assert_eq!(out, want, "{out}");
+}

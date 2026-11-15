@@ -3,6 +3,28 @@
 //! (fonts, colors, styles, info, pictures) skipped. Enough for search.
 
 /// The engine walks Unicode SCALARS (`rtf.unicodeScalars`), which in Rust is plain `char`.
+/// The `\'hh` window: Swift's `UInt8(two chars, radix: 16)` over exactly the
+/// TWO characters the reader slices (`chars[(i + 1)...(i + 2)]`). Measured
+/// exhaustively on swift-corelibs 6.4 (2026-11-15): a Swift oracle over all
+/// 1,089 windows of the window alphabet (hex, space, '+', '-', '_', tab, NBSP,
+/// 'x', 'z', quote, 'g' - `f7all.swift`) against `u8::from_str_radix`
+/// (`f7all.rs`): 1,088 of 1,089 windows agree - signs ("+4"->4, "+41"->65),
+/// spaces (" 4"), underscores ("4_", "_4", "1_", "+_"), '-', quote, NBSP, "0x"
+/// all behave identically. The one divergence is spelled out: Swift accepts
+/// "-0" (a negative zero fits UInt8) where from_str_radix refuses. A window
+/// needs its two characters (Swift's `i + 2 < count` gate); the CALLER moves
+/// the reader - two on success (Swift's `i += 3`), one on refusal (the window
+/// stays literal text).
+fn hex_window(chars: &[char], at: usize) -> Option<u8> {
+    if at + 2 >= chars.len() {
+        return None;
+    }
+    let hex: String = chars[at..at + 2].iter().collect();
+    u8::from_str_radix(&hex, 16)
+        .ok()
+        .or(if hex == "-0" { Some(0) } else { None })
+}
+
 pub fn text(rtf: &str) -> String {
     let chars: Vec<char> = rtf.chars().collect();
     let mut out = String::new();
@@ -57,20 +79,18 @@ pub fn text(rtf: &str) -> String {
                 }
                 let next = chars[i];
                 if next == '\'' {
-                    // \'hh: a byte in the document's code page (Windows-1252 here)
-                    if i + 2 < chars.len() {
-                        let hex: String = chars[i + 1..i + 3].iter().collect();
-                        if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                            if pending_skip > 0 {
-                                pending_skip -= 1;
-                            } else {
-                                out.push(windows1252(byte));
-                            }
-                            i += 3;
-                            continue;
+                    // \'hh: a byte in the document's code page (Windows-1252
+                    // here), parsed by `hex_window`.
+                    if let Some(byte) = hex_window(&chars, i + 1) {
+                        if pending_skip > 0 {
+                            pending_skip -= 1;
+                        } else {
+                            out.push(windows1252(byte));
                         }
+                        i += 3; // Swift's success: the quote + the 2-char window
+                        continue;
                     }
-                    i += 1;
+                    i += 1; // refused: the quote moves one, the window is text
                 } else if is_letter(next) {
                     let mut word = String::new();
                     let mut number = String::new();
@@ -263,5 +283,39 @@ fn windows1252(byte: u8) -> char {
             0x81 | 0x8D | 0x90 | 0x9D => ' ',
             _ => byte as char,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hex_window;
+
+    fn esc(w: &str) -> Option<u8> {
+        let mut chars: Vec<char> = w.chars().collect();
+        chars.push('Z'); // the tail Swift's `i + 2 < count` gate needs
+        hex_window(&chars, 0)
+    }
+
+    #[test]
+    fn the_hex_window_is_the_measured_radix_shape() {
+        // Every assertion is a row of the 1,089-window Swift oracle of 2026-11-15.
+        assert_eq!(esc("41"), Some(0x41));
+        assert_eq!(esc("FF"), Some(0xFF));
+        assert_eq!(esc("+4"), Some(4)); // the sign eats a window slot
+        assert_eq!(esc("-0"), Some(0)); // Swift's only accepted negative
+        assert_eq!(esc("4_"), None); // the reader's 2-char window: refused,
+        assert_eq!(esc("_4"), None); // like the spot-probe's 3-char slices said
+        assert_eq!(esc("1_"), None); // NOT (that was `Int` over 3 chars)
+        assert_eq!(esc("+_"), None);
+        assert_eq!(esc(" +"), None);
+        assert_eq!(esc(" 4"), None);
+        assert_eq!(esc("-4"), None); // underflow: -4 is not a UInt8
+        assert_eq!(esc("0x"), None);
+        assert_eq!(esc("1."), None);
+        assert_eq!(esc("5'"), None);
+        assert_eq!(esc("\u{a0}4"), None); // NBSP: Swift nil, Rust InvalidDigit
+                                          // The gate: a window needs its two characters (Swift's `i + 2 < count`).
+        let chars: Vec<char> = "'4".chars().collect();
+        assert_eq!(hex_window(&chars, 1), None);
     }
 }
