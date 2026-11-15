@@ -1041,15 +1041,9 @@ fn audit_line(method: &str, path: &str, status: u16, principal: &str, target: Op
 /// (`?target=name`); None when it does not (the FIRST occurrence wins,
 /// like Python's `parse_qs(...)[0]`).
 fn query_target(uri: &Uri) -> Option<String> {
-    let query = uri.query()?;
-    for pair in query.split('&') {
-        if let Some(value) = pair.strip_prefix("target=") {
-            let value = percent_decode(value);
-            let value = value.trim().to_string();
-            return (!value.is_empty()).then_some(value);
-        }
-    }
-    None
+    query_param(uri, "target")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// The guard's view of the request path: uvicorn decodes `scope["path"]`
@@ -1955,15 +1949,28 @@ async fn media_file(
 }
 
 /// The first occurrence of a query param (FastAPI's `Query` on
-/// `?pixels=1&pixels=2` keeps the first).
+/// `?pixels=1&pixels=2` keeps the first). The value decodes through
+/// `query_decode` — the query layer's rule, shared with `query_target`
+/// (one parser for both readers: pixels, target; FastAPI's `Query` and
+/// api.py's `parse_qs` run the SAME `parse_qsl` machinery).
 fn query_param(uri: &Uri, key: &str) -> Option<String> {
     let query = uri.query()?;
     for pair in query.split('&') {
         if let Some(value) = pair.strip_prefix(&format!("{key}=")) {
-            return Some(percent_decode(value));
+            return Some(query_decode(value));
         }
     }
     None
+}
+
+/// `urllib.parse.unquote_plus`, measured on CPython 3.12 (parse_qsl decodes
+/// query VALUES through it): a literal `+` is a SPACE, then `%XX` runs —
+/// `%2B` decodes to a literal `+` the space rule never sees. The PATH
+/// decoder (`percent_decode`, uvicorn's h11_impl "PERFORM PERCENT DECODING")
+/// keeps `+` standing: the two layers decode differently, and the request
+/// target rides the path rule.
+fn query_decode(value: &str) -> String {
+    percent_decode(&value.replace('+', " "))
 }
 /// `_admin_scope` (api.py:854): the gate records an admin token on a read
 /// route as `admin (read scope)` — this IS the admin scope's surface, so
@@ -2595,6 +2602,64 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn the_query_parser_is_one_shape_and_decodes_plus_as_space() {
+        // Redundancy fix (the two hand-rolled parsers) + the parity fact it
+        // exposed: parse_qsl decodes query VALUES with unquote_plus
+        // (measured CPython 3.12): a literal `+` is a space, `%2B` is a
+        // literal `+`. The audit-base ran `percent_decode` (the PATH rule)
+        // on query values: `?pixels=1+ ` answers int("1  ") = 1 (200) in
+        // Python where the audit-base 422s, and `?target=web+shop` names
+        // "web shop" in Python, "web+shop" in the audit-base.
+        use super::{query_decode, query_param, query_target};
+        use axum::http::Uri;
+        let parse =
+            |qs: &str| query_target(&format!("/api/v1/status?{qs}").parse::<Uri>().unwrap());
+        // unquote_plus, measured: plus first, then %XX.
+        assert_eq!(query_decode("web+shop"), "web shop");
+        assert_eq!(query_decode("a%2Bb"), "a+b"); // %2B rides a literal +
+        assert_eq!(query_decode("1+ "), "1  ");
+        assert_eq!(
+            query_decode("a+b%20c"),
+            "a b c" // plus AND %20 — the space rule does not eat %20
+        );
+        // The first occurrence wins (parse_qs(...)[0] / FastAPI's Query).
+        let uri = "/api/v1/search?q=x&target=first&target=second"
+            .parse::<Uri>()
+            .unwrap();
+        assert_eq!(query_target(&uri).as_deref(), Some("first"));
+        // trim + non-empty (api.py: `.strip()`, `if value`):
+        assert_eq!(parse("target=+").as_deref(), None); // " " trims empty
+        assert_eq!(parse("target=%20%20").as_deref(), None);
+        assert_eq!(parse("target=a+b").as_deref(), Some("a b"));
+        assert_eq!(parse("target=%20web%20").as_deref(), Some("web"));
+        assert_eq!(parse("x=1").as_deref(), None); // no target at all
+                                                   // pixels flow: the audit-base 422s on "1+ " (parse fails on "1+"),
+                                                   // the fixed decode lands on trim -> 1, like Python's int("1  ").
+                                                   // `?pixels=1+ ` — the same 422 on both sides (1 < 32), the DETAIL
+                                                   // differs: Python decodes to "1  ", parses int("1  ") = 1, and the
+                                                   // range check fires (greater_than_equal); the audit-base's
+                                                   // percent_decode left "1+ ", and the int parse fires (int_parsing).
+        let uri = "/api/v1/media/x/file?pixels=1+%20".parse::<Uri>().unwrap();
+        assert_eq!(query_param(&uri, "pixels").as_deref(), Some("1  "));
+        let fixed = super::validate::check_pixels("1  ").expect_err("1 < 32");
+        assert_eq!(fixed[0]["type"], serde_json::json!("greater_than_equal")); // Python's 422
+                                                                               // The audit-base shape inline (the fails-before): percent_decode
+                                                                               // leaves the plus, check_pixels refuses "1+ " — the SAME status,
+                                                                               // a DIFFERENT detail type.
+        assert_eq!(super::percent_decode("1+ "), "1+ ");
+        let base = super::validate::check_pixels("1+ ").expect_err("no int parse");
+        assert_eq!(base[0]["type"], serde_json::json!("int_parsing"));
+        // In range with the space rule: pixels=+256 -> " 256" -> 256 (200).
+        let uri = "/api/v1/media/x/file?pixels=+256".parse::<Uri>().unwrap();
+        assert_eq!(query_param(&uri, "pixels").as_deref(), Some(" 256"));
+        assert_eq!(
+            super::validate::check_pixels(" 256").expect("int( 256) = 256"),
+            256
+        );
+        // Paths keep the path rule: uvicorn decodes %XX, leaves `+` standing.
+        assert_eq!(super::guard_path_of("/a+b/c"), "/a+b/c");
+    }
     #[test]
     fn the_ui_default_rides_the_running_binary_not_the_build_tree() {
         use super::{default_ui_dir, ui_mount};
