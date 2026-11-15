@@ -808,14 +808,34 @@ fn starlette_full(header: Option<&str>, size: i64) -> StarFull {
 /// answer 304, ranges answer 206 (chunked) / 416. `cap_span` is api.py's
 /// 8 MiB server cap (the media `/file` endpoint); the mount/preview use
 /// Starlette's uncapped parse.
+/// The shape a file answer rides (one struct keeps `file_response` inside
+/// clippy's argument budget): `head` — headers-only answer; `cap_span` —
+/// the media endpoint's own capped `parse_range` arm (8 MiB); `live_size`
+/// — the LIVE HANDLE's fstat the app-span layer prints (api.py:739; None:
+/// FileResponse stats fresh); `mount` — the StaticFiles flag where the
+/// conditional 304 lives (starlette 1.10: FileResponse has no conditional
+/// check at all).
+#[derive(Clone, Copy)]
+struct FileOptions {
+    head: bool,
+    cap_span: bool,
+    live_size: Option<i64>,
+    mount: bool,
+}
+
 fn file_response(
     path: &Path,
     media_type: &str,
     headers: Vec<(HeaderName, HeaderValue)>,
     request_headers: &HeaderMap,
-    head: bool,
-    cap_span: bool,
+    opts: FileOptions,
 ) -> Response {
+    let FileOptions {
+        head,
+        cap_span,
+        live_size,
+        mount,
+    } = opts;
     let meta = match std::fs::metadata(path) {
         Ok(meta) => meta,
         Err(_) => {
@@ -828,6 +848,19 @@ fn file_response(
         }
     };
     let size = meta.len() as i64;
+    // The app-span layer's size rides the live handle's fstat (api.py:739:
+    // `os.fstat(handle.fileno()).st_size` feeds `parse_range`, and the 206
+    // Content-Range and the 416 `bytes */{size}` print THAT number). The
+    // starlette layer (400/416/206/200 of FileResponse) rides FileResponse's
+    // own `os.stat` — the port's `fs::metadata`. A replacement between the
+    // handle's check and the stream is the reference's own window: the
+    // headers ride the handle, the bytes ride the fresh open (api.py:760's
+    // `ranged()` opens the path anew). The audit-base ran the stat's number
+    // through both layers: measured seam probe (20-byte file, live handle
+    // 15): `bytes=0-9` answers `bytes 0-9/15` in the reference,
+    // `bytes 0-9/20` at the audit-base; `bytes=10-20` answers 416
+    // `bytes */15` in the reference, 206 `bytes 10-19/20` at the audit-base.
+    let app_size = live_size.unwrap_or(size);
     let mtime = meta
         .modified()
         .ok()
@@ -843,31 +876,79 @@ fn file_response(
     extra.push(header("etag", &etag));
     extra.push(header("last-modified", &last_modified));
 
-    // Conditional GET → 304 (Starlette: exact etag match; a parseable
-    // if-modified-since at/after the file's timestamp).
-    if let Some(inm) = request_headers
-        .get("if-none-match")
-        .and_then(|v| v.to_str().ok())
-    {
-        if inm == etag {
-            return status_with_headers(StatusCode::NOT_MODIFIED, extra, Body::empty());
-        }
-    }
-    if let Some(imds) = request_headers
-        .get("if-modified-since")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|value| httpdate::parse_http_date(value).ok())
-    {
-        let file_time = std::time::UNIX_EPOCH + Duration::from_secs(mtime.floor() as u64);
-        if file_time <= imds {
-            return status_with_headers(StatusCode::NOT_MODIFIED, extra, Body::empty());
-        }
-    }
-
     let range_header = request_headers
         .get("range")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    // Conditional GET: the 304 lives in StaticFiles, NOT in FileResponse
+    // (starlette 1.10, measured in the pinned site-packages): responses.py
+    // has no conditional check at all — `if-none-match`/`if-modified-since`
+    // are consulted only by `staticfiles.py:214-228` (`is_not_modified`),
+    // and its 304 keeps ONLY the NOT_MODIFIED_HEADERS (cache-control,
+    // content-location, date, etag, expires, vary — 304 drops last-modified
+    // and content-length; the audit-base echoed the FULL header set). The
+    // media `/file` and `/preview` endpoints answer FileResponse/StreamingResponse:
+    // `If-None-Match` on them is a NORMAL 200/206 (the audit-base 304'd —
+    // a video element's `Range`+`If-None-Match` revalidation is exactly this
+    // request, and Python serves the span). StaticFiles' comparison is
+    // WEAK: `*` matches; every comma-part of the list, stripped and with
+    // the `W/` prefix removed, is compared to the response's etag.
+    let not_modified = |extra: &[(HeaderName, HeaderValue)]| -> Response {
+        const KEEP: [&str; 6] = [
+            "cache-control",
+            "content-location",
+            "date",
+            "etag",
+            "expires",
+            "vary",
+        ];
+        let kept: Vec<(HeaderName, HeaderValue)> = extra
+            .iter()
+            .filter(|(name, _)| KEEP.contains(&name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        status_with_headers(StatusCode::NOT_MODIFIED, kept, Body::empty())
+    };
+    if mount {
+        // `is_not_modified` (staticfiles.py:211-228) DECIDES on the
+        // PRESENCE of `if-none-match`: a header that does not match
+        // returns False from the etag branch — `if-modified-since` is
+        // never consulted behind a non-matching etag list (the audit-base
+        // ran the two checks in sequence and 304'd on the imds leg
+        // behind an unmatched inm). The comparison is WEAK: `*`
+        // matches; every comma-part, stripped, with the `W/` prefix
+        // removed (`str.removeprefix`, head-only, once), is compared to
+        // the response's own etag.
+        if let Some(inm) = request_headers.get("if-none-match") {
+            let hits = match inm.to_str() {
+                Ok(value) => {
+                    let value = value.trim();
+                    value == "*"
+                        || value.split(',').any(|tag| {
+                            let tag = tag.trim();
+                            let tag = tag.strip_prefix("W/").unwrap_or(tag);
+                            tag == etag
+                        })
+                }
+                // A non-ASCII list is a string starlette compares too;
+                // it can never equal the ASCII etag: presence decides,
+                // answer is "modified".
+                Err(_) => false,
+            };
+            if hits {
+                return not_modified(&extra);
+            }
+        } else if let Some(imds) = request_headers
+            .get("if-modified-since")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|value| httpdate::parse_http_date(value).ok())
+        {
+            let file_time = std::time::UNIX_EPOCH + Duration::from_secs(mtime.floor() as u64);
+            if file_time <= imds {
+                return not_modified(&extra);
+            }
+        }
+    }
     // The two layers, measured header-for-header on 2026-11-13:
     //  * api.py's capped `parse_range` answers its own 206 (StreamingResponse:
     //    chunked, NO content-length, NO etag/last-modified — the endpoint's
@@ -877,7 +958,7 @@ fn file_response(
     //    whose refusals are plain-text 400s, and whose 416 is the
     //    PlainTextResponse shape (content-range + length 0, no accept-ranges).
     let app_span = if cap_span {
-        media::parse_range(range_header.as_deref(), size)
+        media::parse_range(range_header.as_deref(), app_size)
     } else {
         media::Span::None
     };
@@ -900,12 +981,21 @@ fn file_response(
         let body = Body::from_stream(media::span_stream(file, (end - start + 1) as u64));
         // The app's own header list (no stat headers: `extra` rode the File
         // path only); accept-ranges rides with the endpoint's headers.
+        // The endpoint's header dict carries accept-ranges once (api.py:747-751;
+        // `dict` assignment cannot duplicate a key); HeaderMap needs a replace,
+        // not an append — the audit-base appended a second `accept-ranges`.
         let mut headers = headers;
+        // The endpoint's header list ALREADY carries accept-ranges (it
+        // rides the Python dict at api.py:747). The audit-base appended a
+        // second tuple; `status_with_headers` inserts each pair (dict
+        // semantics), so the second was a REPLACE — no wire change, shape
+        // hygiene only. This arm adds only content-range and the media
+        // type: the push order lands on Python's dict order (disposition,
+        // ranges, nosniff, range) plus the media type appended.
         headers.push(header(
             "content-range",
-            &format!("bytes {start}-{end}/{size}", end = end),
+            &format!("bytes {start}-{end}/{size}", end = end, size = app_size),
         ));
-        headers.push(header("accept-ranges", "bytes"));
         headers.push(header("content-type", media_type));
         return status_with_headers(StatusCode::PARTIAL_CONTENT, headers, body);
     }
@@ -926,9 +1016,12 @@ fn file_response(
             .into_response(),
         StarFull::Unsatisfiable if cap_span => (
             // api.py's own 416: content-range + accept-ranges, empty body.
+            // The number is the live handle's fstat (the `size` of
+            // `f"bytes */{size}"` at api.py:754 — parse_range refused on
+            // the SAME handle-fed number, the pair must agree).
             StatusCode::RANGE_NOT_SATISFIABLE,
             [
-                header("content-range", &format!("bytes */{size}")),
+                header("content-range", &format!("bytes */{app_size}")),
                 header("accept-ranges", "bytes"),
                 header("content-length", "0"),
             ],
@@ -1808,8 +1901,12 @@ async fn preview(
         "image/jpeg",
         Vec::new(),
         &headers,
-        method == Method::HEAD,
-        false,
+        FileOptions {
+            head: method == Method::HEAD,
+            cap_span: false,
+            live_size: None, // FileResponse stats fresh; the preview has no handle
+            mount: false,    // no conditional 304 on a FileResponse answer
+        },
     )
 }
 
@@ -1888,8 +1985,17 @@ async fn media_file(
     // handle: a replacement mid-request cannot make the headers lie about
     // the bytes). FileNotFoundError/IsADirectoryError/PermissionError all
     // become the same honest 404.
-    let handle = match std::fs::File::open(&resolved) {
-        Ok(handle) => handle,
+    let live_size = match std::fs::File::open(&resolved) {
+        Ok(handle) => match handle.metadata() {
+            Ok(meta) if meta.is_file() => meta.len() as i64,
+            _ => {
+                return ApiError::http(
+                    StatusCode::NOT_FOUND,
+                    "the file is gone (it left the folders)",
+                )
+                .into_response()
+            }
+        },
         Err(_) => {
             return ApiError::http(
                 StatusCode::NOT_FOUND,
@@ -1898,18 +2004,12 @@ async fn media_file(
             .into_response()
         }
     };
-    if !handle
-        .metadata()
-        .map(|meta| meta.is_file())
-        .unwrap_or(false)
-    {
-        return ApiError::http(
-            StatusCode::NOT_FOUND,
-            "the file is gone (it left the folders)",
-        )
-        .into_response();
-    }
-    drop(handle);
+    // `size = os.fstat(handle.fileno()).st_size` — the SAME handle's number
+    // parse_range, the 206 Content-Range and the 416 ride (api.py:739), read
+    // WHILE the handle is open and dropped at the arm's end (Python's `with`
+    // closes at the block end). It feeds file_response as `live_size`; the
+    // starlette layer (a span the endpoint hands on) re-stats the path
+    // itself, exactly as FileResponse re-stats in Python.
     let mut media_type = media::sniff_type(Path::new(&resolved));
     if media_type == "application/octet-stream" && (entry.kind == "code" || entry.kind == "doc") {
         media_type = "text/plain; charset=utf-8".to_string();
@@ -1943,8 +2043,12 @@ async fn media_file(
         &media_type,
         owned_headers,
         &headers,
-        method == Method::HEAD,
-        true,
+        FileOptions {
+            head: method == Method::HEAD,
+            cap_span: true,
+            live_size: Some(live_size),
+            mount: false, // FileResponse/StreamingResponse: NO conditional 304
+        },
     )
 }
 
@@ -2340,8 +2444,12 @@ fn static_file(root: &Path, url_path: &str, headers: &HeaderMap, head: bool) -> 
         media_type,
         vec![(CACHE_CONTROL, HeaderValue::from_static("no-cache"))],
         headers,
-        head,
-        false,
+        FileOptions {
+            head,
+            cap_span: false,
+            live_size: None, // StaticFiles stats its own
+            mount: true,     // the mount is where the conditional 304 lives
+        },
     ))
 }
 // ── startup / shutdown (uvicorn's exact sequence) ────────────────────────────
@@ -2748,5 +2856,275 @@ mod tests {
         use serde_json::json;
         let truncated = json!({"files": 4});
         truncated.get("kinds").cloned().ok_or(ApiError::Internal)
+    }
+
+    /// The app-span layer (api.py's capped parse_range, 206 StreamingResponse,
+    /// 416) rides the LIVE HANDLE's fstat (api.py:739); the starlette layer
+    /// (FileResponse) stats the path itself. The audit-base ran one number
+    /// (its own stat) through both.
+    #[test]
+    fn the_app_span_answers_print_the_live_handle_size() {
+        use super::media::{parse_range, Span};
+        use super::{file_response, header, FileOptions};
+        use axum::http::HeaderMap;
+        let opts = |head: bool, cap_span: bool, live_size: Option<i64>, mount: bool| FileOptions {
+            head,
+            cap_span,
+            live_size,
+            mount,
+        };
+        let dir = std::env::temp_dir().join("digup-f15-live-size");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clip.bin");
+        std::fs::write(&path, vec![b'a'; 20]).unwrap(); // 20 bytes on disk
+        let owned = || {
+            vec![
+                header("content-disposition", "inline; filename*=UTF-8''clip.bin"),
+                header("accept-ranges", "bytes"),
+                header("x-content-type-options", "nosniff"),
+            ]
+        };
+        let range = |spec: &str| {
+            let mut hm = HeaderMap::new();
+            let (name, value) = header("range", spec);
+            hm.insert(name, value);
+            hm
+        };
+        // Live handle fstat 15 (Python's replacement window: the headers
+        // ride the handle, the bytes ride the fresh open at api.py:760).
+        let resp = file_response(
+            &path,
+            "application/octet-stream",
+            owned(),
+            &range("bytes=0-9"),
+            opts(false, true, Some(15), false),
+        );
+        assert_eq!(resp.status(), 206);
+        assert_eq!(resp.headers().get("content-range").unwrap(), "bytes 0-9/15");
+        assert_eq!(
+            resp.headers().get_all("accept-ranges").into_iter().count(),
+            1
+        );
+        assert!(resp.headers().get("content-length").is_none()); // chunked
+                                                                 // bytes=10-20 clamps on the HANDLE's 15 -> 10..=14 (the audit-base
+                                                                 // clamped on the disk's 20: `bytes 10-19/20`).
+        let resp = file_response(
+            &path,
+            "application/octet-stream",
+            owned(),
+            &range("bytes=10-20"),
+            opts(false, true, Some(15), false),
+        );
+        assert_eq!(resp.status(), 206);
+        assert_eq!(
+            resp.headers().get("content-range").unwrap(),
+            "bytes 10-14/15"
+        );
+        // bytes=15-18: start >= 15 unsatisfiable on the handle number — 416
+        // `bytes */15` (the pair must agree: parse_range refused on the SAME
+        // number the 416 prints). The fails-before, pinned inline: the
+        // audit-base clamped on 20 and answered 206.
+        assert!(matches!(
+            parse_range(Some("bytes=15-18"), 20),
+            Span::Range(15, 18)
+        ));
+        let resp = file_response(
+            &path,
+            "application/octet-stream",
+            owned(),
+            &range("bytes=15-18"),
+            opts(false, true, Some(15), false),
+        );
+        assert_eq!(resp.status(), 416);
+        assert_eq!(resp.headers().get("content-range").unwrap(), "bytes */15");
+        assert_eq!(resp.headers().get("accept-ranges").unwrap(), "bytes");
+        assert_eq!(resp.headers().get("content-length").unwrap(), "0");
+        // No range: FileResponse stats FRESH — the 200 answers the disk's
+        // length (content-length 20), NOT the handle's 15; FileResponse
+        // re-stats in Python too (starlette's own `os.stat(path)`).
+        let resp = file_response(
+            &path,
+            "application/octet-stream",
+            owned(),
+            &HeaderMap::new(),
+            opts(false, true, Some(15), false),
+        );
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers().get("content-length").unwrap(), "20");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The 304 lives in StaticFiles, NOT in FileResponse (starlette 1.10,
+    /// read in the pinned site-packages): responses.py has no conditional
+    /// check at all, `is_not_modified` is staticfiles-only, and its 304
+    /// keeps ONLY NOT_MODIFIED_HEADERS. The audit-base 304'd every
+    /// `file_response` call — media `/file` and `/preview` included — with
+    /// the full header set.
+    #[test]
+    fn the_conditional_304_lives_only_in_the_mount_and_keeps_only_not_modified_headers() {
+        use super::{etag_of, file_response, header, FileOptions};
+        use axum::http::HeaderMap;
+        let opts = |head: bool, cap_span: bool, live_size: Option<i64>, mount: bool| FileOptions {
+            head,
+            cap_span,
+            live_size,
+            mount,
+        };
+        let dir = std::env::temp_dir().join("digup-f15-304");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.css");
+        std::fs::write(&path, b"body { margin: 0 }").unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let mtime = meta
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let etag = etag_of(mtime, meta.len());
+        let mount = || vec![header("cache-control", "no-cache")];
+        let inm = |value: &str| {
+            let mut hm = HeaderMap::new();
+            let (name, value) = header("if-none-match", value);
+            hm.insert(name, value);
+            hm
+        };
+        // The mount: `is_not_modified` fires at response CONSTRUCTION
+        // (staticfiles.py:188-191), before FileResponse's range branch —
+        // a Range + If-None-Match revalidation 304s on the mount.
+        let resp = file_response(
+            &path,
+            "text/css; charset=utf-8",
+            mount(),
+            &inm(&etag),
+            opts(false, false, None, true),
+        );
+        assert_eq!(resp.status(), 304);
+        let headers = resp.headers();
+        // NOT_MODIFIED_HEADERS (staticfiles.py:24-31): of the mount answer's
+        // cache-control/accept-ranges/etag/last-modified, ONLY
+        // cache-control + etag survive. The audit-base echoed ALL FOUR.
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers.get("cache-control").unwrap(), "no-cache");
+        assert_eq!(headers.get("etag").unwrap(), etag.as_str());
+        assert!(headers.get("last-modified").is_none());
+        assert!(headers.get("accept-ranges").is_none());
+        // The WEAK comparison (staticfiles.py:215-219): `*`, the `W/`
+        // prefix (removeprefix, head-only), comma-lists stripped.
+        for probe in [
+            "*",
+            &format!("W/{etag}"),
+            &format!("foo, {etag}"),
+            &format!("{etag},foo"),
+        ] {
+            let resp = file_response(
+                &path,
+                "text/css; charset=utf-8",
+                mount(),
+                &inm(probe),
+                opts(false, false, None, true),
+            );
+            assert_eq!(resp.status(), 304, "the probe {probe} must 304");
+        }
+        assert_eq!(
+            file_response(
+                &path,
+                "text/css; charset=utf-8",
+                mount(),
+                &inm("foo"),
+                opts(false, false, None, true),
+            )
+            .status(),
+            200
+        );
+        // PRESENCE DECIDES: is_not_modified RETURNS from the etag branch —
+        // a non-matching inm behind a fresh if-modified-since answers
+        // 200 (the audit-base ran the legs in sequence and 304'd).
+        let future = httpdate::fmt_http_date(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime.floor() as u64 + 86_400),
+        );
+        let mut hm = inm("foo");
+        let (name, value) = header("if-modified-since", &future);
+        hm.insert(name, value);
+        assert_eq!(
+            file_response(
+                &path,
+                "text/css; charset=utf-8",
+                mount(),
+                &hm,
+                opts(false, false, None, true),
+            )
+            .status(),
+            200
+        );
+        // imds alone: at/after the (whole-second) last-modified -> 304;
+        // older -> 200.
+        let mut hm = HeaderMap::new();
+        let (name, value) = header("if-modified-since", &future);
+        hm.insert(name, value);
+        assert_eq!(
+            file_response(
+                &path,
+                "text/css; charset=utf-8",
+                mount(),
+                &hm,
+                opts(false, false, None, true),
+            )
+            .status(),
+            304
+        );
+        let past = httpdate::fmt_http_date(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime.floor() as u64 - 10),
+        );
+        let mut hm = HeaderMap::new();
+        let (name, value) = header("if-modified-since", &past);
+        hm.insert(name, value);
+        assert_eq!(
+            file_response(
+                &path,
+                "text/css; charset=utf-8",
+                mount(),
+                &hm,
+                opts(false, false, None, true),
+            )
+            .status(),
+            200
+        );
+        // The media `/file` and `/preview` shapes: FileResponse /
+        // StreamingResponse — NO conditional check. If-None-Match rides as
+        // a normal answer: no range -> 200 with the etag header present
+        // (the audit-base 304'd); a Range + If-None-Match revalidation —
+        // exactly what a video element sends — serves the SPAN (206),
+        // the audit-base answered a bodyless 304.
+        let media = || {
+            vec![
+                header("content-disposition", "inline; filename*=UTF-8''clip.bin"),
+                header("accept-ranges", "bytes"),
+            ]
+        };
+        let resp = file_response(
+            &path,
+            "application/octet-stream",
+            media(),
+            &inm(&etag),
+            opts(false, true, None, false),
+        );
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers().get("etag").unwrap(), etag.as_str());
+        let mut hm = inm(&etag);
+        let (name, value) = header("range", "bytes=0-9");
+        hm.insert(name, value);
+        let resp = file_response(
+            &path,
+            "application/octet-stream",
+            media(),
+            &hm,
+            opts(false, true, Some(17), false),
+        );
+        assert_eq!(resp.status(), 206);
+        assert_eq!(resp.headers().get("content-range").unwrap(), "bytes 0-9/17");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
