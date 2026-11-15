@@ -55,12 +55,28 @@ jobs:
           sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1
           rm -f rustup.sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+        if: matrix.os != 'windows-latest'
+        shell: bash
+      - name: Rust (pinned — the workspace's floor is rust-version = 1.88, sha2 0.11's demand) (Windows)
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o rustup.sh
+          sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1
+          rm -f rustup.sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
       - name: Vendor (the C libraries the engine calls, at the pinned versions)
         run: |
           scripts/fetch-vendor.sh
           scripts/build-llama.sh
-        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+        if: matrix.os != 'windows-latest'
+        shell: bash
+      - name: Vendor (the C libraries the engine calls, at the pinned versions) (Windows)
+        run: |
+          scripts/fetch-vendor.sh
+          scripts/build-llama.sh
+        if: matrix.os == 'windows-latest'
+        shell: msys2 {0}
       - name: Workspace suite (schema v6, vector parity, protocol, CLI units)
         run: cargo test --workspace
         env:
@@ -171,10 +187,29 @@ jobs:
           if [ "${{ startsWith(matrix.name, 'macos') }}" = "true" ]; then
             rustup target add aarch64-apple-darwin x86_64-apple-darwin
           fi
-        shell: ${{ matrix.name == 'windows-x86_64' && 'msys2 {0}' || 'bash' }}
+        if: matrix.name != 'windows-x86_64'
+        shell: bash
+      - name: Rust (pinned) (Windows)
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o rustup.sh
+          sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1
+          rm -f rustup.sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          if [ "${{ startsWith(matrix.name, 'macos') }}" = "true" ]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          fi
+        if: matrix.name == 'windows-x86_64'
+        shell: msys2 {0}
       - name: Payload
         run: ${{ matrix.script }}
-        shell: ${{ matrix.name == 'windows-x86_64' && 'msys2 {0}' || 'bash' }}
+        if: matrix.name != 'windows-x86_64'
+        shell: bash
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: true
+      - name: Payload (Windows)
+        run: ${{ matrix.script }}
+        if: matrix.name == 'windows-x86_64'
+        shell: msys2 {0}
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -215,32 +250,46 @@ jobs:
       # The Homebrew formula for the engine CLI (`brew install ocean572/tap/digup`):
       # a tarball of the payload, its sha256 computed here so a bump updates one line.
       # The tap repo and its token are the same shape as .github/workflows/homebrew.yml.
-      - name: Homebrew formula (engine CLI)
-        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+      - name: Homebrew formula (engine CLI), pushed to the tap
+        if: ${{ github.ref_type == 'tag' }}
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          set -eux
+          set -eu
+          [ -n "${TAP_TOKEN:-}" ] || { echo "no HOMEBREW_TAP_TOKEN secret — the formula step is inert; brew needs the tap repo + token"; exit 0; }
           version=${TAG#v}
-          [ -n "$version" ] && [ "$version" != "$TAG" ] || { echo "Not a release tag: $TAG"; exit 1; }
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
-          linux=$(ls payloads/digup-*-linux-x86_64.tar.gz | head -1)
-          macos=$(ls payloads/digup-*-macos.tar.gz | head -1)
-          sha_linux=$(sha256sum "$linux" | cut -d' ' -f1)
-          sha_macos=$(shasum -a 256 "$macos" 2>/dev/null | cut -d' ' -f1 || true)
-          [ -n "${sha_macos:-}" ] || sha_macos=$(sha256sum "$macos" | cut -d' ' -f1)
-          mkdir -p formula && cat > formula/digup.rb <<RB
+          sha() { sha256sum "$1" | cut -d" " -f1; }
+          linux_x86=$(ls payloads/digup-*-linux-x86_64.tar.gz | head -1)
+          linux_arm=$(ls payloads/digup-*-linux-aarch64.tar.gz | head -1)
+          macos_arm=$(ls payloads/digup-*-macos-arm64.tar.gz | head -1)
+          macos_intel=$(ls payloads/digup-*-macos-x86_64.tar.gz | head -1)
+          mkdir -p formula
+          cat > formula/digup.rb <<RB
           class Digup < Formula
             desc "DigUp engine: local semantic search over your files (Rust core)"
             homepage "https://github.com/$GITHUB_REPOSITORY"
+            version "$version"
             on_macos do
-              url "$base/$(basename "$macos")"
-              sha256 "$sha_macos"
+              on_arm do
+                url "$base/$(basename "$macos_arm")"
+                sha256 "$(sha "$macos_arm")"
+              end
+              on_intel do
+                url "$base/$(basename "$macos_intel")"
+                sha256 "$(sha "$macos_intel")"
+              end
             end
             on_linux do
-              url "$base/$(basename "$linux")"
-              sha256 "$sha_linux"
+              on_intel do
+                url "$base/$(basename "$linux_x86")"
+                sha256 "$(sha "$linux_x86")"
+              end
+              on_arm do
+                url "$base/$(basename "$linux_arm")"
+                sha256 "$(sha "$linux_arm")"
+              end
             end
             def install
               prefix.install Dir["payload/*"]
@@ -248,7 +297,13 @@ jobs:
             end
           end
           RB
-          # The formula is the artifact; moving it into the tap is the operator's step
-          # (the tap repo and its token are deploy-time facts, like the compose env —
-          # .github/workflows/homebrew.yml is the shape that carries one).
-          echo "formula/digup.rb written for $TAG"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/ocean572/homebrew-tap.git" tap
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p tap/Formula
+          cp formula/digup.rb tap/Formula/digup.rb
+          git -C tap add -A
+          if git -C tap diff --cached --quiet; then echo "Formula/digup.rb already at $version"; else
+            git -C tap commit -m "digup $version (Rust core)"
+            git -C tap push
+          fi

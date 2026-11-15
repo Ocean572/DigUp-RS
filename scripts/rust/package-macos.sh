@@ -37,7 +37,8 @@ for arch in arm64 x86_64; do
 done
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
-out=dist/digup-$version-macos
+case "${#targets[@]}" in 2) archsuffix=universal;; *) archsuffix=$(uname -m);; esac
+out=dist/digup-$version-macos-$archsuffix
 rm -rf "$out"; mkdir -p "$out/payload"
 if [ "${#targets[@]}" = 2 ]; then
   lipo -create "target/${targets[0]}/release/digup" "target/${targets[1]}/release/digup" -output "$out/payload/digup"
