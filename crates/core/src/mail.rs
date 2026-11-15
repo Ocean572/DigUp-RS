@@ -106,7 +106,10 @@ pub fn header_field(name: &str, header: &str) -> Vec<String> {
         if first == " " || first == "\t" {
             if collecting {
                 current.push(' ');
-                current.push_str(&crate::office::trim_ws(line));
+                current.push_str(&crate::office::trim_ws_in(
+                    line,
+                    crate::search_text::is_whitespace_set,
+                ));
             }
             continue;
         }
@@ -117,11 +120,15 @@ pub fn header_field(name: &str, header: &str) -> Vec<String> {
         let Some(colon) = line.find(':') else {
             continue;
         };
-        if crate::office::trim_ws(&line[..colon]).to_lowercase() != name.to_lowercase() {
+        if crate::office::trim_ws_in(&line[..colon], crate::search_text::is_whitespace_set)
+            .to_lowercase()
+            != name.to_lowercase()
+        {
             continue;
         }
         collecting = true;
-        current = crate::office::trim_ws(&line[colon + 1..]);
+        current =
+            crate::office::trim_ws_in(&line[colon + 1..], crate::search_text::is_whitespace_set);
     }
     if collecting && !current.is_empty() {
         out.push(decoded_header(&current));
@@ -479,4 +486,51 @@ fn advance_chars(text: &str, count: usize) -> &str {
         rest = &rest[cluster.len()..];
     }
     rest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::header_field;
+
+    #[test]
+    fn header_trims_ride_the_measured_whitespace_sets() {
+        // F10, pinned against the F9-measured Foundation sets (f9full.swift,
+        // swift-corelibs 6.4): `.whitespaces` = 19 scalars WITH ZWSP U+200B (the
+        // Linux engine) and WITHOUT the line controls; `.whitespacesAndNewlines`
+        // adds LF VT FF CR NEL LS PS. The header sites (MailMessage.swift:105,111,115)
+        // ride `.whitespaces`, so:
+        // ZWSP edges TRIM (it is in the set):
+        assert_eq!(
+            header_field("Subject", "\u{200b}Subject\u{200b}: \u{200b}cafe\u{200b}"),
+            vec!["cafe"]
+        );
+        // NEL (U+0085) SURVIVES the value trim (not in `.whitespaces`) -
+        // char::is_whitespace, the audit-base shape, dropped it;
+        assert_eq!(
+            header_field("Subject", "Subject: cafe\u{85}"),
+            vec!["cafe\u{85}"]
+        );
+        // and NEL on the NAME is a name mismatch (the header is not collected):
+        assert_eq!(
+            header_field("Subject", "Subject\u{85}: x"),
+            Vec::<String>::new()
+        );
+        // a continuation line joins with one space, ZWSP edges trimmed:
+        assert_eq!(
+            header_field("Subject", "Subject: a\r\n \u{200b}b"),
+            vec!["a b"]
+        );
+        // CRLF normalization runs before the split (Swift MailMessage.swift:96), so
+        // a CR never reaches these trims - the `.whitespaces` CR-survival of F9 is
+        // unreachable HERE; it lives at the code.rs line channels.
+        // The shared `.whitespacesAndNewlines` trim (office/doc sites, the mail out
+        // filter) gains ZWSP too (F9 set):
+        assert_eq!(crate::office::trim_ws("\u{200b}a\u{200b}"), "a");
+        // and the two sets differ on the line controls (the site split):
+        assert_eq!(
+            crate::office::trim_ws_in("x\u{2028}", crate::search_text::is_whitespace_set),
+            "x\u{2028}"
+        );
+        assert_eq!(crate::office::trim_ws("x\u{2028}"), "x");
+    }
 }

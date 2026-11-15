@@ -261,7 +261,10 @@ pub fn excerpt(text: &str, limit: usize) -> String {
         unicode_segmentation::UnicodeSegmentation::graphemes(text, true).collect();
     let prefix_len = (limit * 8).min(clusters.len());
     let prefix: String = clusters[..prefix_len].concat();
-    let line = office::trim_ws(&ANY_SPACES.replace_all(&prefix, " "));
+    let line = office::trim_ws_in(
+        &ANY_SPACES.replace_all(&prefix, " "),
+        crate::search_text::is_whitespace_set,
+    );
     let line_clusters: Vec<&str> =
         unicode_segmentation::UnicodeSegmentation::graphemes(line.as_str(), true).collect();
     if line_clusters.len() > limit || prefix_len < clusters.len() {

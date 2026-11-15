@@ -169,10 +169,13 @@ fn worksheet(xml: &[u8], shared: &[String], out: &mut Output) {
                 "c" => {
                     let shown: String = match kind.as_str() {
                         // A shared string index; a missing one says nothing.
-                        "s" => crate::xmlscan::parse_radix(&trim_ws(&value), 10)
-                            .and_then(|index| shared.get(index as usize))
-                            .cloned()
-                            .unwrap_or_default(),
+                        "s" => crate::xmlscan::parse_radix(
+                            &trim_ws_in(&value, crate::search_text::is_whitespace_set),
+                            10,
+                        )
+                        .and_then(|index| shared.get(index as usize))
+                        .cloned()
+                        .unwrap_or_default(),
                         "b" | "e" => String::new(), // TRUE/FALSE and #N/A say nothing to search for
                         _ => value.clone(), // numbers, dates (as day counts), strings computed by formulas
                     };
@@ -502,12 +505,16 @@ fn local(name: &str) -> String {
     }
 }
 
-/// `.trimmingCharacters(in: .whitespacesAndNewlines)` over CHARACTERS (grapheme clusters):
-/// a cluster trims only when all its scalars are whitespace.
-pub fn trim_ws(text: &str) -> String {
+/// `.trimmingCharacters(in: SET)` over CHARACTERS (grapheme clusters): a cluster
+/// trims only when ALL its scalars are in the set (the ⑩a facts-trim shape: a leading
+/// combining mark survives the space that preceded it). The set rides the measured
+/// Foundation sets (`search_text::is_whitespace_set` / `is_whitespace_newline_set`,
+/// F9): NOT `char::is_whitespace` - that lacks ZWSP (which swift-corelibs trims), and
+/// carries LF/VT/FF/CR/NEL/LS/PS, which `.whitespaces` does not.
+pub fn trim_ws_in(text: &str, in_set: fn(char) -> bool) -> String {
     use unicode_segmentation::UnicodeSegmentation;
     let clusters: Vec<&str> = text.graphemes(true).collect();
-    let is_ws = |cluster: &str| cluster.chars().all(char::is_whitespace);
+    let is_ws = |cluster: &str| cluster.chars().all(in_set);
     let mut start = 0usize;
     let mut end = clusters.len();
     while start < end && is_ws(clusters[start]) {
@@ -517,6 +524,14 @@ pub fn trim_ws(text: &str) -> String {
         end -= 1;
     }
     clusters[start..end].concat()
+}
+
+/// `.trimmingCharacters(in: .whitespacesAndNewlines)` - the measured 26 scalars,
+/// ZWSP included on swift-corelibs (F9): the office/docx/ppt/xlsx cell and paragraph
+/// edges, the HTML text edge, the mail `out` filter (OfficeText.swift:23,119,177,254,259,291,
+/// Extractors.swift:199,226,235, MailMessage.swift:56).
+pub fn trim_ws(text: &str) -> String {
+    trim_ws_in(text, crate::search_text::is_whitespace_newline_set)
 }
 
 /// The text being built, a line at a time, up to `maxCharacters`.
