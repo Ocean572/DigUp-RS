@@ -22,6 +22,12 @@ unicode-segmentation = { workspace = true }
 [build-dependencies]
 bindgen = { workspace = true }
 
+[package.metadata.cargo-machete]
+# build.rs runs bindgen over Vendor/llama/include (the ffi module is its generated
+# output); cargo-machete analyzes src/, not build scripts, so it cannot see the only
+# user of this build-dependency.
+ignored = ["bindgen"]
+
 [dev-dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

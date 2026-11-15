@@ -16,7 +16,6 @@ digup-core = { workspace = true }
 digup-native = { workspace = true }
 digup-runtime = { workspace = true }
 digup-services = { workspace = true }
-digup-platform = { workspace = true }
 serde_json = { workspace = true }
 unicode-segmentation = { workspace = true }
 

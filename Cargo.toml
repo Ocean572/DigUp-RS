@@ -9,6 +9,10 @@ members = [
     "crates/server",
     "crates/platform",
 ]
+# The Tauri desktop shell is its own cargo graph (its manifest is not a workspace
+# member — `cargo metadata` refuses a nested package that believes it lives in this
+# workspace; cargo-machete walks every nested manifest and hits exactly that).
+exclude = ["shell/src-tauri"]
 
 # digup-core: the pure-Rust engine port. The crate split mirrors ARCHITECTURE_MAP.md §3 so the
 # map stays the spec. Only `core` is implemented in Phase 1 (the rusqlite storage foundation);

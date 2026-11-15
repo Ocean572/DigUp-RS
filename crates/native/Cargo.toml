@@ -15,6 +15,11 @@ libc = { workspace = true }
 [build-dependencies]
 cc = { workspace = true }
 
+[package.metadata.cargo-machete]
+# build.rs compiles the pinned C shims (stb image IO) with cc; cargo-machete analyzes
+# src/, not build scripts, so it cannot see the only user of this build-dependency.
+ignored = ["cc"]
+
 # The picture pins compare pixels, so the test side hashes them (`sha2` is the same digest the
 # engine's `SHA256.swift` uses) and spells the digests in hex.
 [dev-dependencies]

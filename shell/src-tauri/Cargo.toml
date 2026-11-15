@@ -1,3 +1,10 @@
+#[machete(skip)]
+# The Tauri desktop app is its own cargo graph (the root workspace excludes
+# shell/src-tauri). cargo-machete walks nested manifests and flags `tauri-build`
+# as unused: it is the app build.rs's tool (build.rs runs tauri_build::build()),
+# and cargo-machete analyzes src/, not build scripts — the same blind spot the
+# engine crates record via [package.metadata.cargo-machete]. The skip directive
+# is the tool's own mechanism for a manifest outside the analyzed graph.
 [package]
 name = "digup-shell"
 version = "0.1.0"
