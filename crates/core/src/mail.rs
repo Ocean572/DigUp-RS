@@ -197,14 +197,27 @@ fn decoded_header_word(charset: &str, encoding: &str, word: &str) -> Option<Stri
                     continue;
                 }
                 let after = &rest[at + 1..];
-                // Swift's prefix(2) takes two CHARACTERS; an undecodable pair refuses the word.
+                // Swift's prefix(2) takes two CHARACTERS and `UInt8(_, radix: 16)`
+                // scores THAT window - the exhaustively measured shape of
+                // `rtf.rs::hex_window` (1,089 windows, swift-corelibs 6.4):
+                // from_str_radix with "-0" spelled out (Swift accepts a negative
+                // zero; it fits UInt8). `parse_radix`, the general Swift-Int
+                // grammar, is the THREE-character shape and diverges here: it
+                // accepts "4_" (the two-char window refuses and the word stays
+                // literal), and it consumes "+41" as 0x41 skipping both digits
+                // where the window accepts "+4" = 4 and leaves the "1" as a byte.
                 let hex: String = unicode_segmentation::UnicodeSegmentation::graphemes(after, true)
                     .take(2)
                     .collect();
                 if crate::xmlscan::grapheme_len(after) < 2 {
                     return None;
                 }
-                bytes.push(u8::try_from(crate::xmlscan::parse_radix(&hex, 16)?).ok()?);
+                let byte = u8::from_str_radix(&hex, 16).ok().or(if hex == "-0" {
+                    Some(0)
+                } else {
+                    None
+                })?;
+                bytes.push(byte);
                 rest = advance_chars(after, 2);
             }
             bytes.extend(rest.bytes());
@@ -505,6 +518,29 @@ fn advance_chars(text: &str, count: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::header_field;
+
+    #[test]
+    fn the_quoted_printable_hex_escape_is_the_two_char_window() {
+        // The `=`escape of a Q-encoded word is Swift's `UInt8(prefix(2), radix: 16)`
+        // (MailMessage.swift:163) - the TWO-character window, exhaustively measured
+        // with the rtf probe (2026-11-15), not `parse_radix`'s Int grammar.
+        use super::decoded_header;
+        // "4_": the window refuses (a trailing separator) -> the word stays as
+        // written, in Swift's `out += "=\(words)?="` reconstruction - ONE "=" where
+        // the word had "=?", the shape the plain.emlx fixture already pins:
+        assert_eq!(decoded_header("=?utf-8?Q?x=4_y?="), "=utf-8?Q?x=4_y?=");
+        // "+41": the window is "+4" = 4; the "1" stays a byte (parse_radix answered
+        // 0x41 and skipped it as a digit):
+        assert_eq!(decoded_header("=?utf-8?Q?x=+41y?="), "x\u{4}1y");
+        // "-0": Swift's only accepted negative (a negative zero fits UInt8); the
+        // text avoids a "?=" sequence so the word parses as three parts:
+        assert_eq!(decoded_header("=?utf-8?Q?a=-0b?="), "a\u{0}b");
+        // ordinary pairs ride both grammars the same (latin-1 named: 0xE9 is not
+        // a UTF-8 byte):
+        assert_eq!(decoded_header("=?iso-8859-1?Q?caf=E9?="), "caf\u{e9}");
+        // "-4" refuses on both shapes (underflow; the word stays as written):
+        assert_eq!(decoded_header("=?utf-8?Q?x=-4y?="), "=utf-8?Q?x=-4y?=");
+    }
 
     #[test]
     fn the_charset_name_is_the_first_non_empty_piece_letters_digits_only() {
