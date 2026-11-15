@@ -297,8 +297,14 @@ impl JsonLinesProcess {
                         // until its own idle-exit).
                         self.close(Duration::from_secs(5));
                         return Err(ProtocolError::Internal(format!(
-                            "{}: expected the {:?} event, got {}",
-                            self.name, want, event
+                            "{}: expected the {} event, got {}",
+                            self.name,
+                            // Python's repr is single-quoted: `{:?}` prints
+                            // "ready" with double quotes, targets.rs spells the
+                            // difference (py_repr) - established for the 400/409
+                            // texts, the handshake line rides it too.
+                            crate::targets::py_repr(want),
+                            event
                         )));
                     }
                     Ok(event)

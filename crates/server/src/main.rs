@@ -173,7 +173,6 @@ impl App {
             .collect();
         let auth = security::mint_tokens(&cfg.config, &app_target_names, cfg.mint_keys)?;
         let auth = Arc::new(RwLock::new(auth));
-        let _ = std::fs::create_dir_all(&cfg.config);
         // The UI mount, checked at config time like Python's create_app.
         let ui = match &cfg.ui {
             Some(dir) => {
@@ -198,11 +197,29 @@ impl App {
         let main = Arc::new(SearchService::new(engine.clone()));
         main.start().map_err(|error| format!("{error}"))?;
         if cfg.prewarm {
-            // the searcher respawns on demand; startup must not die here.
+            // api.py:492-496 catches (EngineExited, EngineRefused, TimeoutError)
+            // ONLY: the searcher respawns on demand and startup must not die on
+            // those. A CLIError - the engine binary failing to spawn (search.py:
+            // 150-152) - is NOT caught: the lifespan raises and uvicorn exits.
+            // The audit-base swallowed every CallError, booting a server whose
+            // engine binary has vanished.
             if let Err(error) = main.prewarm() {
-                eprintln!("prewarm: {error}");
+                match &error {
+                    service::CallError::Exited(_)
+                    | service::CallError::Refused(_)
+                    | service::CallError::Timeout(_) => eprintln!("prewarm: {error}"),
+                    _ => return Err(format!("prewarm: {error}")),
+                }
             }
         }
+        // The durable job-log folder: JobRunner.__init__ does os.makedirs inside
+        // the lifespan (jobs.py:86), so the reference DIES here (measured:
+        // FileNotFoundError + "Application startup failed. Exiting.") and the log
+        // replay, the interrupted-on-stop contract and the job history live on it.
+        // The audit-base swallowed the failure: the stack booted healthy and lost
+        // its durable facts in silence.
+        std::fs::create_dir_all(&cfg.config)
+            .map_err(|error| format!("{}: {error}", cfg.config.display()))?;
         let jobs = Arc::new(JobRunner::new(
             engine.clone(),
             &cfg.config,
@@ -275,11 +292,30 @@ impl App {
             models_dir: self.cfg.models_dir.clone(),
             encoder_idle: self.cfg.encoder_idle,
         };
-        let _ = std::fs::create_dir_all(&cfg.index);
+        // os.makedirs(target.index, exist_ok=True) in scope_for: a failure raises
+        // through the lifespan (same class as the job-log folder above).
+        std::fs::create_dir_all(&cfg.index).map_err(|error| {
+            // os.makedirs(target.index, exist_ok=True) in scope_for: a failure raises
+            // through the lifespan (same class as the job-log folder above) - and
+            // scope_for is called from request paths too, where an uncaught OSError
+            // is Starlette's plain 500.
+            eprintln!("target {name}: {}: {error}", cfg.index.display());
+            ApiError::Internal
+        })?;
         let service = Arc::new(SearchService::new(cfg.clone()));
         service.start()?;
         if let Err(error) = service.prewarm() {
-            eprintln!("prewarm({name}): {error}");
+            match &error {
+                service::CallError::Exited(_)
+                | service::CallError::Refused(_)
+                | service::CallError::Timeout(_) => eprintln!("prewarm({name}): {error}"),
+                // api.py:413-416 catches the same three: a CLIError from a target's
+                // searcher spawn is an uncaught exception - 500 on a request path.
+                _ => {
+                    eprintln!("prewarm({name}): {error}");
+                    return Err(ApiError::Internal);
+                }
+            }
         }
         let runner = Arc::new(JobRunner::new(
             cfg.clone(),
@@ -1536,7 +1572,13 @@ async fn estimate(
     // run on a tokio worker (the audit-base ran it there, stalling every request parked
     // on that worker). `in_scope` is the port's established shape (the media endpoints
     // ride it). The gate opens on every ending, inside the same task.
-    let timeout = Duration::from_secs_f64(app.cfg.estimate_timeout_s);
+    let timeout = match crate::config::knob_float("DIGUP_SERVER_ESTIMATE_TIMEOUT_S", 120.0) {
+        Ok(seconds) => Duration::from_secs_f64(seconds),
+        // api.py:642 reads this knob PER REQUEST: a typo is an uncaught
+        // ValueError in the handler - Starlette's plain 500, not a silent
+        // default and not a boot death.
+        Err(_) => return ApiError::Internal.into_response(),
+    };
     let outcome = in_scope(app.clone(), target, move |scope| {
         if app
             .estimate_busy
@@ -2272,7 +2314,16 @@ where
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cfg = ServerConfig::from_env();
+    let cfg = match ServerConfig::from_env() {
+        Ok(cfg) => cfg,
+        // config_from_env refuses the same facts (the empty-roots RuntimeError,
+        // the DIGUP_SERVER_INDEX KeyError, the knob ValueErrors): the boot dies,
+        // exit 1 - the uvicorn lifespan shape the port already uses at App::new.
+        Err(why) => {
+            eprintln!("Application startup failed. Exiting: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
     println!("INFO: Started server process [{}]", std::process::id());
     println!("INFO: Waiting for application startup.");
     // The lifespan + the config-time build (registry, minted keys, the UI

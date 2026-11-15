@@ -185,11 +185,164 @@ fn env_list(name: &str) -> Vec<String> {
         .collect()
 }
 
+/// `int(s)` (measured on CPython 3.12, 2026-11-15): surrounding whitespace is
+/// stripped, an optional sign, underscores BETWEEN digits (leading/trailing and
+/// doubled runs are refused: `int("1__1")` raises), digits only.
+pub fn py_int(text: &str) -> Option<i64> {
+    let t = text.trim();
+    let (sign, digits) = match t.strip_prefix('+') {
+        Some(rest) => (1i64, rest),
+        None => match t.strip_prefix('-') {
+            Some(rest) => (-1i64, rest),
+            None => (1i64, t),
+        },
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit() || b == b'_') {
+        return None;
+    }
+    if digits.starts_with('_') || digits.ends_with('_') || digits.contains("__") {
+        return None;
+    }
+    let value: i64 = digits.replace('_', "").parse().ok()?;
+    value.checked_mul(sign)
+}
+
+/// `float(s)` (measured, same probe): whitespace and sign as `int`, underscores
+/// in the digit runs (doubled runs refused), `.5`/`5.` forms, an optional
+/// `e` exponent (with sign and underscores), and the words `inf`/`infinity`/
+/// `nan` (case-insensitive). Overflow prints `inf` (measured `float("1e999")`).
+pub fn py_float(text: &str) -> Option<f64> {
+    let t = text.trim();
+    let (sign, rest) = match (t.strip_prefix('+'), t.strip_prefix('-')) {
+        (Some(r), _) => (1.0f64, r),
+        (None, Some(r)) => (-1.0f64, r),
+        (None, None) => (1.0f64, t),
+    };
+    let lowered = rest.to_lowercase();
+    if matches!(lowered.as_str(), "inf" | "infinity" | "nan") {
+        return Some(sign * lowered.parse::<f64>().ok()?);
+    }
+    if !rest.bytes().all(|b| {
+        b.is_ascii_digit()
+            || b == b'_'
+            || b == b'.'
+            || b == b'e'
+            || b == b'E'
+            || b == b'+'
+            || b == b'-'
+    }) {
+        return None;
+    }
+    // Underscore placement (measured `float("1_000.5") = 1000.5`, `float("1__1")`
+    // raises): underscores sit BETWEEN the digits of each run. Check each digit
+    // group (mantissa digits and exponent digits) for leading/trailing/doubled runs.
+    let core = rest.replace("e", "E");
+    let (mantissa, exponent) = match core.split_once('E') {
+        Some((m, e)) => (m, Some(e)),
+        None => (core.as_str(), None),
+    };
+    let run_ok = |run: &str| {
+        !run.starts_with('_')
+            && !run.ends_with('_')
+            && !run.contains("__")
+            && run.bytes().all(|b| b.is_ascii_digit() || b == b'_')
+    };
+    let (int_part, frac_part) = match mantissa.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (mantissa, None),
+    };
+    // An empty digit part is allowed on ONE side of the dot only ("5." / ".5").
+    if int_part.is_empty() && frac_part.as_deref().unwrap_or("1").is_empty() {
+        return None;
+    }
+    if !int_part.is_empty() && !run_ok(int_part) {
+        return None;
+    }
+    if let Some(f) = &frac_part {
+        if !f.is_empty() && !run_ok(f) {
+            return None;
+        }
+    }
+    if let Some(e) = &exponent {
+        let e = e
+            .strip_prefix('+')
+            .unwrap_or(e)
+            .strip_prefix('-')
+            .unwrap_or(e);
+        if e.is_empty() || !run_ok(e) {
+            return None;
+        }
+    }
+    let cleaned = format!("{}{}", sign_str(sign), rest.replace('_', ""));
+    fn sign_str(sign: f64) -> &'static str {
+        if sign < 0.0 {
+            "-"
+        } else {
+            ""
+        }
+    }
+    match cleaned.parse::<f64>() {
+        Ok(value) => Some(value),
+        // Python prints overflow as inf (measured float("1e999") == inf).
+        Err(_) => Some(sign * f64::INFINITY),
+    }
+}
+
+/// A knob the operator owns must parse: Python raises at startup (measured
+// `DIGUP_SERVER_JOB_TIMEOUT_S=abc`: `ValueError: could not convert string to
+/// float` + `Application startup failed. Exiting.`). The refusal relays the
+/// knob and its value; a default is a DEFAULT FOR AN UNSET knob, never a
+/// rescue of a typo'd one.
+pub(crate) fn knob_float(name: &str, default: f64) -> Result<f64, String> {
+    match std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) => py_float(&value)
+            .ok_or_else(|| format!("{name}: '{}' is not a number", value))
+            .map(|seconds| {
+                if seconds.is_finite() {
+                    seconds
+                } else {
+                    f64::MAX
+                }
+            }),
+        None => Ok(default),
+    }
+}
+
+pub(crate) fn knob_int(name: &str, default: i64) -> Result<i64, String> {
+    match std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(value) => {
+            py_int(&value).ok_or_else(|| format!("{name}: '{}' is not an integer", value))
+        }
+        None => Ok(default),
+    }
+}
+
 impl ServerConfig {
     /// `.env.example` defaults: 127.0.0.1:8787, TTL 15 s, prewarm and backfill on.
-    pub fn from_env() -> Self {
-        let index = PathBuf::from(env_string("DIGUP_SERVER_INDEX", "/data/index"));
+    /// Startup dies on the facts the reference refuses on (`config_from_env`):
+    /// `DIGUP_SERVER_INDEX` is REQUIRED (Python `os.environ[...]` — a KeyError
+    /// kills the boot), roots must not be empty ("at least one media root is
+    /// required" — the AGENTS.md "cost an hour" mis-deploy, silent zero hits
+    /// with normal health, loud there and silent here is exactly the shape the
+    /// reference refuses), and every numeric knob must parse (Python raises).
+    pub fn from_env() -> Result<Self, String> {
+        // Required like Python's subscript: an EMPTY value boots on both sides
+        // (measured 2026-11-15: `DIGUP_SERVER_INDEX=""` boots the reference);
+        // an UNSET one is the refusal.
+        let index = PathBuf::from(
+            std::env::var("DIGUP_SERVER_INDEX")
+                .map_err(|_| "DIGUP_SERVER_INDEX: the index folder is required".to_string())?,
+        );
         let roots = env_list("DIGUP_SERVER_ROOTS");
+        if roots.is_empty() {
+            return Err("DIGUP_SERVER_ROOTS: at least one media root is required".to_string());
+        }
         // `config_from_env`'s config folder: env wins, else beside the index
         // (jobs.jsonl, tokens.json, targets.json — recreation-safe facts).
         let config_dir = match std::env::var("DIGUP_SERVER_CONFIG")
@@ -204,35 +357,34 @@ impl ServerConfig {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
         let binary = env_string("DIGUP_SERVER_BINARY", "digup");
-        let idle = std::env::var("DIGUP_SERVER_ENCODER_IDLE")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(DEFAULT_ENCODER_IDLE);
-        ServerConfig {
+        let idle = knob_float("DIGUP_SERVER_ENCODER_IDLE", DEFAULT_ENCODER_IDLE)?;
+        Ok(ServerConfig {
             host: env_string("DIGUP_SERVER_HOST", "127.0.0.1"),
-            port: std::env::var("DIGUP_SERVER_PORT")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(8787),
-            status_ttl_s: std::env::var("DIGUP_SERVER_STATUS_TTL_S")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(15.0),
+            port: match knob_int("DIGUP_SERVER_PORT", 8787)? {
+                // Python int() accepts the wide value and uvicorn fails to bind;
+                // the refusal lands at boot here - loud, exit 1, same shape.
+                port if (0..=65535).contains(&port) => port as u16,
+                _port => {
+                    return Err(format!(
+                        "DIGUP_SERVER_PORT: '{}' is not a valid port",
+                        std::env::var("DIGUP_SERVER_PORT").unwrap_or_default()
+                    ))
+                }
+            },
+            status_ttl_s: knob_float("DIGUP_SERVER_STATUS_TTL_S", 15.0)?,
             prewarm: env_flag("DIGUP_SERVER_PREWARM", true),
             backfill: env_flag("DIGUP_SERVER_BACKFILL", true),
             config: config_dir,
+            // NOT a startup knob: the reference reads it per request (api.py:642), so a
+            // typo must not kill the boot - the estimate call that reads it fails.
+            // The value lives only as the mirror; the estimate handler parses the
+            // env per request like Python does.
             estimate_timeout_s: std::env::var("DIGUP_SERVER_ESTIMATE_TIMEOUT_S")
                 .ok()
-                .and_then(|value| value.parse().ok())
+                .and_then(|value| py_float(&value))
                 .unwrap_or(120.0),
-            job_timeout_s: std::env::var("DIGUP_SERVER_JOB_TIMEOUT_S")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(3600.0),
-            job_log_size: std::env::var("DIGUP_SERVER_JOB_LOG_SIZE")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(1_048_576),
+            job_timeout_s: knob_float("DIGUP_SERVER_JOB_TIMEOUT_S", 3600.0)?,
+            job_log_size: knob_int("DIGUP_SERVER_JOB_LOG_SIZE", 1_048_576)?.max(0) as u64,
             mint_keys: matches!(
                 std::env::var("DIGUP_SERVER_MINT_KEYS")
                     .unwrap_or_default()
@@ -257,7 +409,7 @@ impl ServerConfig {
                 .map(|part| part.trim().to_string())
                 .filter(|part| !part.is_empty())
                 .collect(),
-        }
+        })
     }
 
     /// The main target's engine config (targets.py's MAIN_TARGET).
@@ -279,5 +431,123 @@ fn env_flag(name: &str, default: bool) -> bool {
     match std::env::var(name).ok() {
         Some(value) => value != "0",
         None => default,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{knob_float, knob_int, py_float, py_int, ServerConfig};
+
+    #[test]
+    fn the_number_grammar_is_pythons_own_measured_shape() {
+        // Every row measured with CPython 3.12 int()/float() on this box
+        // (2026-11-15). The knobs are Python-parsed: whitespace is stripped,
+        // signs accepted, underscores BETWEEN digits (doubled runs raise),
+        // float takes .5 / 5. / exponents / inf / nan, and overflow prints inf.
+        assert_eq!(py_int("12"), Some(12));
+        assert_eq!(py_int(" 12 "), Some(12));
+        assert_eq!(py_int("+5"), Some(5));
+        assert_eq!(py_int("-5"), Some(-5));
+        assert_eq!(py_int("1_1"), Some(11));
+        assert_eq!(py_int("_1"), None);
+        assert_eq!(py_int("1__1"), None); // doubled run: ValueError (measured)
+        assert_eq!(py_int("12a"), None);
+        assert_eq!(py_int(""), None);
+        assert_eq!(py_int("1.5"), None);
+        assert_eq!(py_int("1e3"), None);
+        assert_eq!(py_float("1.5"), Some(1.5));
+        assert_eq!(py_float(" 1.5 "), Some(1.5));
+        assert_eq!(py_float("1_1"), Some(11.0));
+        assert_eq!(py_float("1__1"), None);
+        assert_eq!(py_float(".5"), Some(0.5));
+        assert_eq!(py_float("5."), Some(5.0));
+        assert_eq!(py_float("1e3"), Some(1000.0));
+        assert_eq!(py_float("+1_0.5e1"), Some(105.0));
+        assert_eq!(py_float("1e999"), Some(f64::INFINITY)); // overflow prints inf (measured)
+        assert_eq!(py_float("12a"), None);
+        assert_eq!(py_float("_1"), None);
+        assert_eq!(py_float("1e"), None);
+        // inf/nan parse in Python (measured) and hand a non-finite number to a
+        // timer: the timer behaviour at the engine was NOT measured, so the
+        // knobs relay the parse and clamp at the Duration seam (knob_float
+        // maps non-finite to f64::MAX - the comparison "elapsed > inf/nan"
+        // is never true, matching JobRunner's comparison against a Python nan).
+        assert_eq!(py_float("inf"), Some(f64::INFINITY));
+        assert!(py_float("nan").is_some_and(|v| v.is_nan()));
+    }
+
+    #[test]
+    fn the_env_facts_the_reference_refuses_are_refused_here() {
+        // The reference fail-fasts measured on 2026-11-15, in ONE test:
+        // env vars are process-global and the harness runs tests in parallel, so
+        // every scenario rides the same serialized walk.
+
+        // Measured reference shape (2026-11-15): DIGUP_SERVER_JOB_TIMEOUT_S=abc
+        // -> ValueError + "Application startup failed. Exiting." The port relays
+        // the knob and its value; a default is for an UNSET knob only.
+        std::env::set_var("DIGUP_SERVER_JOB_TIMEOUT_S", "abc");
+        assert_eq!(
+            knob_float("DIGUP_SERVER_JOB_TIMEOUT_S", 3600.0).unwrap_err(),
+            "DIGUP_SERVER_JOB_TIMEOUT_S: 'abc' is not a number"
+        );
+        std::env::set_var("DIGUP_SERVER_JOB_LOG_SIZE", "1_000");
+        assert_eq!(knob_int("DIGUP_SERVER_JOB_LOG_SIZE", 1).unwrap(), 1000);
+        std::env::set_var("DIGUP_SERVER_JOB_LOG_SIZE", " 12 ");
+        assert_eq!(knob_int("DIGUP_SERVER_JOB_LOG_SIZE", 1).unwrap(), 12);
+        std::env::remove_var("DIGUP_SERVER_JOB_TIMEOUT_S");
+        std::env::remove_var("DIGUP_SERVER_JOB_LOG_SIZE");
+        assert_eq!(
+            knob_float("DIGUP_SERVER_JOB_TIMEOUT_S", 3600.0).unwrap(),
+            3600.0
+        );
+
+        // The three fail-fasts measured on the reference (2026-11-15):
+        std::env::remove_var("DIGUP_SERVER_INDEX");
+        std::env::set_var("DIGUP_SERVER_ROOTS", "/tmp/a");
+        assert_eq!(
+            ServerConfig::from_env().unwrap_err(),
+            "DIGUP_SERVER_INDEX: the index folder is required"
+        );
+        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/opencode/f08-idx");
+        std::env::remove_var("DIGUP_SERVER_ROOTS");
+        assert_eq!(
+            ServerConfig::from_env().unwrap_err(),
+            "DIGUP_SERVER_ROOTS: at least one media root is required"
+        );
+        std::env::set_var("DIGUP_SERVER_ROOTS", "");
+        assert_eq!(
+            ServerConfig::from_env().unwrap_err(),
+            "DIGUP_SERVER_ROOTS: at least one media root is required"
+        );
+        std::env::set_var("DIGUP_SERVER_ROOTS", "/tmp/a:/tmp/b");
+        std::env::set_var("DIGUP_SERVER_STATUS_TTL_S", "1x5");
+        assert_eq!(
+            ServerConfig::from_env().unwrap_err(),
+            "DIGUP_SERVER_STATUS_TTL_S: '1x5' is not a number"
+        );
+        std::env::remove_var("DIGUP_SERVER_STATUS_TTL_S");
+        std::env::set_var("DIGUP_SERVER_PORT", "99999");
+        assert_eq!(
+            ServerConfig::from_env().unwrap_err(),
+            "DIGUP_SERVER_PORT: '99999' is not a valid port"
+        );
+        std::env::remove_var("DIGUP_SERVER_PORT");
+        // The healthy chain boots, and an EMPTY index boots on both sides
+        // (measured: DIGUP_SERVER_INDEX="" is a booted server in the reference):
+        let cfg = ServerConfig::from_env().unwrap();
+        assert_eq!(cfg.roots, vec!["/tmp/a", "/tmp/b"]);
+        std::env::set_var("DIGUP_SERVER_INDEX", "");
+        assert!(ServerConfig::from_env().is_ok());
+        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/opencode/f08-idx");
+
+        // api.py:642 reads DIGUP_SERVER_ESTIMATE_TIMEOUT_S per request; a typo
+        // must not kill the boot (the estimate call answers 500 - pinned at the
+        // estimate handler test seam, tests/boot.rs shape).
+        std::env::set_var("DIGUP_SERVER_ESTIMATE_TIMEOUT_S", "abc");
+        std::env::set_var("DIGUP_SERVER_INDEX", "/tmp/opencode/f08-idx");
+        std::env::set_var("DIGUP_SERVER_ROOTS", "/tmp/a");
+        let cfg = ServerConfig::from_env().expect("the estimate knob is read per request");
+        assert_eq!(cfg.estimate_timeout_s, 120.0); // the mirror defaults, no boot death
+        std::env::remove_var("DIGUP_SERVER_ESTIMATE_TIMEOUT_S");
     }
 }
