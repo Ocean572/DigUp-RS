@@ -460,6 +460,7 @@ pub struct Ctx {
 /// string (the `Http` variant — endpoints raise these directly); an
 /// unmapped exception is Starlette's plain-text "Internal Server Error"
 /// with 500 (measured: text/plain, NOT the JSON `detail` shape).
+#[derive(Debug)]
 pub enum ApiError {
     Engine(String),
     Refused(String),
@@ -1417,8 +1418,11 @@ async fn status_endpoint(State(app): State<Shared>, Extension(ctx): Extension<Ct
         let live = strip(scope.service.status()?);
         let cli = app.status.get(&scope.cfg)?;
         let mut row = match live {
+            // Python splats the live status (`{**live, ...}` api.py:592): a
+            // non-mapping is a TypeError -> 500. The audit-base answered a 200
+            // built on an empty base row.
             Value::Object(row) => row,
-            _ => Map::new(),
+            _ => return Err(ApiError::Internal),
         };
         row.insert("target".into(), json!(target));
         for field in [
@@ -1428,7 +1432,13 @@ async fn status_endpoint(State(app): State<Shared>, Extension(ctx): Extension<Ct
             "vectors_version",
             "index_size",
         ] {
-            row.insert(field.into(), cli.get(field).cloned().unwrap_or(Value::Null));
+            // Python SUBSCRIPTS all five (`cli["kinds"]`, api.py:594-601): an
+            // engine reply that omits one is a KeyError -> 500, measured on the
+            // pinned fastapi/starlette. Relay the subscript, invent no null.
+            row.insert(
+                field.into(),
+                cli.get(field).cloned().ok_or(ApiError::Internal)?,
+            );
         }
         row.insert(
             "roots".into(),
@@ -1441,6 +1451,35 @@ async fn status_endpoint(State(app): State<Shared>, Extension(ctx): Extension<Ct
         Ok(value) => Json(value).into_response(),
         Err(error) => error.into_response(),
     }
+}
+
+/// The cache entry for one hit, spelled as Python's subscripts (api.py:619-623):
+/// `hit["path"]`, `hit["kind"]`, `hit["segment_id"]` are KEYED reads - a missing
+/// key is a KeyError, a typed field of the wrong type is the model's Validation-
+/// Error, and both are Starlette's plain 500 (measured on the pinned fastapi/
+/// starlette, 2026-11-15). The audit-base defaulted them to ""/0 - a 200 whose
+/// media_id then resolves to a WRONG row. `loc` is the one `.get()` (Python
+/// `hit.get("loc")`: absent answers None).
+fn hit_fields(hit: &Value, code: bool) -> Result<HitEntry, ApiError> {
+    let row = hit.as_object().ok_or(ApiError::Internal)?;
+    Ok(HitEntry {
+        path: row
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or(ApiError::Internal)?
+            .to_string(),
+        kind: row
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or(ApiError::Internal)?
+            .to_string(),
+        segment_id: row
+            .get("segment_id")
+            .and_then(Value::as_i64)
+            .ok_or(ApiError::Internal)?,
+        loc: row.get("loc").and_then(Value::as_f64),
+        code,
+    })
 }
 
 /// `POST /api/v1/search` — ranking passes through untouched. Each hit
@@ -1482,35 +1521,23 @@ async fn search(
             }
         }
         row.entry("warning".to_string()).or_insert(Value::Null);
-        let hits: Vec<Value> = row
-            .get("hits")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .map(|hit| {
-                        let entry = HitEntry {
-                            path: hit
-                                .get("path")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string(),
-                            kind: hit
-                                .get("kind")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string(),
-                            segment_id: hit.get("segment_id").and_then(Value::as_i64).unwrap_or(0),
-                            loc: hit.get("loc").and_then(Value::as_f64),
-                            code: req.code,
-                        };
-                        let media_id = app.hit_cache.put(entry);
-                        let mut row = hit.as_object().cloned().unwrap_or_default();
-                        row.insert("media_id".into(), json!(media_id));
-                        Value::Object(row)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let hits: Vec<Value> = match row.get("hits").and_then(Value::as_array) {
+            // `for hit in stripped["hits"]` (api.py:619): a hits value that is
+            // not a list is the model's ValidationError on the way in - 500.
+            Some(rows) => rows
+                .iter()
+                .map(|hit| {
+                    let fields = hit_fields(hit, req.code)?;
+                    let media_id = app.hit_cache.put(fields);
+                    // Python splats the hit itself ({**hit, "media_id": ...}):
+                    // every engine field rides, nothing is defaulted.
+                    let mut row = hit.as_object().ok_or(ApiError::Internal)?.clone();
+                    row.insert("media_id".into(), json!(media_id));
+                    Ok(Value::Object(row))
+                })
+                .collect::<Result<Vec<Value>, ApiError>>()?,
+            None => return Err(ApiError::Internal),
+        };
         row.insert("hits".into(), Value::Array(hits));
         Ok(Value::Object(row))
     })
@@ -2480,5 +2507,83 @@ mod tests {
         assert_eq!(guard_path_of("/%61pi/v1/search"), "/api/v1/search");
         assert_eq!(guard_path_of("/api/v1/index%2F"), "/api/v1/index");
         assert_eq!(guard_path_of("/api/v1/health%2F"), "/api/v1/health");
+    }
+
+    #[test]
+    fn hit_subscripts_answer_500_where_python_raises() {
+        // F-09: the cache entry rides Python's keyed reads (api.py:619-623).
+        use super::{hit_fields, ApiError};
+        // A hit row missing path/kind/segment_id, carrying them as the wrong
+        // type, or not an object at all is a 500 there - the audit-base
+        // answered 200 with ""/0 defaults, caching a media_id that resolves
+        // to a WRONG row (segment 0).
+        use serde_json::json;
+        let good = json!({"path": "/a/b.jpg", "kind": "photo", "segment_id": 3, "loc": 1.5});
+        let entry = hit_fields(&good, false).unwrap();
+        assert_eq!(entry.path, "/a/b.jpg");
+        assert_eq!(entry.kind, "photo");
+        assert_eq!(entry.segment_id, 3);
+        assert_eq!(entry.loc, Some(1.5));
+        // loc is the .get(): absent is fine, None.
+        let no_loc = json!({"path": "/a", "kind": "photo", "segment_id": 0});
+        assert_eq!(hit_fields(&no_loc, true).unwrap().loc, None);
+        // keyed reads refused -> Internal (the 500):
+        let missing = json!({"kind": "photo", "segment_id": 3});
+        assert!(matches!(
+            hit_fields(&missing, false),
+            Err(ApiError::Internal)
+        ));
+        let wrong_type = json!({"path": 5, "kind": "photo", "segment_id": 3});
+        assert!(matches!(
+            hit_fields(&wrong_type, false),
+            Err(ApiError::Internal)
+        ));
+        let non_object = json!(5);
+        assert!(matches!(
+            hit_fields(&non_object, false),
+            Err(ApiError::Internal)
+        ));
+        // segment_id as a float (2.0) is refused here and a ValidationError in
+        // Python (the engine emits integers; the parity is the refusal class).
+        let floaty = json!({"path": "/a", "kind": "photo", "segment_id": 2.0});
+        assert!(matches!(
+            hit_fields(&floaty, false),
+            Err(ApiError::Internal)
+        ));
+    }
+
+    #[test]
+    fn status_identity_fields_are_keyed_reads() {
+        // The five fields the endpoint splats from the CLI status (api.py:594-
+        // 601 `cli["kinds"]` ...): subscript-parity, the same relay.
+        use super::ApiError;
+        use serde_json::{json, Map};
+        let mut row = Map::new();
+        let cli = json!({"files": 4, "kinds": [], "fingerprints": "x", "build_tag": "t",
+                         "vectors_version": 6, "index_size": 100});
+        for field in [
+            "kinds",
+            "fingerprints",
+            "build_tag",
+            "vectors_version",
+            "index_size",
+        ] {
+            row.insert(
+                field.into(),
+                cli.get(field).cloned().ok_or(ApiError::Internal).unwrap(),
+            );
+        }
+        assert_eq!(row.get("index_size"), Some(&json!(100)));
+        // The audit-base shape (unwrap_or(Value::Null)) would answer Null here;
+        // Python raises KeyError -> 500:
+        let relay = truncated_get_kinds();
+        assert!(matches!(relay, Err(ApiError::Internal))); // the relay refuses, like the reference
+    }
+
+    fn truncated_get_kinds() -> Result<serde_json::Value, super::ApiError> {
+        use super::ApiError;
+        use serde_json::json;
+        let truncated = json!({"files": 4});
+        truncated.get("kinds").cloned().ok_or(ApiError::Internal)
     }
 }
