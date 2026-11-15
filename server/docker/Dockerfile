@@ -504,10 +504,15 @@ COPY --from=rust-engine-payload /out/ /opt/digup/
 
 # The shipping image with the Rust engine (the deploy compose can target it unchanged).
 FROM server-runtime AS server-runtime-rust
-# server-runtime keeps the healthcheck inside /opt/digup — re-copy it after the swap.
+# server-runtime ENDS as `USER digup` (line 299) and /opt/digup is ROOT-owned (the Swift
+# payload COPY landed as root), so `rm -rf` runs as root here and the stage hands the
+# image back to digup — the swap's exact shape: empty the dir, land the Rust payload,
+# re-copy the healthcheck (server-runtime keeps it INSIDE /opt/digup), drop back to 990.
+USER 0
 RUN rm -rf /opt/digup
 COPY --from=rust-engine-payload /out/ /opt/digup/
 COPY server/docker/healthcheck.py /opt/digup/healthcheck.py
+USER digup
 
 # ── Stage 6: the shipping image with the Rust server (no Python, no uvicorn) ──────────────────
 # The pure-Rust shape: `digup-server` (crates/server, the axum port of the FastAPI wrapper) +
