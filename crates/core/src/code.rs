@@ -15,6 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::extract::ExtractError;
 use crate::options::IndexOptions;
 use crate::rules;
+use crate::search_text::trim_whitespaces;
 
 /// The model reads 2,048 tokens of an input at most; a single line longer than this is cut here.
 pub const LONGEST_PIECE: usize = 4000;
@@ -199,10 +200,6 @@ fn grapheme_prefix(text: &str, count: usize) -> String {
     text.graphemes(true).take(count).collect()
 }
 
-fn grapheme_trim(text: &str) -> String {
-    text.trim().to_string()
-}
-
 /// Lines that close a block (shell, Ruby, Lua, Objective-C, the C preprocessor).
 const CLOSERS: [&str; 8] = [
     "end", "fi", "done", "esac", "@end", "#endif", "end;", "end)",
@@ -230,9 +227,18 @@ pub fn lines(text: &str, size: i64) -> Vec<Piece> {
         if first.is_whitespace() {
             return false;
         }
-        // A closing line belongs to the block above it.
-        let trimmed = grapheme_trim(line);
-        !"})]".contains(first) && !CLOSERS.contains(&trimmed.as_str())
+        // A closing line belongs to the block above it. The trim is the engine's
+        // `trimmingCharacters(in: .whitespaces)` (CodeExtractor.swift:89) — measured
+        // SCALAR SET on swift-corelibs (f9full.swift, 2026-11-14): tab + space + all Zs
+        // + **ZWSP**; CR/VT/FF/NEL/LS/PS are NOT in it ("end\r" keeps its CR, pinned
+        // `the_line_trim_is_the_whitespaces_set`), and the leading-character check rides
+        // `Character.isWhitespace` == the White_Space property + tab == Rust's
+        // `char::is_whitespace` (ZWSP true, ZWJ false — measured). The audit-base used
+        // `str::trim`, whose set drops CR/VT/FF/NEL/LS/PS and keeps ZWSP: closer
+        // verdicts FLIP on CR-bearing files — `"end\r"` trimmed to `"end"` counts as
+        // the closer where the engine keeps the CR and does NOT close (F9).
+        let trimmed = trim_whitespaces(line);
+        !"})]".contains(first) && !CLOSERS.contains(&trimmed)
     };
 
     let mut pieces: Vec<Piece> = Vec::new();
@@ -304,9 +310,14 @@ fn grapheme_first(text: &str) -> Option<char> {
 /// ("def retry_with_backoff(…"), else its first line of code (not a comment, an import or a
 /// closing brace).
 pub fn summary(text: &str) -> String {
+    // The engine's map is `trimmingCharacters(in: .whitespaces)` (CodeExtractor.swift:132)
+    // — the measured set keeps a trailing CR and trims ZWSP (`startsBlock`'s note; F9
+    // pins both shapes). The audit-base's `str::trim` cut the CR ("a\r" -> "a") and
+    // kept ZWSP ("\u{200B}def f():" stayed out of the definition pick — Swift trims the
+    // ZWSP and the line IS the definition).
     let lines: Vec<String> = split_lines(text, false)
         .into_iter()
-        .map(|line| grapheme_trim(&line))
+        .map(|line| trim_whitespaces(&line).to_string())
         .filter(|line| !line.is_empty())
         .collect();
     let definition = lines

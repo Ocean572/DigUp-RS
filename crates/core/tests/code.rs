@@ -276,6 +276,103 @@ fn notebooks_read_their_cells_and_ignore_their_outputs() {
 }
 
 #[test]
+// F9 — the LINE trims ride Foundation's `.whitespaces` set, measured on swift-corelibs
+// (the engine's Linux shape): the ⑩a pinned facts f046/f047 (fixtures/search-expected)
+// show CR/VT/FF/NEL/LS/PS are NOT in it — a trailing CR SURVIVES
+// `trimmingCharacters(in: .whitespaces)`. The audit-base trimmed with `str::trim`
+// (Rust's whitespace = White_Space property ⊃ CR/VT/FF/NEL/LS/PS), which
+//  - cut the trailing CR off summary lines ("a\r" -> "a", engine: "a\r"), and
+//  - flipped closer verdicts: `"end\r"` trimmed to `"end"` counted as the closer, so a
+//    stretch cut BEFORE the `end` line where the engine (trim keeps `"end\r"`, not a
+//    closer) ends the stretch AFTER it.
+// macOS (the Darwin engine) trims the controls and keeps ZWSP — the split
+// `search_text::is_whitespace_set` answers that shape there (cfg), pinned below.
+fn the_line_trim_is_the_whitespaces_set() {
+    // Summary: the CR survives (str::trim fails-before: "b" — with "a" emptied, the
+    // code pick lands on the "b" line).
+    assert_eq!(code::summary("a\r\r\nb\n"), "a\r");
+    // Lines (closer verdict): the engine trims `"end\r"` to `"end\r"` (CR survives
+    // `.whitespaces`, f9full + the pinned facts f046/f047) — NOT the closer — so its
+    // `startsBlock` of that line FLIPS against the audit-base's str::trim answer.
+    // Traced line-for-line against CodeExtractor.swift:82-108 the flip cannot move a
+    // piece boundary: a candidate the engine takes via `startsBlock(line)` is re-cut by
+    // the fallback search at the same line through its `blank(line - 1) ||` disjunct
+    // (search 1 proved that blank when the line qualified), and a candidate the engine
+    // rejects (closer flip) is likewise re-cut through `blank`. The closer verdict
+    // reaches no other output. Pinned below: the traced engine shape, equal on both
+    // trims — fixture "a = 1\nb = 2\r\nend\rc = 3\n", size 12 (offsets 0,6,12,21,26;
+    // end=2; floor 4; search 1 cuts at 2 via blank(1); handover start=2; blank-skip
+    // skips line 2 (blank on both trims: Cf is whitespace-true in `allSatisfy`), piece
+    // 2 = lines 3..3):
+    let pieces = code::lines("a = 1\nb = 2\r\nend\rc = 3\n", 12);
+    assert_eq!(
+        pieces
+            .iter()
+            .map(|piece| (piece.text.clone(), piece.first, piece.last))
+            .collect::<Vec<(String, i64, i64)>>(),
+        vec![
+            ("a = 1\nb = 2".to_string(), 1, 2),
+            ("end\rc = 3".to_string(), 3, 3),
+        ],
+        "closer verdict flips; boundaries ride the blank rules on both trims (traced)"
+    );
+    // Leading-character check (`first.isWhitespace` == White_Space + tab, ZWSP true on
+    // corelibs, f9probe): a ZWSP-led line is NOT a block start on BOTH platforms.
+    let pieces = code::lines("\u{200B}end\nx = 1\n", 18);
+    assert_eq!(
+        pieces
+            .iter()
+            .map(|p| (p.first, p.last))
+            .collect::<Vec<(i64, i64)>>(),
+        vec![(1, 2)],
+        "the ZWSP-led `end` line joins the stretch (leading whitespace, both sets)"
+    );
+}
+
+#[test]
+// F9 (macOS branch) — the SAME channels on the Darwin engine: `.whitespaces` trims the
+// line controls and KEEPS ZWSP (the ⑩a macOS facts the set doc records). The cfg split
+// in `search_text::is_whitespace_set` answers this shape on macOS.
+fn the_line_trim_on_macos_is_the_darwin_set() {
+    if cfg!(target_os = "macos") {
+        assert_eq!(code::summary("a\r\r\nb\n"), "b"); // CR trimmed: "a" empties, code pick is "b"
+        let pieces = code::lines("def a():\n    x = 1\nend\r\r\n    y = 2\n", 18);
+        // The traced handover shape (offsets 0,9,18,23,30; floor 7; the fallback cuts at
+        // line 3, handover max(3-2,1)=1, second handover max(4-2,2)=2).
+        assert_eq!(
+            pieces
+                .iter()
+                .map(|p| (p.first, p.last))
+                .collect::<Vec<(i64, i64)>>(),
+            vec![(1, 1), (2, 3), (3, 4)],
+            "Darwin: `end\r` trims to the closer `end` (the audit-base shape IS the engine here)"
+        );
+    }
+}
+
+#[test]
+// F9 — ZWSP (U+200B): IN `.whitespaces` on swift-corelibs (f9full.swift, 2026-11-14:
+// the set answers 19 scalars — tab, space, the Zs separators, and 200B; ZWJ 200D is
+// NOT); NOT in it on Darwin. A summary line led by ZWSP trims to its definition on
+// Linux (the engine picks it as the `def` line); the audit-base's str::trim (White_Space
+// excludes ZWSP) kept the ZWSP, the definition test failed on the glued token
+// "\u{200B}def", and the summary returned the ZWSP-led line.
+fn the_summary_trim_takes_a_leading_zero_width_space() {
+    let s = code::summary("\u{200B}def f():\n");
+    if cfg!(target_os = "macos") {
+        assert_eq!(
+            s, "\u{200B}def f():",
+            "Darwin keeps the ZWSP (the ⑩a set fact)"
+        );
+    } else {
+        assert_eq!(
+            s, "def f():",
+            "corelibs trims the ZWSP (f9full: 200B IS in .whitespaces)"
+        );
+    }
+}
+
+#[test]
 fn the_summary_is_the_first_line_that_defines_something() {
     let stretch = "import time\n\n\ndef retry_with_backoff(fn, tries=3):\n    delay = 1\n";
     assert_eq!(

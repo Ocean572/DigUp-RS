@@ -182,14 +182,29 @@ pub fn is_lowercase_character(c: char) -> bool {
     get_general_category(c) == GeneralCategory::LowercaseLetter
 }
 
-/// Foundation's `CharacterSet.whitespaces` (measured, ⑩a): the space separators (Zs —
-/// NBSP and the thin/ideographic spaces are in) plus the tab. Newlines are NOT in it.
+/// Foundation's `CharacterSet.whitespaces`, measured on BOTH Foundation families.
+/// swift-corelibs (the engine's Linux shape) answers 19 scalars — tab, space, the Zs
+/// separators (NBSP, Ogham, U+2000–200A, narrow NBSP, medium mathematical, ideographic)
+/// and **ZWSP U+200B** (the glibc locale's `iswspace` includes it; ZWJ U+200D is NOT in,
+/// measured scalar-by-scalar over the whole range, `f9full.swift` 2026-11-14 in
+/// `digup-builder:fixes3`). Darwin (the macOS engine) answers the same set WITHOUT ZWSP
+/// (the ⑩a macOS measurement: "ZWSP is NOT") — so ZWSP splits by platform, the
+/// established engine-split shape (`paths::real_path`, `stb::c_path`, the crawler's
+/// `isDirectory`). A trim on swift-corelibs drops a trailing ZWSP — `"end\u{200B}"`
+/// trims to `"end"` — and `str::trim` (Rust's White_Space, which excludes ZWSP) keeps
+/// it: the snippet/query/closer edges that ride these trims diverge on any text carrying
+/// ZWSP at its edges (scraped and OCR'd text carries it).
 pub fn is_whitespace_set(c: char) -> bool {
-    c == '\t' || get_general_category(c) == GeneralCategory::SpaceSeparator
+    c == '\t'
+        || get_general_category(c) == GeneralCategory::SpaceSeparator
+        || (c == '\u{200B}' && !cfg!(target_os = "macos"))
 }
 
-/// Foundation's `CharacterSet.whitespacesAndNewlines`: `.whitespaces` plus the line
-/// controls (LF, VT, FF, CR, NEL, LS, PS) (measured, ⑩a: NBSP IS in, ZWSP is NOT).
+/// Foundation's `CharacterSet.whitespacesAndNewlines`: `.whitespaces` (ZWSP included on
+/// swift-corelibs, as above) plus the line controls — measured 26 scalars on
+/// swift-corelibs: `.whitespaces`' 19 plus LF, VT, FF, CR, NEL, LS, PS (`f9full.swift`:
+/// added by whitespacesAndNewlines = A B C D 85 2028 2029). The trim drops a trailing CR
+/// on BOTH sets ("end\r" -> "end") — the split-lines channels (`code.rs`) ride that fact.
 pub fn is_whitespace_newline_set(c: char) -> bool {
     is_whitespace_set(c)
         || matches!(
@@ -216,6 +231,10 @@ fn trim_by(text: &str, in_set: fn(char) -> bool) -> &str {
     &text[start..end]
 }
 
+/// The pinned shape of `.whitespaces` at a line's edge (the F9 channels): a trailing CR
+/// SURVIVES the trim on the Linux engine (f9full: CR is not in the set) and trims on
+/// the macOS engine.
+///
 /// `trimmingCharacters(in: .whitespaces)`.
 pub fn trim_whitespaces(text: &str) -> &str {
     trim_by(text, is_whitespace_set)
@@ -568,5 +587,79 @@ impl PageTextProblem {
             return Some(PageTextProblem::LostLetters);
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_whitespace_newline_set, is_whitespace_set, trim_whitespaces, trim_whitespaces_newlines,
+    };
+
+    /// F9 — the `.whitespaces` trim set, measured scalar-by-scalar over the whole
+    /// Unicode range on swift-corelibs 6.4 (`f9full.swift`, 2026-11-14, the container
+    /// `digup-builder:fixes3`): 19 scalars — tab, space, the Zs separators (NBSP,
+    /// Ogham, U+2000–200A, narrow NBSP, medium mathematical, ideographic) and **ZWSP
+    /// U+200B**; the line controls (LF/VT/FF/CR/NEL/LS/PS) and ZWJ are NOT in it.
+    /// Darwin (the macOS engine) answers the same set WITHOUT ZWSP (the ⑩a facts,
+    /// fixtures/search-expected f046/f047: NEL/LS/PS/CR survive `.whitespaces`).
+    /// `str::trim` (Rust's White_Space) is the opposite at both edges: it TRIMS the
+    /// controls and KEEPS ZWSP. The engine's trims (query names, snippet edges, the
+    /// `;` test, code summaries) ride the Foundation sets, so ZWSP splits by platform.
+    #[test]
+    fn the_whitespace_set_is_the_measured_foundation_set() {
+        // In on every platform: tab, space, NBSP, thin, ideographic.
+        for c in ['\t', ' ', '\u{A0}', '\u{2009}', '\u{3000}'] {
+            assert!(is_whitespace_set(c), "{:04X}", c as u32);
+        }
+        // The line controls: in `.whitespacesAndNewlines`, NOT in `.whitespaces`.
+        for c in [
+            '\n', '\u{0B}', '\u{0C}', '\r', '\u{85}', '\u{2028}', '\u{2029}',
+        ] {
+            assert!(!is_whitespace_set(c), "ws must keep {:04X}", c as u32);
+            assert!(
+                is_whitespace_newline_set(c),
+                "wn must take {:04X}",
+                c as u32
+            );
+        }
+        // Not in either: ZWJ, BOM, NUL.
+        for c in ['\u{200D}', '\u{FEFF}', '\0'] {
+            assert!(!is_whitespace_set(c) && !is_whitespace_newline_set(c));
+        }
+        // ZWSP: the platform split. swift-corelibs includes it (f9full); Darwin not.
+        if cfg!(target_os = "macos") {
+            assert!(!is_whitespace_set('\u{200B}'), "Darwin: ⑩a measured fact");
+        } else {
+            assert!(
+                is_whitespace_set('\u{200B}'),
+                "corelibs: f9full measured 200B IS in"
+            );
+            assert!(
+                is_whitespace_newline_set('\u{200B}'),
+                "wn = ws ∪ controls ⊇ 200B"
+            );
+        }
+    }
+
+    /// The trim shapes those sets produce, pinned from the same probes (the engine's
+    /// channels: `.whitespaces` at snippet/lookup/summary edges).
+    #[test]
+    fn the_trims_answer_the_measured_shapes() {
+        // A trailing CR survives `.whitespaces` and goes in `.whitespacesAndNewlines`
+        // on EVERY platform (the controls are in neither/both sets).
+        assert_eq!(trim_whitespaces("end\r"), "end\r");
+        assert_eq!(trim_whitespaces_newlines("end\r"), "end");
+        assert_eq!(trim_whitespaces("a\u{2028}"), "a\u{2028}");
+        assert_eq!(trim_whitespaces_newlines("a\u{2028}"), "a");
+        // NBSP and thin trim on every platform (Zs).
+        assert_eq!(trim_whitespaces("x \u{A0}"), "x");
+        // ZWSP trims on corelibs/Windows, survives on Darwin.
+        if cfg!(target_os = "macos") {
+            assert_eq!(trim_whitespaces("\u{200B}end"), "\u{200B}end");
+        } else {
+            assert_eq!(trim_whitespaces("\u{200B}end"), "end");
+            assert_eq!(trim_whitespaces("end\u{200B}"), "end");
+        }
     }
 }
