@@ -446,10 +446,16 @@ pub fn is_project_root(path: &str) -> bool {
         .collect();
     names.iter().any(|name| in_set(&PROJECT_MARKERS, name))
         || names.iter().any(|name| {
-            in_set(
-                &["xcodeproj", "xcworkspace"],
-                &paths::extension(name).to_lowercase(),
-            )
+            // CASE-SENSITIVE, like `Rules.isProjectRoot` (Rules.swift:179): the set is the
+            // lowercase markers and `pathExtension` is compared RAW — a folder spelled
+            // `Foo.XcodeProj` (Xcode's own spelling on a zip-restored or Windows-authored
+            // tree) is NOT a project root to the engine. `classify`/`isSecret` DO lowercase
+            // their extension lookups (Rules.swift:78, :100) — they lower where Swift
+            // lowers, this site does not. Foundation's leading-dot rule (`".app"` has no
+            // extension, `"..app"` has "app") rides `paths::extension` — its
+            // `Path::extension` rule is equal there (measured against the Foundation probe
+            // 2026-11-14: `.app`→"", `..app`→"app", `.hidden`→"", `foo.`→"").
+            in_set(&["xcodeproj", "xcworkspace"], paths::extension(name))
         })
 }
 
