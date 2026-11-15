@@ -56,7 +56,18 @@ pub fn folder_url(path: &str) -> String {
     } else {
         path.to_string()
     };
-    digup_core::paths::standardize(&expanded)
+    // `URL(fileURLWithPath:)` makes a RELATIVE argument absolute against the
+    // process's CWD before standardizing (main.swift:127) — the daemon's root
+    // strings ride that too, and the index rows carry them (AGENTS.md's
+    // out-of-scope rule: rows carry the roots they were crawled from; a
+    // relative launch must name the folder it resolves to).
+    let absolute = if expanded.starts_with('/') {
+        expanded
+    } else {
+        let joined = std::env::current_dir().unwrap_or_default().join(&expanded);
+        joined.to_string_lossy().into_owned()
+    };
+    digup_core::paths::standardize(&absolute)
 }
 
 fn home() -> String {

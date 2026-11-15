@@ -333,8 +333,17 @@ impl Arguments {
     /// `Arguments.indexFolder`: `--index` (with `~`), else the platform's default
     /// (`AppPaths.defaultIndex`: `$XDG_DATA_HOME/digup/index`, or `~/.local/share/digup/index`).
     fn index_folder(&self) -> PathBuf {
+        // `Arguments.indexFolder` (main.swift:94-95): `--index` is
+        // `URL(fileURLWithPath: expandingTildeInPath).standardizedFileURL` and
+        // the default is `AppPaths.defaultIndex.standardizedFileURL` — the
+        // standardize is part of the relayed fact: status's `index`, the
+        // folder the WAL sidecars and the server's writer lock ride, the
+        // strings in every reply. `/data/idx/../idx/`, `/data//idx` and
+        // `/data/idx/.` all answer `/data/idx` in the engine; the audit-base
+        // relayed the caller's string verbatim. The roots ride the same
+        // shape (`folder_url`, main.swift:127-128).
         if let Some(chosen) = self.value("--index") {
-            return expand_tilde(chosen);
+            return url_path(chosen);
         }
         let base = match std::env::var("XDG_DATA_HOME") {
             Ok(value) if !value.is_empty() => PathBuf::from(value),
@@ -343,7 +352,7 @@ impl Arguments {
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(".local/share"),
         };
-        base.join("digup").join("index")
+        url_path(&base.join("digup").join("index").to_string_lossy())
     }
 }
 
@@ -1202,11 +1211,28 @@ fn estimate(args: &Arguments) -> Result<(), String> {
     Ok(())
 }
 
-/// `Arguments.folderURL`: `~` expanded, standardized.
+/// `Arguments.folderURL`: the URL shape of main.swift:127-128 — the tilde
+/// first (`expandingTildeInPath`), then `URL(fileURLWithPath:)`, which
+/// makes a RELATIVE argument absolute against the process's CWD, then
+/// `standardizedFileURL` (`paths::standardize`: `.`/`..` removed lexically,
+/// doubled slashes collapsed, the trailing slash dropped, surplus `..` at
+/// the root dropped). The index rows carry the root strings (AGENTS.md's
+/// out-of-scope rule): a relative launch must name the folder it resolves
+/// to, not the spelling the shell typed.
 fn folder_url(path: &str) -> PathBuf {
-    PathBuf::from(digup_core::paths::standardize(
-        &expand_tilde(path).to_string_lossy(),
-    ))
+    url_path(path)
+}
+
+/// The shared `URL(fileURLWithPath:)` + `standardizedFileURL` shape (see
+/// `folder_url` and `index_folder`).
+fn url_path(path: &str) -> PathBuf {
+    let expanded = expand_tilde(path);
+    let absolute = if expanded.starts_with("/") {
+        expanded
+    } else {
+        std::env::current_dir().unwrap_or_default().join(expanded)
+    };
+    PathBuf::from(digup_core::paths::standardize(&absolute.to_string_lossy()))
 }
 
 /// `files(estimate)`: FileKind raw values → counts (the JSON contract).
@@ -2348,6 +2374,46 @@ mod tests {
     /// writer on this box (jsonprobe3/4.out): shortest digits, exponent form when
     /// the leading power is < -4 or ≥ 16, fixed form bare-integral, "-0" for the
     /// signed zero.
+    #[test]
+    fn the_cli_paths_are_the_url_standardized_shape() {
+        // F-13 residual (a): main.swift:94-95 (`--index`) and 127-128
+        // (the roots) run `URL(fileURLWithPath:
+        // expandingTildeInPath).standardizedFileURL`. The standardize is
+        // the port's measured `paths::standardize`; `URL(fileURLWithPath:)`
+        // absolutizes a relative argument against the CWD. The audit-base
+        // ran `expand_tilde` alone on `--index` — the relayed `index` string
+        // carried the caller's `..`, doubled slashes and trailing slash.
+        use super::{expand_tilde, home, url_path, PathBuf};
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(url_path("/data/idx/"), PathBuf::from("/data/idx"));
+        assert_eq!(url_path("/data//idx"), PathBuf::from("/data/idx"));
+        assert_eq!(url_path("/data/x/../idx/."), PathBuf::from("/data/idx"));
+        assert_eq!(url_path("/.."), PathBuf::from("/")); // surplus .. at the root drops
+        assert_eq!(url_path("/a/b/../.."), PathBuf::from("/"));
+        assert_eq!(url_path("rel"), cwd.join("rel")); // URL(fileURLWithPath:) absolutizes
+        assert_eq!(url_path("./rel"), cwd.join("rel"));
+        // The pops are lexical and climb ABOVE the CWD: standardizedFileURL
+        // removes the pair a/.. then the pair cli/.., so a/../../rel from
+        // crates/cli is crates/rel — what URL.standardizedFileURL answers.
+        assert_eq!(url_path("a/../../rel"), cwd.parent().unwrap().join("rel"));
+        assert_eq!(url_path("~/x/"), home().join("x")); // the tilde runs FIRST
+        assert_eq!(url_path("~"), home());
+        // The audit-base shape, recorded inline (the fails-before): the
+        // `--index` string passed expand_tilde untouched — verbatim garbage.
+        assert_eq!(
+            expand_tilde("/data/idx/../idx/").to_string_lossy(),
+            "/data/idx/../idx/"
+        );
+        assert_eq!(expand_tilde("rel").to_string_lossy(), "rel");
+        // And the relayed fact rides index_folder:
+        let owned: Vec<String> = ["status", "--index", "/data/idx/../idx/"]
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect();
+        let args = parse(&owned).unwrap();
+        assert_eq!(args.index_folder(), PathBuf::from("/data/idx"));
+    }
+
     #[test]
     fn swift_number_shapes() {
         let cases: [(f64, &str); 16] = [
