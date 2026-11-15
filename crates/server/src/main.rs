@@ -990,17 +990,34 @@ fn query_target(uri: &Uri) -> Option<String> {
     None
 }
 
+/// The guard's view of the request path: uvicorn decodes `scope["path"]`
+/// (percent-decoding, h11_impl's "PERFORM PERCENT DECODING"), the middlewares `rstrip
+///("/")` it (security.py:474, :563). Decode, then strip — the wrapper's order. The
+/// guard, the OPEN_PATHS/ADMIN_ROUTES tests, and the audit line all see THIS string.
+fn guard_path_of(raw_path: &str) -> String {
+    percent_decode(raw_path).trim_end_matches('/').to_string()
+}
+
 async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Response {
     let method = req.method().clone();
     let method_str = method.as_str().to_string();
     let uri = req.uri().clone();
     let raw_path = uri.path().to_string();
-    // Python: `scope["path"].rstrip("/")` — the guard compares stripped.
-    let guard_path = raw_path.trim_end_matches('/').to_string();
-    let guarded = guard_path.starts_with("/api/v1")
-        && !security::OPEN_PATHS
-            .iter()
-            .any(|open| *open == guard_path.as_str());
+    // Python's path for the guard, the OPEN_PATHS/ADMIN_ROUTES tests, and the audit
+    // line is uvicorn's PERCENT-DECODED request target, then `rstrip("/")`
+    // (security.py:474 BearerAuth, :563 PrincipalLog; uvicorn decodes scope["path"]).
+    // axum's `uri.path()` is the RAW target: decode, then strip — the wrapper's order.
+    // A client that encodes its way in slipped past the raw-form checks the audit-base
+    // ran: `/%61pi/v1/search` (decoded /api/v1/search) is guarded + audited by Python
+    // and was neither here (unguarded: a token-guarded search answered key-free), and
+    // `POST /api/v1/index%2F` (decoded /api/v1/index/) is an ADMIN route for Python
+    // (admin demanded) while the raw form matched no ADMIN_ROUTES entry — a reader
+    // token reached the index-queue endpoint. Routing stays on the raw target (axum's
+    // matchit): the deviation the mount's note records (Python's router answers the
+    // decoded path, incl. its 307 slash-redirect; here an encoded path answers 404).
+    let guard_path = guard_path_of(&raw_path);
+    let guarded =
+        guard_path.starts_with("/api/v1") && !security::OPEN_PATHS.contains(&guard_path.as_str());
     let headers = req.headers().clone();
 
     let origin_raw = headers
@@ -1262,8 +1279,14 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
     }
 
     // FastAPI's `@app.get` routes answer GET only, so a HEAD on an api path
-    // falls past the partial match into the `/` mount's static lookup, which
-    // can only miss there (measured 2026-11-13: HEAD `/api/v1/status` → 404,
+    // falls past the partial match into the `/` mount's static lookup — and the
+    // standing DEVIACTION for non-canonical targets lives here: Starlette matches the
+    // DECODED path and 307-redirects a trailing slash, axum's matchit matches the RAW
+    // target, so `/api/v1/health/` and `/%61pi/v1/search` land on the mount's 404
+    // (the guard/audit in `api_gate` see the decoded form, as Python's do; the
+    // contract suite pins the canonical forms, and nothing on the wire sends encoded
+    // targets). A HEAD on an api path can only miss there (measured 2026-11-13:
+    // HEAD `/api/v1/status` → 404,
     // HEAD `/api/v1/media/<id>/file` → 404, HEAD `/api/v1/health` → 404).
     // axum's GET filter answers HEAD itself, so the mount's answer is built
     // here — AFTER the bearer gate, so the audit line names the principal the
@@ -2384,5 +2407,27 @@ mod starlette_range_tests {
             assert_eq!(shape(header, 37), want, "range {header:?}");
         }
         assert_eq!(shape("bytes=0-9", 2223), "206 0-9");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::guard_path_of;
+
+    /// The wrapper decodes before it strips (uvicorn's `scope["path"]`, then
+    /// `rstrip("/")`): an encoded prefix is `/api/v1` for the guard — GUARDED and
+    /// audited, and an encoded trailing slash strips after decoding, so
+    /// `/api/v1/health%2F` is an OPEN path and `POST /api/v1/index%2F` is an ADMIN
+    /// route. The audit-base ran both tests on the raw form: `/api/v1` slipped past
+    /// the raw `starts_with` (a guarded search answered key-free, unaudited), and
+    /// `%2F` never stripped (an admin route matched no ADMIN_ROUTES entry — a
+    /// reader token reached the index-queue endpoint).
+    #[test]
+    fn the_guard_sees_the_decoded_stripped_path() {
+        assert_eq!(guard_path_of("/api/v1/search"), "/api/v1/search");
+        assert_eq!(guard_path_of("/api/v1/health///"), "/api/v1/health");
+        assert_eq!(guard_path_of("/%61pi/v1/search"), "/api/v1/search");
+        assert_eq!(guard_path_of("/api/v1/index%2F"), "/api/v1/index");
+        assert_eq!(guard_path_of("/api/v1/health%2F"), "/api/v1/health");
     }
 }
