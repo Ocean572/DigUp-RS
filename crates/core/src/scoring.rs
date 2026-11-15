@@ -87,7 +87,9 @@ impl VectorMatrix {
             let block = &mut block_all[..count * DIMENSION];
             // `halves` is indexed in bytes: a row is DIMENSION * 2 of them.
             for (i, bits) in self.halves[row * DIMENSION * 2..(row + count) * DIMENSION * 2]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
             {
                 block[i] = crate::vectors::from_half_bits(u16::from_le_bytes([bits[0], bits[1]]));
@@ -106,7 +108,7 @@ fn dot_rows(rows: &[f32], count: usize, lanes: &[[f32; 8]], out: &mut [f32]) {
     for (row, score) in out.iter_mut().take(count).enumerate() {
         let start = &rows[row * DIMENSION..][..DIMENSION];
         let mut sum = [0.0f32; 8];
-        for (lane, chunk) in lanes.iter().zip(start.chunks_exact(8)) {
+        for (lane, chunk) in lanes.iter().zip(start.as_chunks::<8>().0.iter()) {
             for k in 0..8 {
                 sum[k] += lane[k] * chunk[k];
             }
@@ -118,7 +120,9 @@ fn dot_rows(rows: &[f32], count: usize, lanes: &[[f32; 8]], out: &mut [f32]) {
 /// The query as 8-float lanes (`queryLanes`).
 fn query_lanes(query: &[f32]) -> Vec<[f32; 8]> {
     query
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|chunk| {
             [
                 chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],

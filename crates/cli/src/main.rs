@@ -1259,7 +1259,7 @@ fn number(value: i64) -> String {
     let digits = value.abs().to_string();
     let mut grouped = String::new();
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(ch);
@@ -1500,7 +1500,7 @@ fn swift_number(value: &serde_json::Number) -> String {
     let digits = if digits.is_empty() { "0" } else { digits };
     // The leading digit's power: 1.23e15 → 15; 0.0001234 → 1.234e-4 → -4.
     let leading = exponent;
-    if leading < -4 || leading >= 16 {
+    if !(-4..16).contains(&leading) {
         // "1e+16", "9.9e-05", "-1.5e-10": a signed, two-at-least-digit exponent.
         let head = &digits[..1];
         let tail = &digits[1..];
@@ -1939,8 +1939,10 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
                     }
                 }
                 None => {
-                    let mut row = Row::default();
-                    row.n = 1;
+                    let mut row = Row {
+                        n: 1,
+                        ..Default::default()
+                    };
                     if let Some(rank) = rank {
                         if rank <= 1 {
                             row.at1 = 1;

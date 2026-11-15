@@ -121,6 +121,10 @@ impl IndexService {
             .read(true)
             .write(true)
             .create(true)
+            // The lock file is an inode for flock; its bytes are never read
+            // or kept — truncating it on open is the shape the flock design
+            // runs on. Said explicitly (clippy's ask).
+            .truncate(true)
             .open(&lock_path)
         {
             Ok(file) => file,
@@ -771,7 +775,7 @@ impl Inner {
                     .to_string();
                 seen.push((id.clone(), state));
                 let mut state_slot = self.state.lock().expect("the runner state");
-                if !state_slot.order.contains(&id) {
+                if !state_slot.order.contains(id) {
                     state_slot.order.push(id.clone());
                 }
                 state_slot.by_id.insert(id.clone(), record);

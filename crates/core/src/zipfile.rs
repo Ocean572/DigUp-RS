@@ -695,7 +695,11 @@ mod tests {
         out
     }
 
-    /// A central-directory record.
+    /// A central-directory record. The eight arguments ARE the record's
+    /// field layout (the zip central directory entry the fixture builds); a
+    /// builder struct would obscure the byte-by-byte transcription this
+    /// test is.
+    #[allow(clippy::too_many_arguments)] // the args mirror the record fields
     fn central(
         name: &[u8],
         extra: &[u8],

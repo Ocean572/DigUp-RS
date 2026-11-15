@@ -175,7 +175,7 @@ impl Windows {
             self.odd = bytes.pop();
         }
         self.buffer.reserve(bytes.len() / 2);
-        for pair in bytes.chunks_exact(2) {
+        for pair in bytes.as_chunks::<2>().0 {
             self.buffer.push(i16::from_le_bytes([pair[0], pair[1]]));
         }
         while self.buffer.len() >= self.window_samples {

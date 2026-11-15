@@ -111,7 +111,7 @@ impl StatusCache {
             // `now - stamp > ttl` refreshes; equality serves the cache (Python's `>`).
             if now
                 .checked_duration_since(*stamp)
-                .map_or(true, |age| age <= self.ttl)
+                .is_none_or(|age| age <= self.ttl)
             {
                 return Ok(data.clone());
             }
@@ -1457,16 +1457,22 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
 /// The body of a model endpoint: FastAPI's 422 shapes for a missing body and
 /// a JSON decode error (`json_invalid`'s loc carries the byte offset
 /// pydantic computed; the suite pins `detail` items, not offsets).
-fn parse_body(body: &[u8]) -> Result<Value, Response> {
+fn parse_body(body: &[u8]) -> Result<Value, Box<Response>> {
     if body.is_empty() {
-        return Err(detail_response(vec![json!({
-            "type": "missing", "loc": ["body"], "msg": "Field required"
-        })]));
+        let missing = detail_response(vec![json!({
+            "type": "missing",
+            "loc": ["body"],
+            "msg": "Field required"
+        })]);
+        return Err(Box::new(missing));
     }
     serde_json::from_slice::<Value>(body).map_err(|_| {
-        detail_response(vec![json!({
-            "type": "json_invalid", "loc": ["body", 0], "msg": "JSON decode error"
-        })])
+        let invalid = detail_response(vec![json!({
+            "type": "json_invalid",
+            "loc": ["body", 0],
+            "msg": "JSON decode error"
+        })]);
+        Box::new(invalid)
     })
 }
 
@@ -1607,7 +1613,7 @@ async fn search(
 ) -> Response {
     let value = match parse_body(&body) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let req = match validate::search(&value) {
         Ok(req) => req,
@@ -1674,7 +1680,7 @@ async fn embed_ahead(
 ) -> Response {
     let value = match parse_body(&body) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let req = match validate::embed_ahead(&value) {
         Ok(req) => req,
@@ -1877,7 +1883,7 @@ async fn preview(
         let image = reply
             .get("image")
             .and_then(Value::as_str)
-            .map(|image| targets::resolve(image));
+            .map(targets::resolve);
         let Some(image) = image else {
             // `reply["image"]` missing is Python's KeyError: unmapped → 500.
             return Err(ApiError::Internal);
@@ -2189,7 +2195,7 @@ async fn register_target(
     }
     let value = match parse_body(&body) {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let req = match validate::target_register(&value) {
         Ok(req) => req,

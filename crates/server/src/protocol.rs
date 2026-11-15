@@ -277,7 +277,7 @@ impl JsonLinesProcess {
             let stderr_slot = self.stderr.clone();
             move || {
                 let reader = BufReader::new(stderr);
-                for line in reader.lines().flatten() {
+                for line in reader.lines().map_while(Result::ok) {
                     let mut tail = stderr_slot.lock().expect("the stderr lock");
                     if tail.len() >= 50 {
                         tail.pop_front();

@@ -7,7 +7,7 @@
 //!
 //! Registry sources, merged with env winning per name:
 //!   DIGUP_SERVER_APP_TARGETS=nc=/media/nc:/media/nc2:/idx/nc;dc=/media/dc:/idx/dc
-//!   <config>/targets.json — registrations made at runtime, persisted.
+//!   `<config>/targets.json` — registrations made at runtime, persisted.
 //! Validation is strict on purpose: names are lowercase slugs, roots and index
 //! absolute, the index may not be the main index, `media` is reserved. A
 //! malformed entry is refused at startup quoting the entry — a silently-dropped

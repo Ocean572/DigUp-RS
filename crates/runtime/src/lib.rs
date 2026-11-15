@@ -118,6 +118,11 @@ pub mod ffi {
     #![allow(non_snake_case)]
     #![allow(dead_code)]
     #![allow(clippy::all)]
+    // The header comments bindgen transcribes are C-surface prose: bare
+    // URLs and `<...>` snippets from llama.h are documentation facts of
+    // the vendored library, not docs this port owns.
+    #![allow(rustdoc::bare_urls)]
+    #![allow(rustdoc::invalid_html_tags)]
     include!(concat!(env!("OUT_DIR"), "/llama_bindings.rs"));
 }
 

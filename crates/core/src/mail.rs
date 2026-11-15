@@ -225,7 +225,7 @@ fn decoded_header_word(charset: &str, encoding: &str, word: &str) -> Option<Stri
         }
         "B" => {
             let mut word = String::from(word);
-            while crate::xmlscan::grapheme_len(&word) % 4 != 0 {
+            while !crate::xmlscan::grapheme_len(&word).is_multiple_of(4) {
                 word.push('='); // RFC 2047 sends 7-bit words unpadded
             }
             let data = base64_loose(word.as_bytes())?;
@@ -366,7 +366,7 @@ fn decode(body: &[u8], transfer: &str, content_type: &str) -> String {
                 .filter(|byte| *byte != 0x0A && *byte != 0x0D)
                 .collect(); // mail wraps it
             let mut clean = clean;
-            while clean.len() % 4 != 0 {
+            while !clean.len().is_multiple_of(4) {
                 clean.push(b'='); // RFC 2047 sends 7-bit words unpadded
             }
             // A body that isn't base64 at all stays what its bytes spell — better search text

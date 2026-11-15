@@ -139,13 +139,13 @@ fn handle(
         Some("quit") => {
             out.insert("id".into(), id.clone());
             out.insert("ok".into(), Value::Bool(true));
-            return Ok(Value::Object(out));
+            Ok(Value::Object(out))
         }
         Some("info") => {
             out.insert("id".into(), id.clone());
             out.insert("ok".into(), Value::Bool(true));
             out.insert("info".into(), info_fields.clone());
-            return Ok(Value::Object(out));
+            Ok(Value::Object(out))
         }
         Some(op @ ("text" | "image" | "audio")) => {
             let embeddings: Vec<Embedding> = match op {

@@ -60,7 +60,7 @@ fn fallback_latin1(bytes: &[u8]) -> String {
 }
 
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let units: Vec<u16> = bytes
@@ -77,7 +77,7 @@ fn decode_utf16(bytes: &[u8], big_endian: bool) -> Option<String> {
 }
 
 fn decode_utf32(bytes: &[u8], big_endian: bool) -> Option<String> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let mut out = String::new();

@@ -60,7 +60,7 @@ fn excerpt_matches_the_engine_transcription() {
         (
             ["कि", "ता", "बें"]
                 .iter()
-                .flat_map(|w| std::iter::repeat(*w).take(3))
+                .flat_map(|w| std::iter::repeat_n(*w, 3))
                 .map(|w| w.to_string())
                 .collect::<Vec<_>>()
                 .join(" "),

@@ -292,6 +292,10 @@ pub fn build_corpus(root: &Path) -> Vec<PathBuf> {
 /// `index_all` spells the same recipe with its event lines; the ⑩c harness and suite
 /// need the effect only). Fully qualified paths so the module stays import-free for
 /// its two homes: `crates/runtime/tests` and the searchcheck harness's `include!`.
+// Shared test-module helper: `mod corpus` is compiled into several test
+// targets (index.rs, search.rs, the corpus target itself); this target
+// exercises others, so these helpers are dead HERE and live in siblings.
+#[allow(dead_code)] // shared helpers: live in the sibling targets of `mod corpus`
 pub fn build_index(
     corpus: &std::path::Path,
     index: &std::path::Path,
@@ -330,6 +334,7 @@ pub fn build_index(
 
 /// Swift's JSONSerialization writes a whole-valued Double as an integer, serde_json keeps
 /// `.0`; the measured gate parsed both and compared numbers by value. Same rule as ⑨.
+#[allow(dead_code)] // shared helpers: live in the sibling targets of `mod corpus`
 pub fn canonical_numbers(value: &mut ::serde_json::Value) {
     match value {
         ::serde_json::Value::Object(map) => {
@@ -353,6 +358,7 @@ pub fn canonical_numbers(value: &mut ::serde_json::Value) {
 
 /// The machine-bound root: answers carry the corpus root they measured at; the suite
 /// indexes a temp folder — both sides print it `C` (the ⑨ normalization, shared).
+#[allow(dead_code)] // shared helpers: live in the sibling targets of `mod corpus`
 pub fn normalize_root(value: &mut ::serde_json::Value, root: &str) {
     match value {
         ::serde_json::Value::Object(map) => {

@@ -10,6 +10,7 @@
 //!     zeros are stripped ("1.50 MB" → "1.5 MB", "1.00 GB" → "1 GB");
 //!   * a value rounding to 1000 stays in its band, grouped: 999999 → "1,000 KB",
 //!     999999999 → "1,000 MB" (measured — the unit never carries over).
+//!
 //! `number(Int)` is `.formatted(.number)`: 3-digit grouping with commas.
 
 use std::collections::HashMap;
@@ -20,7 +21,7 @@ pub fn number(value: i64) -> String {
     let digits = value.abs().to_string();
     let mut out = String::new();
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);

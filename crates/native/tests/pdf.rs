@@ -130,8 +130,8 @@ fn md5(data: &[u8]) -> [u8; 16] {
     let mut state = [0x67452301u32, 0xefcdab89, 0x98badcfe, 0x10325476];
     for block in message.chunks(64) {
         let mut m = [0u32; 16];
-        for (index, word) in block.chunks_exact(4).enumerate() {
-            m[index] = u32::from_le_bytes(word.try_into().unwrap());
+        for (index, word) in block.as_chunks::<4>().0.iter().enumerate() {
+            m[index] = u32::from_le_bytes(*word);
         }
         let (mut a, mut b, mut c, mut d) = (state[0], state[1], state[2], state[3]);
         for round in 0..64 {

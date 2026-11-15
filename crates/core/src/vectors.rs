@@ -33,7 +33,9 @@ pub fn from_half_bits(bits: u16) -> f32 {
 /// (`Math+Portable.swift:6-8` converts with `Float(source[index])`).
 pub fn floats_from_halves(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| from_half_bits(u16::from_le_bytes([pair[0], pair[1]])))
         .collect()
 }

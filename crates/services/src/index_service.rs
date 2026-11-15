@@ -196,10 +196,17 @@ fn run(config: IndexServiceConfig) -> Result<i32, String> {
     // Issue #155's shape knob: text-only keeps the 2048-token document budget
     // (only the media encoders are left out), so #155 changes no stored vector.
     let log = config.index.join("worker.log");
+    // The Arc is a SAME-THREAD lifetime handle: the embedder wraps FFI
+    // contexts that belong to the thread that opened them (the engine's
+    // serial-queue confinement, reproduced), and the model never crosses a
+    // thread — the daemon's own loop is its only user. clippy's Send/Sync
+    // advice is about sharing; this Arc is never shared.
+    #[allow(clippy::arc_with_non_send_sync)] // same-thread lifetime handle, never shared
     let model = Arc::new(SharedEmbedder::new(Arc::new(move |text_only: bool| {
         let models = LlamaModels::locate()?;
         let context = if text_only { Some(2048usize) } else { None };
         let embedder = LlamaEmbedder::new(&models, text_only, context, Some(&log))?;
+        #[allow(clippy::arc_with_non_send_sync)] // same-thread lifetime handle, never shared
         Ok(Arc::new(embedder) as Arc<dyn Embedder>)
     })));
     let main = make_part(
@@ -315,7 +322,7 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
     // event says so and the helper ends.
     remove_stale_scratch_folders();
     let mut state = shared.lock.lock().expect("the serve lock");
-    if let Err(error) = startup(&mut state) {
+    if let Err(error) = startup(&state) {
         finish_all(&mut state);
         event(serde_json::json!({"event": "error", "message": error, "fatal": true}));
         return Ok(1);
@@ -947,7 +954,7 @@ fn remove_stale_scratch_folders() {
         if pid == std::process::id() as i32 || !is_gone(pid) {
             continue;
         }
-        let _ = std::fs::remove_dir_all(&entry.path());
+        let _ = std::fs::remove_dir_all(entry.path());
     }
 }
 

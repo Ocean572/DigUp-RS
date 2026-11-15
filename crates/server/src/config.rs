@@ -33,7 +33,7 @@ impl EngineConfig {
         argv.push(self.index.to_string_lossy().into_owned());
         argv.push("--encoder-idle".to_string());
         argv.push(format_gf64(self.encoder_idle));
-        argv.extend(self.exclude_args().into_iter());
+        argv.extend(self.exclude_args());
         argv
     }
 
@@ -53,7 +53,7 @@ impl EngineConfig {
         argv.extend(self.roots.iter().cloned());
         argv.push("--index".to_string());
         argv.push(self.index.to_string_lossy().into_owned());
-        argv.extend(self.exclude_args().into_iter());
+        argv.extend(self.exclude_args());
         if backfill {
             argv.push("--backfill".to_string());
         }
@@ -96,7 +96,7 @@ impl EngineConfig {
         argv.extend(self.roots.iter().cloned());
         argv.push("--index".to_string());
         argv.push(self.index.to_string_lossy().into_owned());
-        argv.extend(self.exclude_args().into_iter());
+        argv.extend(self.exclude_args());
         argv.push("--json".to_string());
         argv
     }
@@ -252,7 +252,7 @@ pub fn py_float(text: &str) -> Option<f64> {
         None => (mantissa, None),
     };
     // An empty digit part is allowed on ONE side of the dot only ("5." / ".5").
-    if int_part.is_empty() && frac_part.as_deref().unwrap_or("1").is_empty() {
+    if int_part.is_empty() && frac_part.unwrap_or("1").is_empty() {
         return None;
     }
     if !int_part.is_empty() && !run_ok(int_part) {

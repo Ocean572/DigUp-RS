@@ -11,7 +11,6 @@
 //! skips, as `ReferenceVectorTests` does when the model files are absent.
 
 use digup_core::vectors::{floats_from_halves, half_bytes, to_half_bits, DIMENSION};
-use rusqlite::Connection;
 
 /// The engine's blobs, re-encoded byte for byte.
 #[test]

@@ -73,6 +73,10 @@ impl Embedder for Fake {
 
 fn seam(builds: &Arc<Mutex<Vec<bool>>>) -> Arc<SharedEmbedder> {
     let counter = builds.clone();
+    // The Arc is a same-thread handle (the embedder is FFI-confined to its
+    // opening thread and never crosses threads; the test's fake follows the
+    // production shape).
+    #[allow(clippy::arc_with_non_send_sync)] // same-thread lifetime handle, never shared
     Arc::new(SharedEmbedder::new(Arc::new(move |text_only: bool| {
         counter.lock().unwrap().push(text_only);
         Ok(Arc::new(Fake::new(text_only)) as Arc<dyn Embedder>)
