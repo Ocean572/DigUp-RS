@@ -38,7 +38,7 @@ digup-platform = { path = "crates/platform" }
 # `bundled` compiles the SQLite amalgamation with FTS5 + JSON1 enabled — the same feature set
 # `scripts/fetch-vendor.sh` builds into Vendor/sqlite (SQLITE_ENABLE_FTS5). A port that lacks
 # FTS5 cannot create the `fts` virtual table; the schema test proves it is present.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 base64 = "0.23.1"
 thiserror = "2"
 unicode-normalization = "0.1"
