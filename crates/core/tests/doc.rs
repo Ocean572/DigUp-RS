@@ -15,7 +15,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use digup_core::{doc, zipfile};
+use digup_core::{doc, rtf, zipfile};
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use unicode_segmentation::UnicodeSegmentation;
@@ -700,4 +700,23 @@ fn mail_reads_its_headers_and_text_parts() {
         let got = doc::text_of(&write(&folder, name, body)).unwrap();
         assert_eq!(got, *want, "{name}");
     }
+}
+
+#[test]
+fn rtf_codepage_undefined_bytes() {
+    // Swift's `specials` is a DICTIONARY of the 26 mapped bytes; everything else
+    // takes `?? UInt32(byte)` (Docs+Portable.swift:203-212): the six undefined slots
+    // answer " " (0x81, 0x8D, 0x90, 0x9D are not Unicode scalars at all), the rest
+    // of the upper half is Latin-1 verbatim (0xA0 NBSP … 0xFF ÿ). The audit-base's
+    // 32-entry array indexed by `byte - 0x80` PANICS on 0xA0…0xFF (index 127 of 32
+    // — `\'ff` is an indexer crash) and answers the control byte for 0x81/0x8D/0x90/
+    // 0x9D where the engine answers " ". Fails-before: the panic line (this fixture
+    // ran on the audit-base map first — recorded in the commit note).
+    let out =
+        rtf::text("{\\rtf1\\ansi\\ansicpg1252 \\'81\\'8D\\'90\\'9D\\'a0\\'e9\\'ff\\'80\\'92\\par}");
+    assert_eq!(
+        out,
+        concat!(" ", " ", " ", " ", "\u{a0}", "\u{e9}", "\u{ff}", "\u{20ac}", "\u{2019}", "\n"),
+        "{out}"
+    );
 }

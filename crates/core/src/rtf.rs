@@ -211,17 +211,57 @@ const SKIPPED_GROUPS: [&str; 26] = [
     "object",
 ];
 
-/// Windows-1252's upper half; the rest is Latin-1.
+/// Windows-1252's upper half; the rest is Latin-1 — Swift's `specials` DICTIONARY
+/// (Docs+Portable.swift:203-209), reproduced key-for-key: 27 entries covering ONLY
+/// the mapped bytes, and the answer for everything else is
+/// `specials[byte] ?? UInt32(byte)` — the RAW byte — which for the six undefined
+/// slots (0x81, 0x8D, 0x90, 0x9D) is not a Unicode scalar (the scalars 0x81, 0x8D,
+/// 0x90, 0x9D do not exist) and `Unicode.Scalar(..) ?? " "` answers " ". The
+/// audit-base packed the table into a 32-entry array spanning 0x80…0x9F and indexed
+/// `byte - 0x80` for the WHOLE 0x80…0xFF half: bytes 0xA0…0xFF (ÿ, the bullet
+/// pages, every accented letter a Windows document writes) PANIC the indexer
+/// (index 127 of 32 — a .rtf with \'ff is a crash, and a crash in the index job is
+/// the measured interruption path), and the four defined-as-raw slots 0x81/0x8D/
+/// 0x90/0x9D answer the control byte where the engine answers " ".
 fn windows1252(byte: u8) -> char {
-    let special: [u32; 32] = [
-        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, // 0x80…0x87
-        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F, // 0x88…0x8F
-        0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, // 0x90…0x97
-        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178, // 0x98…0x9F
+    let special: [(u8, u32); 27] = [
+        (0x80, 0x20AC),
+        (0x82, 0x201A),
+        (0x83, 0x0192),
+        (0x84, 0x201E),
+        (0x85, 0x2026),
+        (0x86, 0x2020),
+        (0x87, 0x2021),
+        (0x88, 0x02C6),
+        (0x89, 0x2030),
+        (0x8A, 0x0160),
+        (0x8B, 0x2039),
+        (0x8C, 0x0152),
+        (0x8E, 0x017D),
+        (0x91, 0x2018),
+        (0x92, 0x2019),
+        (0x93, 0x201C),
+        (0x94, 0x201D),
+        (0x95, 0x2022),
+        (0x96, 0x2013),
+        (0x97, 0x2014),
+        (0x98, 0x02DC),
+        (0x99, 0x2122),
+        (0x9A, 0x0161),
+        (0x9B, 0x203A),
+        (0x9C, 0x0153),
+        (0x9E, 0x017E),
+        (0x9F, 0x0178),
     ];
-    if byte < 0x80 {
-        return byte as char;
+    match special.iter().find(|(key, _)| *key == byte) {
+        Some((_, value)) => char::from_u32(*value).unwrap_or(' '),
+        // `?? UInt32(byte)` — `Unicode.Scalar(raw)` exists for 0xA0…0xFF (Latin-1
+        // verbatim) and is NIL for the four gaps (the scalars 0x81, 0x8D, 0x90, 0x9D
+        // do not exist) -> Swift's `?? " "` answers " ". Rust's `from_u32` ACCEPTS
+        // those, so the gap is spelled out:
+        None => match byte {
+            0x81 | 0x8D | 0x90 | 0x9D => ' ',
+            _ => byte as char,
+        },
     }
-    let value = special[usize::from(byte - 0x80)];
-    char::from_u32(value).unwrap_or(' ')
 }
