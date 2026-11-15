@@ -2,6 +2,23 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-15 — Release v0.8.0: tag published; the fork's Actions facts
+
+Tag `v0.8.0` (annotated) at `3917d8e` (README/CONTRIBUTING/binding-doc Rust rewrite,
+versions 0.8.0). Gate on the tip: `cargo test --workspace` with the battery suite env —
+all suites ok, rc=0 (the first run's single 127 exit was the missing env, not the tree;
+the env was fixed, not the tests). The release chain (`rust-release.yml`) gates the tag
+commit in CI and attaches the per-platform payloads; measured on the fork: the repo's
+Actions execution policy blocks scheduling (0 runs for events matching active workflows,
+`server.yml` 2026-11-05T17:30Z era runs predate the rename) — fix at
+Settings → Actions → Allow all actions. The fork also runs the inherited Website and
+Homebrew workflows it has no Pages/tap for (Homebrew fails at checkout: no
+HOMEBREW_TAP_TOKEN; Pages not configured → Website publish leg fails; the fork cannot
+touch upstream's site) — opt-out: Actions → Workflows → per-workflow Disable.
+New workflow files (rust-release.yml arrived with the Rust push) warm their event
+matching via a push to main; `edited` release events do not fire `published`-typed
+workflows.
+
 ## 2026-11-15 — The Rust core becomes `main`: audit-wave gates, history restructure, repo push
 
 Gate record for the audit wave (all measured on ai-ubuntu-computer): battery
