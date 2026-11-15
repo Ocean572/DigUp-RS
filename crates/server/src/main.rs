@@ -1528,7 +1528,11 @@ async fn search(
                 .iter()
                 .map(|hit| {
                     let fields = hit_fields(hit, req.code)?;
-                    let media_id = app.hit_cache.put(fields);
+                    // api.py:281 mints the media id with `uuid.uuid4()` inside
+                    // the search loop: an os.urandom failure is an uncaught
+                    // OSError — the plain 500 (the id mint is NOT a default
+                    // path, F-11).
+                    let media_id = app.hit_cache.put(fields).map_err(|_| ApiError::Internal)?;
                     // Python splats the hit itself ({**hit, "media_id": ...}):
                     // every engine field rides, nothing is defaulted.
                     let mut row = hit.as_object().ok_or(ApiError::Internal)?.clone();
@@ -1651,7 +1655,15 @@ async fn index(State(app): State<Shared>, Extension(ctx): Extension<Ctx>, body: 
             .jobs
             .start(prune)
             .map(|job| json!({"ok": true, "job": job}))
-            .map_err(ApiError::from)
+            .map_err(|error| match error {
+                jobs::StartError::Busy(busy) => ApiError::from(busy),
+                // The job id mint failed (uuid4 has no fallback, jobs.py:99):
+                // an uncaught OSError on POST /index — the plain 500 (F-11).
+                jobs::StartError::Random(why) => {
+                    eprintln!("job id: {why}");
+                    ApiError::Internal
+                }
+            })
     })
     .await;
     match outcome {
@@ -2097,7 +2109,13 @@ async fn register_target(
         let token = match existing {
             Some(token) if auth.minted.iter().any(|minted| minted == &key) => token,
             _ => {
-                let fresh = security::urlsafe_token();
+                // api.py: the mint is `secrets.token_urlsafe(24)` with no
+                // fallback — an os.urandom failure on this request path is
+                // an uncaught OSError, the plain 500 (F-11).
+                let fresh = match security::urlsafe_token() {
+                    Ok(fresh) => fresh,
+                    Err(_) => return ApiError::Internal.into_response(),
+                };
                 if let Some(entry) = auth.readers.iter_mut().find(|(name, _)| *name == key) {
                     entry.1 = fresh.clone();
                 } else {

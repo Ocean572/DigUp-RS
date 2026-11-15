@@ -57,8 +57,11 @@ impl HitCache {
 
     /// `put`: `uuid4().hex[:12]` — twelve hex chars. The engine produced the
     /// path this handle names; the handle is the server's bookkeeping.
-    pub fn put(&self, entry: HitEntry) -> String {
-        let media_id = random_hex12();
+    /// `uuid4` is `os.urandom` with no fallback (api.py:281): the entropy
+    /// failure rides the search request as Starlette's plain 500, so `put`
+    /// answers `Result` and its caller relays it.
+    pub fn put(&self, entry: HitEntry) -> Result<String, String> {
+        let media_id = random_hex12()?;
         let mut inner = self.inner.lock().expect("the hit cache");
         inner.by_id.insert(media_id.clone(), entry);
         inner.order.push(media_id.clone());
@@ -69,7 +72,7 @@ impl HitCache {
                 inner.by_id.remove(&oldest);
             }
         }
-        media_id
+        Ok(media_id)
     }
 
     /// `get` — a true LRU: the lookup refreshes the entry's position.
@@ -85,28 +88,22 @@ impl HitCache {
 }
 
 /// 12 hex chars from the OS's random source (the uuid4 shape's entropy: the
-/// first 12 hex chars of a v4 uuid are 48 random bits).
-pub fn random_hex12() -> String {
+/// first 12 hex chars of a v4 uuid are 48 random bits). The randomness is
+/// REQUIRED — `uuid.uuid4()` is `os.urandom` and has no fallback (api.py:281,
+/// jobs.py:99): a failure is an uncaught OSError, Starlette's plain 500.
+/// The audit-base's fallback (timestamp^pid into 6 bytes) minted ids the
+/// reference cannot produce; it is gone (F-11, with the mint-key fallback).
+pub fn random_hex12() -> Result<String, String> {
     use std::io::Read;
     let mut bytes = [0u8; 6];
-    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)) {
-        Ok(()) => {}
-        Err(_) => {
-            // No urandom (odd platform): a per-process-seeded mix, never a counter
-            // an attacker can walk.
-            let seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0)
-                ^ (std::process::id() as u64) << 32;
-            bytes.copy_from_slice(&seed.to_le_bytes()[..6]);
-        }
-    }
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|error| format!("no system randomness to name an id: {error}"))?;
     let mut out = String::with_capacity(12);
     for byte in bytes {
         out.push_str(&format!("{byte:02x}"));
     }
-    out
+    Ok(out)
 }
 
 /// `_MAGIC` (api.py:158): the prefix table, in the file's order.
@@ -482,30 +479,47 @@ mod tests {
     }
 
     #[test]
+    fn media_ids_are_twelve_hex_chars_of_random_entropy() {
+        // uuid4().hex[:12] (api.py:281): twelve hex chars, from the OS's
+        // random source only (F-11: the timestamp^pid fallback is gone —
+        // `uuid4` has none, its failure is the request's 500).
+        let id = random_hex12().expect("/dev/urandom is the kernel's ABI here");
+        assert_eq!(id.len(), 12, "{id}");
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()), "{id}");
+        assert_ne!(id, random_hex12().expect("urandom"));
+    }
+
+    #[test]
     fn hit_cache_is_a_true_lru() {
         let cache = HitCache::new(2);
-        let a = cache.put(HitEntry {
-            path: "/a".into(),
-            kind: "image".into(),
-            segment_id: 1,
-            loc: None,
-            code: false,
-        });
-        let b = cache.put(HitEntry {
-            path: "/b".into(),
-            kind: "image".into(),
-            segment_id: 2,
-            loc: None,
-            code: false,
-        });
+        let a = cache
+            .put(HitEntry {
+                path: "/a".into(),
+                kind: "image".into(),
+                segment_id: 1,
+                loc: None,
+                code: false,
+            })
+            .expect("urandom");
+        let b = cache
+            .put(HitEntry {
+                path: "/b".into(),
+                kind: "image".into(),
+                segment_id: 2,
+                loc: None,
+                code: false,
+            })
+            .expect("urandom");
         assert!(cache.get(&a).is_some()); // a refreshes: b is the oldest now
-        let c = cache.put(HitEntry {
-            path: "/c".into(),
-            kind: "image".into(),
-            segment_id: 3,
-            loc: None,
-            code: false,
-        });
+        let c = cache
+            .put(HitEntry {
+                path: "/c".into(),
+                kind: "image".into(),
+                segment_id: 3,
+                loc: None,
+                code: false,
+            })
+            .expect("urandom");
         assert!(cache.get(&a).is_some(), "the refreshed entry survived");
         assert!(cache.get(&b).is_none(), "the oldest-by-use was evicted");
         assert!(cache.get(&c).is_some());

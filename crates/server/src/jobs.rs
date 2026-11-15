@@ -54,6 +54,20 @@ pub const LOCK_NAME: &str = ".digup-server.writer.lock";
 #[derive(Clone, Debug)]
 pub struct JobBusy(pub String);
 
+/// The two ways `JobRunner.start` can fail. A job in flight is `JobBusy`
+/// (409) — and the reference raises it BEFORE the id exists: `uuid.uuid4()`
+/// runs under the busy lock (jobs.py:96-99), so a busy target never mints
+/// an id. The mint's randomness is `os.urandom` with no fallback: its
+/// failure is an uncaught OSError, Starlette's plain 500 (the audit-base's
+/// timestamp^pid fallback minted ids the reference cannot produce, F-11).
+/// The Busy arm rides the existing JobBusy→409 map; the Random arm is the
+/// 500.
+#[derive(Debug)]
+pub enum StartError {
+    Busy(JobBusy),
+    Random(String),
+}
+
 impl std::fmt::Display for JobBusy {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(out, "index job {} is already queued or running", self.0)
@@ -264,36 +278,45 @@ impl JobRunner {
 
     /// Queue one job (optionally with the engine's `--prune`). `JobBusy`
     /// (with the live id) when one is in flight.
-    pub fn start(&self, prune: bool) -> Result<Map<String, Value>, JobBusy> {
+    pub fn start(&self, prune: bool) -> Result<Map<String, Value>, StartError> {
         let inner = &self.inner;
-        let id = random_hex12();
-        let started = epoch_seconds();
-        let mut job = Map::new();
-        job.insert("id".into(), json!(id));
-        job.insert("state".into(), json!(STATE_QUEUED));
-        job.insert("started".into(), json!(started));
-        if prune {
-            job.insert("prune".into(), json!(true));
-        }
-        // The log record carries the job's prune flag; the in-memory state is
-        // `queued` while the log line already says the job is running.
-        let mut record = Map::new();
-        record.insert("id".into(), json!(&id));
-        record.insert("state".into(), json!(STATE_RUNNING));
-        record.insert("started".into(), json!(started));
-        if prune {
-            record.insert("prune".into(), json!(true));
-        }
-        {
+        // The reference's order, inside ONE lock (jobs.py:96-105): busy check
+        // FIRST (`if self._active ... raise JobBusy`), then the id mint
+        // (`uuid.uuid4().hex[:12]`), then the started stamp. A busy target
+        // never mints; the id only exists for a job that is accepted. The
+        // mint is required randomness (F-11): its failure is the plain 500.
+        let (job, record) = {
             let mut state = inner.state.lock().expect("the runner state");
             if state.active.is_some() {
-                return Err(JobBusy(state.active.clone().expect("checked some")));
+                return Err(StartError::Busy(JobBusy(
+                    state.active.clone().expect("checked some"),
+                )));
+            }
+            let id = random_hex12().map_err(StartError::Random)?;
+            let started = epoch_seconds();
+            let mut job = Map::new();
+            job.insert("id".into(), json!(&id));
+            job.insert("state".into(), json!(STATE_QUEUED));
+            job.insert("started".into(), json!(started));
+            if prune {
+                job.insert("prune".into(), json!(true));
+            }
+            // The log record carries the job's prune flag; the in-memory
+            // state is `queued` while the log line already says the job is
+            // running.
+            let mut record = Map::new();
+            record.insert("id".into(), json!(&id));
+            record.insert("state".into(), json!(STATE_RUNNING));
+            record.insert("started".into(), json!(started));
+            if prune {
+                record.insert("prune".into(), json!(true));
             }
             state.order.push(id.clone());
             state.by_id.insert(id.clone(), job.clone());
             state.active = Some(id.clone());
             state.queue.push_back(id.clone());
-        }
+            (job, record)
+        };
         inner.append(&record);
         {
             let mut wake = inner.wake.0.lock().expect("the wake flag");

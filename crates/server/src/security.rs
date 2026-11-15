@@ -167,7 +167,7 @@ pub fn mint_tokens(
         // or from a previous boot — displayable either way.
         auth.admin = match stored.get("admin") {
             Some(Value::String(token)) => Some(token.clone()),
-            _ => Some(urlsafe_token()),
+            _ => Some(urlsafe_token()?),
         };
         minted.push("admin".to_string());
     }
@@ -176,12 +176,15 @@ pub fn mint_tokens(
         if auth.readers.iter().any(|(n, _)| *n == key) {
             continue; // env already bound this target
         }
-        let token = stored
+        let token = match stored
             .get("readers")
             .and_then(|readers| readers.get(&key))
             .and_then(Value::as_str)
             .map(|token| token.to_string())
-            .unwrap_or_else(urlsafe_token);
+        {
+            Some(token) => token,
+            None => urlsafe_token()?,
+        };
         auth.readers.push((key.clone(), token));
         minted.push(key);
     }
@@ -191,24 +194,25 @@ pub fn mint_tokens(
 }
 
 /// `secrets.token_urlsafe(24)`: 24 random bytes as base64url, no padding
-/// (32 chars).
-pub fn urlsafe_token() -> String {
+/// (32 chars). The randomness is REQUIRED, exactly as `secrets` has it:
+/// `os.urandom` failing raises OSError with no fallback — at boot that
+/// kills the lifespan (the mint runs inside `create_app`), on the rotate
+/// and register paths it is an uncaught 500. The audit-base answered
+/// `Ok` from a fallback that filled bytes[..8] with a timestamp^pid seed
+/// and left 16 ZERO bytes: base64url renders zero bytes as the alphabet's
+/// zero char, a literal `A`, so a fallback-minted key LED with a run of
+/// 21 `A` chars and carried 8 bits of entropy — a key shape `secrets`
+/// cannot produce, minted at the exact failure `secrets` refuses. The
+/// server ships in a Linux container (AGENTS.md: /dev/urandom is part of
+/// the kernel's ABI; report refusals, never paper over them): failure
+/// propagates, naming the fact.
+pub fn urlsafe_token() -> Result<String, String> {
     use std::io::Read;
     let mut bytes = [0u8; 24];
-    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)) {
-        Ok(()) => {}
-        Err(_) => {
-            // No urandom (odd platform): a per-process-seeded mix, never a
-            // counter an attacker can walk.
-            let seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0)
-                ^ (std::process::id() as u64) << 32;
-            bytes[..8].copy_from_slice(&seed.to_le_bytes());
-        }
-    }
-    base64url(&bytes)
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|error| format!("no system randomness to mint a key: {error}"))?;
+    Ok(base64url(&bytes))
 }
 
 fn base64url(bytes: &[u8]) -> String {
@@ -347,13 +351,13 @@ pub fn rotate_minted(auth: &Auth, config_dir: &Path) -> Result<Option<Auth>, Str
     let mut rotated = auth.clone();
     let mut minted: Vec<String> = Vec::new();
     if auth.minted.iter().any(|m| m == "admin") {
-        rotated.admin = Some(urlsafe_token());
+        rotated.admin = Some(urlsafe_token()?);
         minted.push("admin".to_string());
     }
     for name in &auth.minted {
         if name.starts_with("app:") {
             if let Some((_, token)) = rotated.readers.iter_mut().find(|(n, _)| n == name) {
-                *token = urlsafe_token();
+                *token = urlsafe_token()?;
                 minted.push(name.clone());
             }
         }
@@ -446,5 +450,86 @@ pub fn bearer_of(headers: &axum::http::HeaderMap) -> Option<String> {
         Some(token.trim().to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::urlsafe_token;
+
+    #[test]
+    fn minted_tokens_are_thirty_two_base64url_chars_of_full_entropy() {
+        // `secrets.token_urlsafe(24)`: 24 bytes -> 32 base64url chars
+        // (alphabet A-Za-z0-9-_, no padding). With the fallback gone
+        // (F-11) every minted byte is an os-level random byte: no leading
+        // run of the alphabet's zero char `A` (16 zero bytes print 21 of
+        // them — the fallback's signature; 24 random bytes reach one by
+        // 2^-126 luck), and two mints differ (a rotate must show new
+        // keys, and `tokens.json` keys must not repeat).
+        let token = urlsafe_token().expect("/dev/urandom is the kernel's ABI here");
+        assert_eq!(token.len(), 32, "{token}");
+        assert!(
+            token
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "{token}"
+        );
+        assert!(!token.starts_with("AAAAAAAAAAAA"), "{token}");
+        assert_ne!(token, urlsafe_token().expect("urandom"));
+    }
+
+    #[test]
+    fn the_audit_base_fallback_minted_a_zero_filled_key() {
+        // F-11's measurement, recorded at the fixed tip: the audit-base
+        // function VERBATIM, with the urandom open pointed at a file that
+        // cannot open — the exact failure the fallback was written for.
+        // It answers Ok, and the key is 24 bytes of which 16 are ZERO:
+        // base64url renders every leading zero byte as `A`, so the minted
+        // key leads with a run of literal `A` chars and carries 8 bits of
+        // entropy (timestamp^pid). `secrets` cannot mint this shape; it
+        // raises. The fixed urlsafe_token has no fallback: it answers
+        // Err("no system randomness to mint a key: ...") right here.
+        use std::io::Read;
+        let mut bytes = [0u8; 24];
+        let outcome = std::fs::File::open("/proc/digup-no-such-urandom")
+            .and_then(|mut f| f.read_exact(&mut bytes));
+        assert!(outcome.is_err(), "the probe needs the open to fail");
+        match outcome {
+            Ok(()) => {}
+            Err(_) => {
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0)
+                    ^ (std::process::id() as u64) << 32;
+                bytes[..8].copy_from_slice(&seed.to_le_bytes());
+            }
+        }
+        // The audit-base's own base64url, inline (the module's CHARS).
+        const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = chunk.get(1).copied().unwrap_or(0);
+            let b2 = chunk.get(2).copied().unwrap_or(0);
+            out.push(CHARS[(b0 >> 2) as usize] as char);
+            out.push(CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+            if chunk.len() > 1 {
+                out.push(CHARS[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+            }
+            if chunk.len() > 2 {
+                out.push(CHARS[(b2 & 0x3f) as usize] as char);
+            }
+        }
+        // The seed fills bytes[..8], the zeros TRAIL: the minted key ENDS
+        // with the alphabet-zero run — 16 zero bytes cover bits 64..191,
+        // chars 11..31 (21 of them) render as literal `A`, above a
+        // timestamp^pid head. `secrets` mints no such shape.
+        let trailing_a = out.chars().rev().take_while(|c| *c == 'A').count();
+        assert_eq!(out.len(), 32, "{out}");
+        assert!(
+            trailing_a >= 20,
+            "the fallback key {out} ends {trailing_a} literal A chars"
+        );
     }
 }
