@@ -54,6 +54,75 @@ fn count(report: &digup_core::crawler::CrawlReport, map: &str, reason: &str) -> 
     }
 }
 
+/// F2 — the walk runs on STANDARDIZED roots (`Crawler.swift:60, 65`:
+/// `roots.map { $0.standardizedFileURL }`), so every string the crawl REPORTS is
+/// canonical: the progress lines' `root:`, the `leftOut` keys, the candidate paths, and
+/// the dataset roots exclusion. A root spelled `/tmp/x/./` (the operator's
+/// `DIGUP_SERVER_APP_TARGETS` strings carry exactly such spellings) walks the SAME
+/// folder Swift walks and reports `/tmp/x` everywhere. The audit-base walked the raw
+/// string: progress roots said `/tmp/x/./`, candidates landed `/tmp/x/./clip_….jpg`,
+/// the `leftOut` key was the messy root, and the root's own 300 photos became a
+/// "dataset" — the roots exclusion (`!roots.contains(folder)`) never matched, because
+/// the raw root string never equals the walked folder's path. Swift EXCLUDES the roots
+/// from the dataset scan: the root's photos are indexed.
+#[test]
+fn a_messy_root_is_reported_canonical_everywhere() {
+    let root = temp_tree("digup-crawler-standardize");
+    for i in 0..300 {
+        touch(&root, &format!("clip_{i:06}.jpg"), b"x");
+    }
+    touch(&root, "thing.xyz", b"x");
+    let messy = PathBuf::from(format!("{}/./", root.display()));
+    let canonical = root.to_string_lossy().to_string();
+
+    let mut seen_roots: Vec<String> = Vec::new();
+    let report = crawler::crawl(&[messy], &IndexOptions::default(), &mut |progress| {
+        if let Some(root) = &progress.root {
+            seen_roots.push(root.clone());
+        }
+    });
+
+    assert!(!seen_roots.is_empty(), "the walk reports its roots");
+    for seen in &seen_roots {
+        assert_eq!(
+            seen, &canonical,
+            "progress `root:` is the standardized root"
+        );
+    }
+    assert!(
+        report.datasets.is_empty(),
+        "the root is never its own dataset — roots are excluded (`Crawler.swift`)"
+    );
+    assert_eq!(report.skipped.get("dataset"), None, "no dataset skips");
+    assert_eq!(
+        report.left_out.len(),
+        1,
+        "one key, the canonical root: {:?}",
+        report.left_out.keys()
+    );
+    let left_out = report
+        .left_out
+        .get(&canonical)
+        .expect("the leftovers under the canonical root");
+    assert_eq!(left_out.get("other type"), Some(&1));
+    assert_eq!(
+        report
+            .candidates
+            .iter()
+            .filter(|f| f.kind == FileKind::Image)
+            .count(),
+        300,
+        "the root's 300 photos are indexed, not dataset-skipped"
+    );
+    for file in &report.candidates {
+        assert!(
+            file.path.starts_with(&canonical) && !file.path.contains("/./"),
+            "candidate rides the canonical root: {}",
+            file.path
+        );
+    }
+}
+
 fn crawl(root: &Path, options: &IndexOptions) -> digup_core::crawler::CrawlReport {
     crawler::crawl(&[root.to_path_buf()], options, &mut |_: &CrawlProgress| {})
 }
@@ -139,7 +208,14 @@ fn the_crawl_applies_the_rules_and_reports_what_it_leaves_out() {
     assert_eq!(kinds.get("notes.txt"), Some(&FileKind::Doc));
 
     // The reason counts, exactly as `skippedLine` will print them.
-    assert_eq!(count(&report, "skipped", "other type"), 1); // thing.xyz
+    // `thing.xyz` classifies `.ignore`; the FOLDER symlink `linkdir` joins it on the
+    // portable platforms (F1): Foundation's Linux resource values are lstat-based —
+    // `isDirectory` false for a symlink (`crawlprobe.swift`, measured 2026-11-14 in
+    // `digup-builder:fixes3`) — so the link takes the file branch, its bare name
+    // classifies `.ignore`, and the engine counts it in "other type". The audit-base
+    // followed the link (std::fs::metadata), sent it to the folder branch, and
+    // reported NOTHING for it.
+    assert_eq!(count(&report, "skipped", "other type"), 2); // thing.xyz + linkdir
     assert_eq!(count(&report, "skipped", "link or special file"), 2);
     assert_eq!(count(&report, "skipped", "app or bundle"), 1);
     assert_eq!(count(&report, "skipped", "Photos library"), 1);
@@ -148,7 +224,10 @@ fn the_crawl_applies_the_rules_and_reports_what_it_leaves_out() {
     assert_eq!(count(&report, "folders", "developer folder"), 1);
     assert_eq!(count(&report, "folders", ".noindex folder"), 1);
     assert_eq!(count(&report, "folders", "cache folder"), 1);
-    // The hidden folder and the symlinked folder are never listed as skipped folders.
+    // The hidden folder and the symlinked folder are never listed as skipped folders
+    // (the link is not a folder to the visit on the portable platforms — F1; on the
+    // engine's macOS/Windows it is a folder the enumerator lists without descending,
+    // and no skip reason applies there either: the count is 3 on every platform).
     assert_eq!(count(&report, "folders", "cache folder"), 1);
     assert_eq!(report.skipped_folders.len(), 3);
 

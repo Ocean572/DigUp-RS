@@ -213,6 +213,14 @@ pub fn crawl(
     // path → the chosen folder it was found under (a folder inside another root would be
     // walked twice).
     let mut found_root: HashMap<String, String> = HashMap::new();
+    // `rootPaths = Set(roots.map { $0.standardizedFileURL.path })` (Crawler.swift:60) and
+    // `for root in roots.map({ $0.standardizedFileURL })` (:65): the walk runs on the
+    // STANDARDIZED roots — canonical strings for every join (candidate paths), every
+    // `leftOut` key, every progress `root:`, and the dataset roots exclusion.
+    let roots: Vec<PathBuf> = roots
+        .iter()
+        .map(|root| PathBuf::from(paths::standardize(&root.to_string_lossy())))
+        .collect();
     let root_paths: HashSet<String> = roots
         .iter()
         .map(|root| root.to_string_lossy().into_owned())
@@ -278,12 +286,33 @@ pub fn crawl(
                 }
                 continue;
             }
-            // `values?.isDirectory`: URL resource values follow a link, so a folder behind a
-            // symlink is a folder to the visit (the enumerator lists it and never descends).
+            // `values?.isDirectory` (Crawler.swift:96). On Linux swift-corelibs reads URL
+            // resource values with `lstat` — a symlink is NOT a directory there, measured on
+            // this box (2026-11-14, Swift 6.4 probe `/tmp/opencode/crawlprobe.swift` in
+            // `digup-builder:fixes3`, the tree `/tmp/opencode/pbase/root`): `Linkdir` (a
+            // symlink to a real folder) lists as `hasDirPath=false isDir=Some(false)`, and
+            // the enumerator never descends into it (`/Linkdir/f.txt` is never listed). So
+            // the engine sends a folder-behind-a-symlink to the FILE branch: `Rules.classify`
+            // answers `.ignore` for its bare name → `leftOut("other type")`, and a link NAMED
+            // like a file (photo.jpg) classifies by its extension, then `FileSystem.info`
+            // (lstat, `Files+Portable.swift:108-110`) fails `isRegular` →
+            // `leftOut("link or special file")`. macOS's URL resource values DO follow the
+            // link, and Windows's DirectoryWalk reports the target's DIRECTORY attribute from
+            // WIN32_FIND_DATAW (`url.hasDirectoryPath`, Crawler.swift:93-95) — the engine's
+            // answers split by platform, so the port splits the same way (the established
+            // cfg shape: `paths::real_path`, `stb::c_path`). Following the link on Linux (the
+            // audit-base's `std::fs::metadata`) routed folder-symlinks into the folder branch:
+            // no `leftOut` row at all for them, and in a code crawl `repos.enter`/
+            // `is_project_root` marked the linked folder through the link — counts the engine
+            // never reports.
             let is_directory = if entry.file_type().is_symlink() {
-                std::fs::metadata(entry.path())
+                #[cfg(any(target_os = "macos", windows))]
+                let follows = std::fs::metadata(entry.path())
                     .map(|meta| meta.is_dir())
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                #[cfg(not(any(target_os = "macos", windows)))]
+                let follows = false;
+                follows
             } else {
                 entry.file_type().is_dir()
             };

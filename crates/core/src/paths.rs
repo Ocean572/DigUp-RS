@@ -6,8 +6,14 @@
 
 use std::path::{Path, PathBuf};
 
-/// `URL.standardizedFileURL.path`: lexical cleanup of ".", ".." and duplicate slashes.
-/// A ".." at the root is dropped (Foundation: `/..` standardizes to `/`).
+/// `URL.standardizedFileURL.path` (`Crawler.swift:60, 65` — the roots the walk runs on;
+/// `FolderSelection` standardizes the same way): lexical cleanup of ".", ".." and duplicate
+/// slashes, RFC 3986's remove-dot-segments. A ".." at the root is dropped (Foundation: `/..`
+/// standardizes to `/`). Symlinks are NOT resolved (that is `real_path` below). The crawler
+/// standardizes its roots, so every string the walk reports — the progress lines' `root:`,
+/// the `leftOut` keys, every candidate path, and the dataset roots exclusion — is canonical:
+/// `/data/photos/.`, `/data//photos`, `/data/photos/` all answer `/data/photos`
+/// (DIGUP_SERVER_APP_TARGETS carries the operator's colon-listed root strings).
 pub fn standardize(path: &str) -> String {
     let absolute = path.starts_with('/');
     let mut parts: Vec<&str> = Vec::new();
