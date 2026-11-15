@@ -430,3 +430,36 @@ fn the_fallback_page_count_sees_the_tail_window() {
         "the linearized shape — pages at the head, three in the tail — counts the tail's 3"
     );
 }
+
+#[test]
+fn a_probe_that_fails_after_printing_counts_as_zero() {
+    // F12: Swift's `FFmpeg.run` throws on a non-zero terminationStatus AFTER
+    // reading stdout (Media+Portable.swift:49-51), `try?` swallows it, and the
+    // estimator's `duration(of:)` lands on `?? 0` (Media+Portable.swift:82-84).
+    // A probe that prints a duration and exits non-zero (the shape of a file
+    // whose header parses and whose body fails) counts as 0 to the engine.
+    // The audit-base relayed the printed number: it never checked the status.
+    // The scripted tool stands in for ffprobe (find_program's cache is
+    // process-global, so the probe function is called directly).
+    let root = temp_tree("probe-fail");
+    let script = root.join("ffprobe");
+    std::fs::write(&script, "#!/bin/sh\nprintf '123.4\n'\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, PermissionsExt::from_mode(0o755)).unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows: the shell script needs no exec bit; .sh is not a program, so
+        // the pin runs it through cmd-visible shims - the pin is unix-shaped and
+        // the Windows runner skips it (the gate box is Linux).
+    }
+    let fake = script.to_string_lossy().into_owned();
+    assert_eq!(estimator::duration_with(&fake, "any.mp4"), 0.0);
+    // A zero exit that prints the number still measures it (the same script,
+    // flipped) - the fix checks the status, it does not mute the probe:
+    std::fs::write(&script, "#!/bin/sh\nprintf '123.4\n'\nexit 0\n").unwrap();
+    assert_eq!(estimator::duration_with(&fake, "any.mp4"), 123.4);
+    let _ = std::fs::remove_dir_all(&root);
+}

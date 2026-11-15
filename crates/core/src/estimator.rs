@@ -349,7 +349,19 @@ pub fn duration_of(path: &str) -> f64 {
     let Some(tool) = crate::paths::find_program("ffprobe") else {
         return 0.0;
     };
-    let Ok(output) = Command::new(&tool)
+    duration_with(&tool, path)
+}
+
+/// The probe itself - split out so a test can run a scripted tool. Swift's
+/// `run` throws on a non-zero `terminationStatus` (Media+Portable.swift:49-51)
+/// AFTER reading stdout, `try?` swallows the throw, `MediaInfo.duration`
+/// answers nil and the estimator uses `?? 0` (Media+Portable.swift:82-84):
+/// a probe that PRINTS a partial duration and then fails (the shape of a
+/// container whose format header parses and whose body does not) counts as 0
+/// to the engine, not as the number printed before the failure. The audit-base
+/// relayed that number: it read stdout and never asked the exit code.
+pub fn duration_with(tool: &str, path: &str) -> f64 {
+    let Ok(output) = Command::new(tool)
         .args([
             "-v",
             "error",
@@ -366,6 +378,9 @@ pub fn duration_of(path: &str) -> f64 {
     else {
         return 0.0;
     };
+    if !output.status.success() {
+        return 0.0; // Swift's throw: the printed number is discarded with the failure
+    }
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     match text.parse::<f64>() {
         Ok(seconds) if seconds.is_finite() && seconds > 0.0 => seconds,
