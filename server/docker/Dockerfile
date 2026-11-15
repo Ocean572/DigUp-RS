@@ -550,6 +550,12 @@ ENV PATH=/opt/digup:$PATH
 # ../../ui/dist`, api.py:936): resolved beside the running binary, so this layout
 # mounts with no knob at all. `DIGUP_SERVER_UI` remains the operator's override
 # (config.rs); an explicit value with no index.html refuses startup.
+# The COPY IS the mount: this stage's own gate below tests for
+# /opt/digup/ui/dist/index.html (the audit's first CUDA run of THIS stage failed on
+# exactly that line — the COPY was missing while the gate already demanded the file;
+# CI never caught it because CI exercises server-test-rust/server-runtime-rust, not
+# this stage).
+COPY --from=frontend-builder /build/dist /opt/digup/ui/dist
 
 # The same engine user (uid 990) and the same /data layout as every shipping stage: index /
 # models / config are bind mounts, so recreation never destroys them, and the writer lock

@@ -243,3 +243,4 @@ Measured and verified, the reviewers' claims that do NOT move the port (proof of
 The repo-shape decision (stay additive here vs a Rust-only publish layout) is deferred to the
 end, per the user. The inventory with each path's purpose and consumer is written when the
 report is filed.
+| W5-10 | major | `server-rust-runtime` (the pure-Rust stage 6, the compose `.rust.yml` target) never carried the Lit bundle: the stage's own gate tests `test -f /opt/digup/ui/dist/index.html` while NO `COPY --from=frontend-builder` existed — the stage could never build (first CUDA run of this stage died exactly on that RUN; CI never exercised it, only `server-test-rust`/`server-runtime-rust`) | fixed — the COPY lands the bundle at the install-relative path the stage's comment already documented (`/opt/digup/ui/dist`, beside `digup-server` — the Rust server's default UI mount resolves beside the binary, api.py:936's shape); the gate line keeps its teeth |
