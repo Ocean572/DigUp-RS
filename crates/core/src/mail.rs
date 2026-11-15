@@ -304,13 +304,27 @@ fn charset_name(charset: Option<&str>) -> String {
     let Some(charset) = charset else {
         return String::new();
     };
-    charset
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_lowercase()
-        .chars()
-        .filter(|ch| ch.is_alphabetic() || ch.is_numeric())
+    // Swift's `split(separator: ":")` OMITS empty pieces (its default): the
+    // canonical registered form `charset=iso-8859-1:1987` (and a leading-colon
+    // `:iso-8859-1`) names "iso-8859-1" -> Latin-1. Rust's `split(':')` KEEPS
+    // the empty head: the audit-base named the colon-form "" and read the body
+    // as UTF-8 - the issue-#146 replacement-characters shape on the colon-form
+    // name the standards register writes. A string of only separators yields
+    // no pieces on both sides ("" -> UTF-8 fallback), so the first NON-empty
+    // piece is the relay.
+    let Some(first) = charset.split(':').find(|piece| !piece.is_empty()) else {
+        return String::new();
+    };
+    // The filter is per CHARACTER (grapheme cluster): Foundation drops the
+    // cluster WHOLE when it is neither letter nor number - a cluster's
+    // separators leave no residue. Real names are ASCII, where the cluster
+    // walk and a scalar walk answer the same; the shape is pinned.
+    unicode_segmentation::UnicodeSegmentation::graphemes(first.to_lowercase().as_str(), true)
+        .filter(|cluster| {
+            cluster
+                .chars()
+                .all(|ch| ch.is_alphabetic() || ch.is_numeric())
+        })
         .collect()
 }
 
@@ -491,6 +505,27 @@ fn advance_chars(text: &str, count: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::header_field;
+
+    #[test]
+    fn the_charset_name_is_the_first_non_empty_piece_letters_digits_only() {
+        // F11, against MailMessage.swift:224-227. Swift's `split(separator: ":")`
+        // OMITS empty pieces: the canonical registered form `iso-8859-1:1987`
+        // and the leading-colon `:iso-8859-1` name "iso-8859-1" -> Latin-1.
+        // Rust's split(':') KEEPS the empty head: the audit-base named the
+        // colon-form "" and read the bytes as UTF-8 - issue #146's replacement
+        // characters, back on the form the standards register writes.
+        use super::{charset_name, decoded, decoded_header};
+        assert_eq!(charset_name(Some("iso-8859-1:1987")), "iso88591");
+        assert_eq!(charset_name(Some(":iso-8859-1")), "iso88591"); // fails before: ""
+        assert_eq!(charset_name(Some("ISO-8859-1:1987")), "iso88591");
+        assert_eq!(charset_name(Some("iso_8859-1")), "iso88591");
+        assert_eq!(charset_name(Some("windows-1252")), "windows1252");
+        assert_eq!(charset_name(Some("::")), ""); // no pieces on both sides
+        assert_eq!(charset_name(None), "");
+        // The whole decode chain rides it: 8-bit bytes and an encoded word.
+        assert_eq!(decoded(b"caf\xe9", Some("iso-8859-1:1987")), "caf\u{e9}");
+        assert_eq!(decoded_header("=?iso-8859-1:1987?Q?caf=E9?="), "caf\u{e9}");
+    }
 
     #[test]
     fn header_trims_ride_the_measured_whitespace_sets() {

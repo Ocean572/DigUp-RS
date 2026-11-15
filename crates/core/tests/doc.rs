@@ -296,6 +296,14 @@ const MAIL_CASES: &[(&str, &[u8], &str)] = &[
     ("multi.emlx", b"Subject: Multipart =?utf-8?Q?mail?=\r\nFrom: a@example.com\r\nContent-Type: multipart/mixed; boundary=\"b=1;2\"\r\n\r\n--b=1;2\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nFirst text part.\r\n--b=1;2\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\nPHA+IEhUTUwgcGFydCAmYW1wOyBtb3JlPC9wPg==\r\n--b=1;2\r\nContent-Type: application/pdf; name=\"chart.pdf\"\r\nContent-Disposition: attachment; filename=chart.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERw==\r\n--b=1;2--\r\n", "From: a@example.com\nSubject: Multipart mail\n\nFirst text part.\r\n\n\nHTML part & more"),
     ("plain.emlx", b"X-Mailer: Apple Mail (2.1234)\r\nFrom: =?utf-8?Q=Alice=20R=C3=A9sum=C3=A9?= <alice@example.com>\r\nTo: Bob <bob@example.com>\r\nSubject: Re: =?utf-8?B?Q29waWVkIFBhdGg=?=\r\n =?utf-8?Q?_tail?=\r\nDate: Tue, 4 Nov 2025 09:00:00 +0100\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 7bit\r\n\r\nBody line one with caf\xc3\xa9 in utf-8.\r\nBody line two.\r\n", "From: =utf-8?Q=Alice=20R=C3=A9sum=C3=A9?= <alice@example.com>\nTo: Bob <bob@example.com>\nSubject: Re: Copied Path  tail\nDate: Tue, 4 Nov 2025 09:00:00 +0100\n\nBody line one with café in utf-8.\r\nBody line two.\r\n"),
     ("quoted.emlx", b"Subject: =?utf-8?Q?Quoted=20printable?=\r\nContent-Type: text/plain; charset=iso-8859-1\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nThis is a long line broken=3Dwith an equals and =\r\nthen =E9 as latin-1, =C3=A9 as the utf-8 pair, =3Ddone, and a stray = here.\r\n", "Subject: Quoted printable\n\nThis is a long line broken=with an equals and then é as latin-1, Ã© as the utf-8 pair, =done, and a stray = here.\r\n"),
+    // F11: the charset name is the FIRST NON-EMPTY piece of the parameter (Swift's
+    // split omits empty pieces). The leading-colon form `charset=:iso-8859-1` names
+    // Latin-1 to the engine; the audit-base named it "" and read the body as UTF-8
+    // (the base64-decoded byte 0xE9 becomes U+FFFD there). Fails-before: this fixture
+    // answered "caf\u{FFFD}" on the audit-base. The canonical `iso-8859-1:1987`
+    // (year suffix, first piece non-empty) is audit-base-EQUIVALENT: the unit test
+    // pins the equivalence, the pipeline pins the divergence.
+    ("colon.emlx", b"Subject: =?iso-8859-1:1987?Q?caf=E9?=\r\nContent-Type: text/plain; charset=:iso-8859-1\r\nContent-Transfer-Encoding: base64\r\n\r\nY2Fm6Q==\r\n", "Subject: caf\u{e9}\n\ncaf\u{e9}"),
     ("stranger.emlx", b"\x00\x01\x02binary shape no header at all\x00\x02\r\nsecond\r\n", "\u{00}\u{01}\u{02}binary shape no header at all\u{00}\u{02}\r\nsecond\r\n")
 ];
 
