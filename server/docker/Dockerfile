@@ -540,19 +540,22 @@ COPY --from=rust-engine-payload /out/ /opt/digup/
 ENV PATH=/opt/digup:$PATH
 # The Lit bundle, baked in (the frontend-builder stage is the only place it is built — a
 # host `dist` is git-ignored and dockerignored, so a stale host build can never ship
-# silently). `DIGUP_SERVER_UI` is the Rust server's own mount knob (config.rs:180).
-COPY --from=frontend-builder /build/dist /srv/digup/ui
+# silently). It rides INSIDE the payload folder, beside `digup-server` — the Rust
+# server's default UI mount is install-relative like Python's (`Path(__file__)-
+# ../../ui/dist`, api.py:936): resolved beside the running binary, so this layout
+# mounts with no knob at all. `DIGUP_SERVER_UI` remains the operator's override
+# (config.rs); an explicit value with no index.html refuses startup.
 
 # The same engine user (uid 990) and the same /data layout as every shipping stage: index /
 # models / config are bind mounts, so recreation never destroys them, and the writer lock
 # lives beside the index (`<index>/.digup-server.writer.lock`).
 RUN useradd --system --create-home --uid 990 digup \
     && mkdir -p /data/index /data/models /data/config \
-    && chown -R digup:digup /data /srv/digup \
+    && chown -R digup:digup /data \
     && digup --help > /dev/null \
     && digup --help | sed -n '2p' \
     && test -f /opt/digup/digup-server \
-    && test -f /srv/digup/ui/index.html
+    && test -f /opt/digup/ui/dist/index.html
 
 # Host + port come from the config env (DIGUP_SERVER_HOST/PORT, config.rs:221): the compose
 # base sets them for the FastAPI image, so the same env drives this one. 0.0.0.0 is the
@@ -561,7 +564,6 @@ ENV DIGUP_SERVER_INDEX=/data/index \
     DIGUP_SERVER_ROOTS=/media/photos \
     DIGUP_SERVER_MODELS=/data/models \
     DIGUP_SERVER_CONFIG=/data/config \
-    DIGUP_SERVER_UI=/srv/digup/ui \
     DIGUP_SERVER_HOST=0.0.0.0 \
     DIGUP_SERVER_PORT=8787
 

@@ -148,10 +148,54 @@ pub struct App {
     estimate_busy: AtomicBool,
     allowed_hosts: Option<Vec<String>>,
     allowed_origins: Option<Vec<String>>,
-    /// The UI mount (Stage 6): `DIGUP_SERVER_UI`, else this tree's
-    /// `server/ui/dist` when it carries an `index.html`. An explicit value
-    /// with no index.html is a loud startup error, not a silent 404 page.
+    /// The UI mount (Stage 6): `DIGUP_SERVER_UI`, else the payload-adjacent
+    /// bundle (`<exe dir>/ui/dist`, install-relative like Python's
+    /// `Path(__file__).parent.parent/ui/dist`) when it carries an
+    /// `index.html`. A DEFAULT with no bundle is the silent skip Python
+    /// answers (no mount, API only); an explicit value with no index.html
+    /// is a loud startup error, not a silent 404 page.
     ui: Option<PathBuf>,
+}
+
+/// The default UI bundle, install-relative the way Python spells it —
+/// `Path(__file__).resolve().parent.parent / "ui" / "dist"` (api.py:936)
+/// resolves the bundle beside the installed package. The running binary's
+/// own folder is the Rust payload's install location: the Dockerfile's
+/// runtime stage copies the built dist into the payload FOLDER, beside
+/// `digup-server` (`/opt/digup/ui/dist`), so the default finds the bundle
+/// the payload ships. The audit-base baked `env!("CARGO_MANIFEST_DIR")`
+/// into the binary — the BUILD tree's path: copied to any other machine
+/// the default named a tree that is not there (the silent-skip shape,
+/// a bundle the payload ships that never mounts), and on the build
+/// machine it mounted the dev tree's dist — a host artifact the payload
+/// does not ship and docker ignores (the Dockerfile ships only the
+/// frontend-builder's dist).
+fn default_ui_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("ui").join("dist")))
+}
+
+/// `create_app`'s UI mount (api.py:935-941) with the reference's three answers:
+/// an EXPLICIT `DIGUP_SERVER_UI` with an `index.html` mounts it; an explicit
+/// value with none refuses startup with the reference's FileNotFoundError text
+/// (relayed byte for byte); NO knob answers the default, and a default with no
+/// bundle is the SILENT skip (no mount, API only — Python's `if/elif` with no
+/// else: the mount line is simply skipped).
+fn ui_mount(cfg_ui: Option<&PathBuf>) -> Result<Option<PathBuf>, String> {
+    match cfg_ui {
+        Some(dir) => {
+            if dir.join("index.html").is_file() {
+                Ok(Some(dir.clone()))
+            } else {
+                Err(format!(
+                    "DIGUP_SERVER_UI={dir} has no index.html — serve the built UI: cd server/ui && npm run build",
+                    dir = dir.display()
+                ))
+            }
+        }
+        None => Ok(default_ui_dir().filter(|dir| dir.join("index.html").is_file())),
+    }
 }
 
 type Shared = Arc<App>;
@@ -174,26 +218,7 @@ impl App {
         let auth = security::mint_tokens(&cfg.config, &app_target_names, cfg.mint_keys)?;
         let auth = Arc::new(RwLock::new(auth));
         // The UI mount, checked at config time like Python's create_app.
-        let ui = match &cfg.ui {
-            Some(dir) => {
-                if dir.join("index.html").is_file() {
-                    Some(dir.clone())
-                } else {
-                    return Err(format!(
-                        "DIGUP_SERVER_UI={dir} has no index.html — serve the built UI: cd server/ui && npm run build",
-                        dir = dir.display()
-                    ));
-                }
-            }
-            None => {
-                let default = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server/ui/dist");
-                if default.join("index.html").is_file() {
-                    Some(default)
-                } else {
-                    None
-                }
-            }
-        };
+        let ui = ui_mount(cfg.ui.as_ref())?;
         let main = Arc::new(SearchService::new(engine.clone()));
         main.start().map_err(|error| format!("{error}"))?;
         if cfg.prewarm {
@@ -2568,6 +2593,61 @@ mod tests {
             hit_fields(&floaty, false),
             Err(ApiError::Internal)
         ));
+    }
+
+    #[test]
+    fn the_ui_default_rides_the_running_binary_not_the_build_tree() {
+        use super::{default_ui_dir, ui_mount};
+
+        // F-12. Python's default is install-relative (api.py:936,
+        // `Path(__file__).parent.parent / "ui" / "dist"`): the bundle
+        // beside the installed code. The port spells it beside the running
+        // binary; the payload stage copies the dist there (`ui/dist` under
+        // the folder holding `digup-server`).
+        let exe = std::env::current_exe().expect("the running binary");
+        let want = exe.parent().expect("exe folder").join("ui").join("dist");
+        assert_eq!(default_ui_dir().as_deref(), Some(want.as_path()));
+        // The three answers (api.py:937-941): explicit + index.html mounts;
+        // explicit without it refuses with the reference's text; the
+        // default-with-no-bundle is the silent skip (None, no refusal).
+        let dir = temp_ui_dir("ui-mount");
+        assert_eq!(
+            ui_mount(Some(&dir)).unwrap().as_deref(),
+            Some(dir.as_path())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(ui_mount(Some(&dir)).is_err());
+        let refusal = ui_mount(Some(&dir)).unwrap_err();
+        assert_eq!(
+            refusal,
+            format!(
+                "DIGUP_SERVER_UI={} has no index.html — serve the built UI: cd server/ui && npm run build",
+                dir.display()
+            )
+        );
+        // No knob: the default (target/debug/deps/ui/dist — never built in
+        // a test run) is absent, and the answer is the silent None.
+        assert_eq!(ui_mount(None).unwrap(), None);
+        // The audit-base, recorded inline (the fails-before): the default was
+        // `env!("CARGO_MANIFEST_DIR")/../../server/ui/dist` — the BUILD tree's
+        // absolute path compiled into the binary. A payload copied to any
+        // other machine carried a default naming a tree that is not there
+        // (silent-skip: the payload's own shipped bundle never mounted), and
+        // on the build machine it found the dev tree's dist — the host's
+        // git-ignored, docker-ignored build artifact, never the payload's.
+        let baked = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server/ui/dist");
+        assert!(
+            baked.to_string_lossy().contains("crates/server"),
+            "the audit-base default names the build tree: {baked:?}"
+        );
+    }
+
+    fn temp_ui_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("digup-f12-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+        dir
     }
 
     #[test]

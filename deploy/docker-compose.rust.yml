@@ -15,7 +15,7 @@
 #   * `SWIFT_TESTS` is not passed: this target builds no Swift, so the engine-test gate
 #     of the Swift builder stage is not in the path. The Rust gates are `cargo test` and
 #     the contract suite (server-test-rust) — CI runs them (.github/workflows/rust.yml).
-#   * The UI mount: the image bakes the Lit bundle in and points DIGUP_SERVER_UI at it
+#   * The UI mount: the image bakes the Lit bundle into the payload folder beside
 #     (the same frontend the FastAPI server serves).
 #   * The API host: the image binds 0.0.0.0 (the container's own face); a bare-metal run
 #     of digup-server keeps the 127.0.0.1 default. Publish stays localhost-only, as in
