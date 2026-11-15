@@ -14,14 +14,25 @@ Companion documents:
   the data-dir exclusion gate, the CORS allowlist and its guard exception, the embed widget,
   the multi-instance honesty. Its §11.x numbers are quoted in code comments.
 - `api.md`, `deployment.md`, `operations.md` — written as those parts are implemented.
+- [`../RUST_PORT_AUDIT.md`](../RUST_PORT_AUDIT.md) — the Rust port's audit ledger: every seam,
+  its parity measurement, and the gates that closed the port (2026-11-15).
 
 ---
 
 ## 1. The engine is DigUp's. It is not rewritten.
 
-The original Swift engine remains responsible for reading media, extracting images / frames /
-audio / text, generating embeddings, storing them, searching, and ranking. The server is a
-wrapper around it.
+> **2026-11-15 status (Rust core).** The engine is now Rust — `crates/` → the `digup` +
+> `digup-server` binaries on `main`, ported from the Swift original, which is kept on branch
+> `swift-reference` as the parity reference. The port reproduces the engine's published
+> interfaces byte-for-byte — the JSON-lines verbs, the SQLite schema at `user_version = 6`, the
+> 768-dim f16 vector layout — gated by the workspace suite, the twin gate and the contract
+> suite; the ledger is [`../../docs/RUST_PORT_AUDIT.md`](../../docs/RUST_PORT_AUDIT.md). It was
+> a user-directed override of this section's original wording, and the rule it states survives
+> unchanged: the layers **above** the engine must not re-implement it.
+
+The engine — in whatever language it is built — is responsible for reading media, extracting
+images / frames / audio / text, generating embeddings, storing them, searching, and ranking.
+The server is a thin client of its published interfaces.
 
 Do **not**:
 
@@ -36,25 +47,38 @@ Do **not**:
 `worker/digup_worker.py` in this repo is the mlx-vlm **reference** runtime used by the evals on
 Apple Silicon. It is **not** a server engine and must not be used by the server.
 
-## 2. DigUp is a native Swift application
+## 2. DigUp is a native Rust application
+
+> **2026-11-15 status (Rust core).** `main` is the Rust workspace (`crates/` → `digup` +
+> `digup-server`); `scripts/rust/package-*.sh` build the shipping payload, and the Dockerfile's
+> `rust-engine-payload` / `server-rust-runtime` stages ship it. The Swift-era text of this
+> section (Swift 6.4, `--static-swift-stdlib`, `Package.swift`) describes the pre-port
+> packaging and lives in git history; the Swift engine rides branch `swift-reference`.
 
 This is the single most important fact for packaging, and the one most often mistaken:
 
-- The search engine is Swift (`Sources/DigUpKit`, `Sources/LlamaRuntime`), built into the
-  executable product `digup` (`Package.swift`). llama.cpp is a C/C++ library that Swift calls.
+- The search engine is Rust (the `crates/` workspace), built into the executables `digup` and
+  `digup-server` (the workspace `Cargo.toml`). llama.cpp is a C/C++ library that Rust calls —
+  bindgen against the pinned headers, behind the seams in `crates/native`.
 - The Linux and Windows applications are **not** the engine. They are a Tauri shell (Rust +
-  web UI) that starts the Swift `digup` binary as helper processes and talks to it over
-  JSON-lines. `shell/src-tauri/src/helper.rs`, first sentence: *"DigUp's helper processes,
-  which do all the work."*
-- Therefore: a headless DigUp server **is** a Swift binary at its core. The Python layer is
-  the HTTP/JSON wrapper; the web UI is a browser client. Both are thin.
-- Swift is required **at build time only**. A runtime image needs no Swift compiler and no
-  Swift toolchain: `scripts/package-linux.sh` links the CLI with
-  `--static-swift-stdlib` (Swift 6.4's static stdlib needs its archives re-listed at the end of
-  the link line — copy that list from the script), and the shipped payload is the binary plus
-  native `.so` files with `rpath = $ORIGIN`.
+  web UI) that starts the `digup` binary as helper processes and talks to it over JSON-lines.
+  `shell/src-tauri/src/helper.rs`, first sentence: *"DigUp's helper processes, which do all the
+  work."*
+- Therefore: a headless DigUp server **is** a Rust binary at its core. The FastAPI wrapper and
+  the pure-Rust `digup-server` are the two supported shapes of the HTTP/JSON layer; the web UI
+  is a browser client. Both are thin.
+- A runtime image needs **no toolchain**: the shipped payload is the binary plus native `.so`
+  files with `rpath = $ORIGIN` — the same file set the Docker payload stage ships
+  (`server/docker/Dockerfile`, `rust-engine-payload`).
 
 ## 3. Linux Docker build (mandatory shape)
+
+> **2026-11-15 status (Rust core).** The mandatory **shape** below binds unchanged — it is
+> exactly what the Rust Dockerfile follows (multi-stage, pinned versions, tests in builders
+> only, toolchain-free runtime, non-root, tini, HEALTHCHECK, clean SIGTERM). Its Swift-specific
+> lines (Swift toolchain, `swift build`, `swift test`) describe the pre-port builder; the Rust
+> builders run `scripts/fetch-vendor.sh` + `scripts/build-llama.sh` + `cargo build/test` in the
+> same positions.
 
 Use a **multi-stage** build for the server image:
 

@@ -14,7 +14,10 @@ spend an evening on it. A pull request that arrives without one may be closed wi
 Once an issue says go:
 
 - Keep it to one fix or one feature, with the reason in the description.
-- Make sure `swift test` passes, and `cargo test` in `shell/src-tauri` if you change the Windows and Linux app.
+- Make sure `cargo test --workspace` passes (the engine suites: schema v6 byte parity, vector
+  parity, the JSON-lines protocol, the CLI), and `cargo test` in `shell/src-tauri` if you change
+  the Windows and Linux app. Changes to the server's surface run through the contract suite
+  (`server/tests/`, zero skips — see `server/README.md`).
 - If it changes what search returns, run the evals in `evals/` before and after (see "Build from source" in the
   README) and include both results.
 - For speed or memory changes, measure before and after on the same computer.
@@ -24,11 +27,18 @@ fit.
 
 ## Where things are
 
-The search engine in `Sources/DigUpKit` is the same Swift code on every system; what differs by system lives in its
-`Platform/Apple` and `Platform/Portable` folders. The Mac app is `Sources/DigUpApp` (SwiftUI). The Windows and Linux
-app is `shell/` (Tauri: Rust, with plain HTML and JavaScript for its windows), which runs the engine as a helper
-program. `scripts/` builds llama.cpp, ffmpeg and the packages, and `.github/workflows/packages.yml` shows every step of
-the Windows and Linux builds. "Build from source" in the README gets you started.
+The search engine is Rust: the `crates/` workspace — `core` (extraction, scoring, vectors),
+`native` (the llama.cpp / ffmpeg / PDFium / stb seams), `runtime` (the embedders, the index loop,
+the search engine), `services` (the JSON-lines services), `cli` (the `digup` binary) and `server`
+(the `digup-server` binary). The Swift original — `Sources/DigUpKit` + `Sources/LlamaRuntime`, the
+Swift Mac app `Sources/DigUpApp`, and the Swift-era scripts — rides branch `swift-reference` as
+the parity reference the twin gate (`scripts/rust/twin-gate.sh`) measures against. The Windows and
+Linux app is `shell/` (Tauri: Rust, with plain HTML and JavaScript for its windows), which runs
+the engine as a helper program. The self-hosted server is `server/` (the FastAPI wrapper, the Lit
+web UI, the contract suite) with the compose deployment in `deploy/`. `scripts/` builds llama.cpp,
+ffmpeg and the packages, `scripts/rust/` is the port's own tooling (audit battery, twin gate,
+package scripts), and `.github/workflows/rust-release.yml` shows every step of the release
+builds. "Build from source" in the README gets you started.
 
 ## Updating portable engine dependencies
 

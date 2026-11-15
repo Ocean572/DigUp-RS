@@ -1,6 +1,6 @@
 [project]
 name = "digup-server"
-version = "0.1.0"
+version = "0.8.0"
 description = "DigUp as a self-hosted search server: a thin HTTP wrapper over the Swift engine, speaking only DigUp's own JSON-lines protocol"
 requires-python = ">=3.12,<3.13"
 # The adapter (Stage 3) is dependency-free by design: stdlib subprocess/json/fcntl.

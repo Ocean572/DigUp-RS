@@ -3,31 +3,33 @@
 <h1 align="center">DigUp</h1>
 
 <p align="center"><b>Describe it. Dig it up.</b><br>
-Search the files on your computer by what's in them, with Google DeepMind's
-<a href="https://huggingface.co/google/embeddinggemma-2">EmbeddingGemma 2</a>.</p>
+Search the files on your computer by what's in them — photos, PDFs, documents, recordings,
+video, code — with Google DeepMind's
+<a href="https://huggingface.co/google/embeddinggemma-2">EmbeddingGemma 2</a>.<br>
+The engine, the server and the desktop app are <b>Rust</b>. Everything runs on your machine.</p>
 
-<p align="center"><a href="https://github.com/ARahim3/DigUp/releases/latest"><b>Download for Mac</b></a> ·
-<a href="https://github.com/ARahim3/DigUp/releases/tag/v0.7.0-beta.3"><b>Windows (beta)</b></a> ·
-<a href="https://github.com/ARahim3/DigUp/releases/tag/v0.7.0-beta.3"><b>Linux (beta)</b></a><br>
-<sub>Free and open source. Everything runs on your computer.</sub></p>
+<p align="center"><a href="https://github.com/Ocean572/DigUp-RS/releases/latest"><b>Download</b></a> ·
+<a href="#the-docker-compose-app"><b>Docker Compose app</b></a> ·
+<a href="#command-line"><b>Command line</b></a><br>
+<sub>Free and open source, MIT. No account, no cloud.</sub></p>
 
 <p align="center">
-<a href="https://github.com/ARahim3/DigUp/stargazers"><img src="https://img.shields.io/github/stars/ARahim3/DigUp?style=flat-square" alt="GitHub stars"></a>
-<a href="https://github.com/ARahim3/DigUp/releases"><img src="https://img.shields.io/github/downloads/ARahim3/DigUp/total?style=flat-square" alt="Downloads"></a>
-<a href="https://github.com/ARahim3/DigUp/releases/latest"><img src="https://img.shields.io/github/v/release/ARahim3/DigUp?style=flat-square" alt="Latest release"></a>
-<a href="LICENSE"><img src="https://img.shields.io/github/license/ARahim3/DigUp?style=flat-square" alt="MIT license"></a><br>
-<a href="https://trendshift.io/repositories/295333?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-295333" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/295333/daily?language=Swift" alt="ARahim3/DigUp on Trendshift: #1 repository of the day for Swift" width="250" height="55"></a>
+<a href="https://github.com/Ocean572/DigUp-RS/stargazers"><img src="https://img.shields.io/github/stars/Ocean572/DigUp-RS?style=flat-square" alt="GitHub stars"></a>
+<a href="https://github.com/Ocean572/DigUp-RS/releases"><img src="https://img.shields.io/github/downloads/Ocean572/DigUp-RS/total?style=flat-square" alt="Downloads"></a>
+<a href="https://github.com/Ocean572/DigUp-RS/releases/latest"><img src="https://img.shields.io/github/v/release/Ocean572/DigUp-RS?style=flat-square" alt="Latest release"></a>
+<a href="LICENSE"><img src="https://img.shields.io/github/license/Ocean572/DigUp-RS?style=flat-square" alt="MIT license"></a>
 </p>
 
-<p align="center"><img src="docs/demo.gif" width="800" alt="DigUp's search panel on a Mac, on Windows and on Linux: a zebra in a video, a podcast minute, a clause in a lease, a dog on the beach in English, Bengali and Arabic, and code that opens in Zed."></p>
+<p align="center"><img src="docs/demo.gif" width="800" alt="DigUp's search panel: a zebra in a video, a podcast minute, a clause in a lease, a dog on the beach in English, Bengali and Arabic, and code that opens in Zed."></p>
 
-EmbeddingGemma 2 is the multimodal embedding model Google DeepMind released in October 2026. It puts text, images,
-audio and video into one shared space: a photo of a dog on a beach lands next to the words "a dog on the beach", and a
-recording of someone talking about sleep lands next to "where they talk about sleep". It understands more than 100
-languages, it's open (Apache 2.0), and at 740M parameters it's small enough to run on a laptop.
+EmbeddingGemma 2 is the multimodal embedding model Google DeepMind released in October 2026.
+It puts text, images, audio and video into one shared space: a photo of a dog on a beach lands
+next to the words "a dog on the beach", and a recording of someone talking about sleep lands next
+to "where they talk about sleep". It understands more than 100 languages, it's open (Apache 2.0),
+and at 740M parameters it's small enough to run on a laptop.
 
-DigUp brings that to the files on your computer, on a Mac, on Windows or on Linux. Pick the folders to search, and it
-reads the pictures, PDFs, documents, recordings and videos in them. Then describe what you're looking for, in your own
+DigUp brings that to your files. Pick the folders to search, and it reads the pictures, PDFs,
+documents, recordings and videos in them. Then describe what you're looking for, in your own
 words, and it finds the match, whatever kind of file it is.
 
 ## What you can find
@@ -36,222 +38,249 @@ words, and it finds the match, whatever kind of file it is.
 - "where they talk about sleep" jumps to that minute of a podcast
 - "the clause about pets in the lease" shows the PDF page
 - "a dog on the beach" finds the photo, and "payment declined error" the screenshot
-- a search in English can find a note written in Bengali, Arabic or any of the model's 100+ languages, and the other
-  way around
-- "code: retry a failed call with backoff" finds the function in your projects, if you turn on code search
+- a search in English can find a note written in Bengali, Arabic or any of the model's 100+
+  languages, and the other way around
+- "code: retry a failed call with backoff" finds the function in your projects, if you turn on
+  code search
 
-Exact words count too. Invoice numbers, error codes and names are matched as written, in file names and document text,
-so a search gets both the meaning and the exact string. On a Mac that includes the text inside screenshots.
-Start a search with `name:` and only file and folder names are searched — the exact words, with the model staying out.
+Exact words count too. Invoice numbers, error codes and names are matched as written, in file
+names and document text, so a search gets both the meaning and the exact string. Start a search
+with `name:` and only file and folder names are searched — the exact words, with the model
+staying out.
 
 ## Private
 
-Nothing you index leaves your computer. DigUp goes online only to download the model once and to check for updates
-once a day. The update check sends nothing about your files, and you can turn it off. No account, no telemetry.
+Nothing you index leaves your computer. DigUp goes online only to download the model, once.
+No account, no telemetry, no cloud. The index is a plain SQLite file on your disk.
 
-## Install
+## Three ways to run it
 
-> [!NOTE]
-> DigUp is published only here, on this repository's Releases page, and at [digup.arahim.dev](https://digup.arahim.dev).
-> Other sites offering DigUp aren't the project's; don't download from them.
+| Way | What you get |
+|---|---|
+| [Docker Compose app](#the-docker-compose-app) | a self-hosted search server with a web UI, on your machine or your LAN |
+| [Command line](#command-line) | `digup` — indexes and searches from a terminal; `digup-server` — the same HTTP API |
+| Desktop app (beta) | the tray/panel app for Windows and Linux (Tauri), which runs the same `digup` binary as its helper |
 
-**Mac.** Download the DMG from [Releases](https://github.com/ARahim3/DigUp/releases/latest) and drag DigUp to
-Applications, or use Homebrew: `brew install --cask arahim3/tap/digup`. It needs an Apple Silicon Mac with macOS 14 or
-later.
+## The Docker Compose app
 
-**Windows.** Download `DigUp_x.y.z_x64-setup.exe` from the
-[beta release](https://github.com/ARahim3/DigUp/releases/tag/v0.7.0-beta.3) and run it. It installs for you only, with
-no admin rights. Windows may say it doesn't recognize the app, because the installer isn't signed yet: choose More
-info, then Run anyway. It needs 64-bit Windows 10 or 11.
+One container: the engine, the HTTP API (`/api/v1`), and a web app in the browser. Your index,
+the model and the settings live as plain folders on your host disk; the files you search are
+mounted **read-only** — DigUp reads them and never touches them. Search answers are the engine's
+own numbers: it never invents scores.
 
-**Linux.** On Ubuntu, Debian, Mint and the like, download the .deb and install it:
+**Run it** (x86_64; the published image):
 
 ```sh
-sudo apt install ./DigUp_x.y.z_amd64.deb
+git clone https://github.com/Ocean572/DigUp-RS && cd DigUp-RS/deploy
+mkdir -p data/index data/models data/config data/media
+sudo chown -R 990:990 data            # the container runs as uid 990 — this is required
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
-The package is called `dig-up`, because Debian already has an unrelated `digup`. Anywhere else, download the
-AppImage, make it executable and run it. Both are for 64-bit Intel and AMD processors and work on Ubuntu 22.04,
-Debian 12, Mint 21 and newer.
+**Get the model** (once, 865 MB) — the engine's own downloader, into the same folder the
+container mounts:
 
-Then, on any of them:
+```sh
+scripts/fetch-vendor.sh && scripts/build-llama.sh && cargo build --release
+DIGUP_MODELS=$PWD/data/models ./target/release/digup download-model
+```
 
-1. Open DigUp. While the model downloads (865 MB, once), pick the folders to search: whole folders, or only some of
-   their subfolders. DigUp shows how long the first pass will take for each, measured on your computer.
-2. Press the shortcut in any app and describe what you're looking for: **⇧⌘Space** on a Mac, **Ctrl+Shift+Space** on
-   Windows and Linux.
+**Open it:** **http://127.0.0.1:8787** — the web app shows index status, an *Index now* button
+and search. Put the files you want to search under `data/media/photos` (the default root, mounted
+read-only at `/media/photos`), press **Index now**, and search when the job is done. The full HTTP
+contract is [`server/docs/API.md`](server/docs/API.md); the UI is a thin client — the engine
+decides everything.
 
-DigUp keeps itself up to date: the Mac app, the Windows installer and the AppImage install updates with one click.
-With the .deb, DigUp tells you when there's a new version and opens its release page.
+**Knobs** (all plain environment variables, all read by
+[`deploy/docker-compose.yml`](deploy/docker-compose.yml)):
 
-## Using it
-
-| Mac | Windows and Linux | What it does |
+| variable | default | what it is |
 |---|---|---|
-| ⇧⌘Space | Ctrl+Shift+Space | Opens the search panel from any app (you can change it) |
-| ↓ ↑ | ↓ ↑ | Moves through the results |
-| ↩ | Enter | Opens the result: PDFs at the page, recordings and videos at the moment, code in your editor at the line |
-| Space | Space | A big preview, at the page or moment (once you've moved to a result) |
-| ⌘↩ | Ctrl+Enter | Shows it in Finder, Explorer or your file manager |
-| ⌘C | Ctrl+C (in the window) | Copies the file, to paste anywhere |
-| ⌘O | Ctrl+O | The same search in a bigger window, with a picture grid and filters |
+| `DIGUP_MEDIA_DIR` | `./data/media/photos` | the tree mounted read-only at `/media/photos` |
+| `DIGUP_INDEX_DIR` | `./data/index` | the index folder (`index.sqlite`, plain SQLite) |
+| `DIGUP_MODELS_DIR` | `./data/models` | the model folder |
+| `DIGUP_CONFIG_DIR` | `./data/config` | settings and the job log |
+| `DIGUP_PUBLISH_PORT` | `8787` | the host port |
+| `DIGUP_LAN_BIND` | — (loopback only) | publish on your LAN address; the server has no auth, so this is opt-in |
 
-DigUp lives in the menu bar on a Mac and in the tray on Windows and Linux, where you can see how indexing is going,
-pause it, or open Settings. Opening it from the Start menu or your app list shows the search window.
+**Compose shapes** — small override files that merge, each opt-in:
 
-A few things differ by system:
+| file | what it does |
+|---|---|
+| `docker-compose.yml` | the base: builds the server image from source |
+| `docker-compose.ghcr.yml` | pull the published image (`ghcr.io/ocean572/digup-server`) — no build, no toolchain |
+| `docker-compose.rust.yml` | the pure-Rust server: engine + API + UI in one binary, no Python |
+| `docker-compose.nvidia.yml` | the CUDA build + runtime for NVIDIA cards (`--profile nvidia`) |
+| `docker-compose.lan.yml` | publish on your LAN address: `DIGUP_LAN_BIND=192.168.1.20 …` |
 
-- On a Mac, a video opens at its moment in QuickTime Player (macOS asks once whether DigUp may control it), IINA
-  or VLC, and a PDF opens in Preview with your words in its search. On Windows and Linux, PDFs open at the page in your PDF
-  viewer if it's one that can be told a page (Edge, Chrome, Firefox, Acrobat, SumatraPDF, Evince, Okular), and
-  recordings and videos at the moment in VLC, mpv or MPC-HC. Other apps open the file from the start; the big
-  preview plays it from the moment either way.
-- On GNOME and KDE under Wayland, which don't let apps set their own shortcuts, DigUp adds Ctrl+Shift+Space to the
-  desktop's keyboard settings during setup, and you change it there. On other Wayland desktops, Settings shows the
-  command to give a shortcut of your own.
-- On GNOME, the tray icon needs the AppIndicator extension, which Ubuntu includes. Without it, the window's ⋯ menu has
-  the same items.
+Examples:
+
+```sh
+# published image, pure Rust, on your LAN:
+DIGUP_LAN_BIND=192.168.1.20 docker compose \
+  -f docker-compose.yml -f docker-compose.rust.yml -f docker-compose.lan.yml up -d --build
+
+# NVIDIA GPU (the image is built for your driver's CUDA; see the file's header):
+docker compose -f docker-compose.yml -f docker-compose.nvidia.yml --profile nvidia up -d --build
+```
+
+GPU is a measured decision, never an assumption: `digup speed --model --json` reports the device
+the engine picked and the agreement between GPU and CPU (0.999 agreement required), and the full
+procedure is [`docs/implementation/gpu-handoff.md`](docs/implementation/gpu-handoff.md).
+
+## Command line
+
+The [Releases page](https://github.com/Ocean572/DigUp-RS/releases/latest) carries a payload
+tarball per platform — Linux x86_64 / aarch64, macOS arm64 / x86_64, Windows x86_64 — with the
+native libraries beside the binary: untar anywhere and run. Homebrew:
+`brew install ocean572/tap/digup`.
+
+```sh
+digup download-model                    # fetch the pinned model, once
+digup estimate ~/photos                 # file count + a cost forecast, measured on your box
+digup index ~/photos                    # the first pass
+digup search "a dog on the beach"       # results ranked by z: the engine's own score
+digup speed --model                     # GPU-vs-CPU measurement (device + agreement)
+digup --help                            # all verbs
+```
+
+Every UI — the web app, the desktop shell — talks to `digup` over its published JSON-lines
+interfaces. Nothing above it re-ranks, re-stores, or invents scores.
 
 ## What it reads
 
 Only the folders you choose:
 
-- pictures and screenshots (JPEG, PNG, HEIC, WebP and more), by what they show, and on a Mac screenshots by their text
-  too
-- PDFs, page by page, scans included. A long one gets its first 30 pages right away and the rest once everything
-  else is in (up to 5,000 pages a file)
-- documents: txt, md, typ, rtf, docx, odt, html, and on a Mac doc, long ones the same way. Text that's mostly numbers,
-  like a data export, is matched by its exact text only
-- spreadsheets and presentations: xlsx, ods, pptx and odp, read for their text: each sheet's name and rows, each
-  slide's text and speaker notes
-- audio of any length: the model listens to 30 seconds at a time, so DigUp takes overlapping 30-second windows and a
-  match points to its moment
-- video of any length: a frame every few seconds, one per shot, plus the soundtrack the same way as audio
+- pictures and screenshots (JPEG, PNG, HEIC, WebP and more), by what they show
+- PDFs, page by page, scans included (a long one gets its first 30 pages right away, up to 5,000
+  pages a file)
+- documents: txt, md, typ, rtf, docx, odt, html
+- spreadsheets and presentations: xlsx, ods, pptx, odp — each sheet's rows, each slide's text and
+  speaker notes
+- audio of any length: the model listens in 30-second windows, a match points to its moment
+- video of any length: a frame every few seconds, one per shot, plus the soundtrack like audio
 
-Outside the folders you pick for code search, it never reads code, and inside a code project (a folder with `.git`,
-`package.json` and the like) it reads only screenshots. It never reads keys, certificates, password files, hidden
-folders like `.ssh`, apps or caches. It skips folders that look like datasets, and never downloads files that only
-live in the cloud (iCloud on a Mac, OneDrive on Windows). You can skip more folders or file types in Settings. DigUp
-only reads your files; it never changes, moves or uploads them.
+It never reads keys, certificates, password files, hidden folders like `.ssh`, apps or caches,
+and it skips folders that look like datasets. It only reads; it never changes, moves, or uploads
+files. After the first pass (one-time; a big photo library can take hours, so `estimate` shows
+the time first), a new file is searchable seconds after it lands.
 
-The first pass happens once. On a Mac it takes a few minutes for a few hundred files and can take an hour for a big
-Downloads folder. On Windows and Linux, DigUp runs the model on the graphics card where that's faster and on the
-processor otherwise; on a processor alone a picture takes a few seconds (about five on a 2017 laptop's Core i5), so a
-large photo library can take hours, which is why setup shows the time first. After that, a new file is searchable a
-few seconds after it lands.
+## Code search
 
-## Code
-
-EmbeddingGemma 2 reads code too, so DigUp can search your projects. Code search is off until you turn it on, in
-Settings → Code or during setup, for the folders you pick. Each repo shows how long reading it takes and how much room
-its index needs. Then start a search with `code:` and say what the code does, or type a name that's in it:
-
-- "code: retry a failed call with backoff" finds the function, whatever it's called
-- "code: refreshAccessToken" goes to the line that defines it, not the places that call it
-- "code: plot how many examples each class has" finds the notebook cell
-
-Results open in your editor at the line: Zed, VS Code, Cursor, Sublime Text, JetBrains IDEs and a few more, Xcode on
-a Mac and Notepad++ on Windows (pick one in Settings). Code has an index of its own and never shows up in other
-searches. DigUp reads source files, notebooks (without their outputs) and a repo's own docs. It skips what git
-ignores, vendored and generated code, data files, and anything that looks like a key or a password. While you're
-working on code, the index catches up a minute after things go quiet.
-
-On a Mac, reading code takes about 20 seconds for a small app, and about 20 minutes and 130 MB of index for all of
-llama.cpp.
+Off until you turn it on. Then `code:` searches find functions by what they do —
+"code: refreshAccessToken" goes to the line that defines it, not the places that call it — and
+results open in your editor at the line. Code keeps its own index and never shows up in media
+searches. It reads source, notebooks (without outputs) and repo docs; it skips what git ignores,
+vendored code, and anything that looks like a key.
 
 ## How it works
 
 ```
-your folders ─► readers that turn files into pictures, text and sound
-             ─► EmbeddingGemma 2 on llama.cpp, in a helper process that quits when it's done
-             ─► one SQLite file: a vector for every picture, page, passage, video frame and 30 s of sound,
-                plus a keyword index (code search keeps a second one, for code)
-your words   ─► the same model's text part (~250 MB, only while you search) ─► nearest vectors + exact words
+your folders ─► readers: PDFium (PDF), ffmpeg (audio/video), stb (images), miniz (zip/OOXML)
+                  ─► EmbeddingGemma 2 on llama.cpp, in a helper that quits when it's done
+                  ─► one SQLite file: a 768-dim float16 vector per picture, page, passage,
+                     video frame and 30 s of sound, plus an FTS5 keyword index
+                     (code search keeps a second index)
+your words   ─► the model's text part (~250 MB, only while you search)
+                  ─► nearest vectors + exact-word boost ─► ranked results with z-scores
 ```
 
-DigUp runs ggml-org's 8-bit build of EmbeddingGemma 2 through [llama.cpp](https://github.com/ggml-org/llama.cpp): on
-the Mac's GPU with Metal, and on Windows and Linux on the GPU with Vulkan when a quick check at setup finds it faster
-than the processor and getting the same results. Every vector lives in the same 768-dimensional space, which is why
-one query can rank a video frame against a PDF page. A search embeds your words in milliseconds and compares them with
-everything in the index. Exact-word matches get a boost, because no embedding holds an invoice number exactly.
+The Rust workspace:
 
-The search engine is the same Swift code on every system. On a Mac it reads files with macOS's own frameworks (ImageIO,
-PDFKit, AVFoundation, and Vision for the text in screenshots) and the app is SwiftUI. On Windows and Linux it reads
-them with PDFium, ffmpeg, stb and miniz, and the app around it is built with [Tauri](https://tauri.app).
+| crate | what it is |
+|---|---|
+| `crates/core` | extraction: documents, mail, scoring, vectors, zip |
+| `crates/native` | the llama.cpp / ffmpeg / PDFium / stb seams |
+| `crates/runtime` | the embedders, the index loop, the search engine |
+| `crates/services` | the JSON-lines services (`search-service`, `index-service`, the shared embedder) |
+| `crates/cli` | the `digup` binary |
+| `crates/server` | the `digup-server` binary: the HTTP API, jobs, media, targets |
+| `shell/` | the Tauri desktop app (its Rust + a plain JS UI) |
 
-The index remembers which model version made its vectors. An update that leaves the vectors unchanged keeps your
-index, and a test checks every llama.cpp update against stored reference vectors before it ships.
+The index remembers which model made its vectors; a reference-vector test checks every llama.cpp
+update before it ships. The SQLite schema is byte-compatible with the Swift original (schema v6:
+FTS5, counters, triggers), so an index built by one engine is read and searched unchanged by the
+other — measured, not assumed.
+
+## Releases
+
+A release is gated, then built, by CI ([`.github/workflows/rust-release.yml`](.github/workflows/rust-release.yml)):
+the workspace suite and the contract suite run **on the tagged commit** — the contract suite with
+zero skips, against the real payload — and only then the payload tarballs for Linux, macOS and
+Windows are compiled natively per platform and attached to the release, with the Homebrew
+formula. The server image publishes to `ghcr.io/ocean572/digup-server` on every merge to `main`
+([`.github/workflows/server.yml`](.github/workflows/server.yml)), which is what the
+`docker-compose.ghcr.yml` shape pulls. The audit ledger for the port is
+[`docs/RUST_PORT_AUDIT.md`](docs/RUST_PORT_AUDIT.md).
 
 ## Build from source
 
-On a Mac you'll need Xcode 26, git, and CMake (or `uv`) for llama.cpp. If `xcode-select -p` shows the Command Line
-Tools, switch to Xcode first (`sudo xcode-select -s /Applications/Xcode.app`): they lack the SwiftUI and Swift Testing
-macros the build needs.
+You need Rust 1.88+ (CI pins 1.99.1), a C/C++ toolchain, CMake, and Python 3; `cargo` does the
+rest.
 
 ```sh
-git clone https://github.com/ARahim3/DigUp && cd DigUp
-scripts/build-llama.sh            # llama.cpp at a pinned tag, with a one-line patch (a few minutes)
-swift build -c release && swift test
-./build.sh                        # → build.noindex/DigUp.app
+git clone https://github.com/Ocean572/DigUp-RS && cd DigUp-RS
+scripts/fetch-vendor.sh          # llama.cpp, SQLite/FTS5, PDFium, stb, miniz — pinned, sha256-checked
+scripts/build-llama.sh           # llama.cpp at the pinned tag
+cargo build --release            # → target/release/digup, target/release/digup-server
+cargo test --workspace           # the engine's suites: schema, vectors, protocol, CLI
 ```
 
-On Windows and Linux you'll need Swift 6.4, Rust and Node; on Windows also Visual Studio's C++ build tools, with the
-commands run in Git for Windows' bash. `scripts/fetch-vendor.sh` and `scripts/build-llama.sh` get the libraries, then
-`scripts/package-linux.sh` makes the .deb and the AppImage, and `scripts/package-windows.sh` the installer.
-[The packages workflow](.github/workflows/packages.yml) has every step, down to the packages each system needs.
-
-There's also a command-line tool, `.build/release/digup`, that indexes, searches and runs the evals from the terminal
-(`digup --help`). `scripts/make-testbed.sh` builds a folder of test files to try it on on a Mac (it needs ffmpeg), and
-`evals/` holds the queries ranking changes are measured with.
+The web app is the [Compose app](#the-docker-compose-app) above (it builds the same payload).
+The web UI is [`server/ui`](server/ui) (Lit + Vite): `npm ci && npm test && npm run build`.
+Contributions: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## FAQ
 
-**How is this different from Spotlight or Windows Search?** They find files by their names, text and metadata. DigUp
-also finds them by what they show or say, and takes you to the page or moment. They work fine side by side.
+**How is this different from Spotlight or Windows Search?** They find files by names, text and
+metadata. DigUp also finds them by what they show or say, and takes you to the page or moment.
+They work fine side by side.
 
-**What's different on Windows and Linux?** The search is the same: the same model, the same results. Two things are
-missing for now. The text inside screenshots isn't read yet, so a screenshot is found by what it shows rather than by
-an exact code typed into the search. And doc files from old Word versions, RAW photos and SVG pictures are only read
-on a Mac.
+**Why Rust?** The engine runs on Linux, Windows and in Docker, with no Swift toolchain anywhere
+in the build. The port reproduces the Swift engine's published interfaces byte-for-byte — the
+JSON-lines verbs, the SQLite schema, the vector layout — and the twin gate compares the two
+engines' answers file by file, query by query.
 
-**Why is the download 865 MB?** That's the model: the text part (310 MB) and the image and audio encoders (555 MB).
-The app itself is about 20 MB on a Mac, and on Windows and Linux 40 to 140 MB depending on the package, since those
-carry their own PDF, video and image readers.
+**I have an index from the Swift app. Does it work?** Yes. The schema is byte-compatible; the
+Rust engine opens, migrates and searches Swift-built indexes unchanged (measured: a 131,973-file
+Swift-built index serving searches from a Rust compose app, zero re-indexing). Keep the same
+folder paths — index rows are root-scoped.
 
-**Will it slow my computer down?** Only the first pass is heavy. After that it reads new files only. The model runs in
-a separate process that quits when it's done, and the search side only loads while you're searching.
+**Why is the download 865 MB?** That's the model: the text part (310 MB) and the image and
+audio encoders (555 MB). The app is a few tens of MB; the payload tarballs carry the binary plus
+the PDF/video/image readers it uses.
 
-**Which languages?** The model knows more than 100, and DigUp searches in all of them, across languages too. The evals
-cover only English, Bengali and Arabic because those are the languages of the files DigUp was tested on, and Google
-notes that the model isn't equally strong in every language. Two limits apply to exact words, not to meaning: the
-text inside screenshots is read only on a Mac, by Apple's text recognition, which knows about 25 languages, and
-languages written without spaces, like Chinese, Japanese and Thai, aren't split into words.
+**Will it slow my computer down?** Only the first pass is heavy; after that it reads new files.
+The model runs in a separate process that quits when it's done, and the search side only loads
+while you're searching.
 
-**How do I remove it?**
-On a Mac, quit it, then delete DigUp.app and `~/Library/Application Support/DigUp`, which holds the model and the
-indexes. Its settings are in `~/Library/Preferences/com.abdurrahim.DigUp.plist`. With Homebrew, `brew uninstall --cask
---zap digup` removes all of it.
-On Windows, uninstall it in Settings → Apps; tick "Delete the application data" to remove the model and the index too.
-On Linux, `sudo apt remove dig-up` (or delete the AppImage), then delete `~/.local/share/digup` (the model and the
-index), `~/.config/com.abdurrahim.DigUp`, `~/.local/share/com.abdurrahim.DigUp` and, if it opened at login,
-`~/.config/autostart/DigUp.desktop`. On GNOME, also remove its shortcut in Settings → Keyboard.
+**Which languages?** The model knows more than 100, and searches cross-language. Two limits hit
+exact words, not meaning: the text inside screenshots is read on a Mac only (Apple's text
+recognition), and languages written without spaces — Chinese, Japanese, Thai — aren't split into
+words for the keyword boost.
 
-## Support
+**How do I remove it?** Delete what DigUp owns: the app, and its data folder — the index and the
+model. On the server stack, that's the `data/` folders you created: `docker compose down`, then
+delete them. Your files are never touched.
 
-DigUp is free and open source, and it stays that way. If it helps you and you'd like to support it, you can
-[buy me a coffee](https://arahim3.gumroad.com/l/support).
+## The Swift reference, and thanks
 
-## Thanks
+DigUp was originally created by Abdurrahim ([`ARahim3/DigUp`](https://github.com/ARahim3/DigUp),
+support: [arahim3.gumroad.com/l/support](https://arahim3.gumroad.com/l/support)) — the Swift
+engine and Mac app. This repository is the **Rust remake**: `main` is the Rust core; the Swift
+original lives on the branch [`swift-reference`](../../tree/swift-reference) as the parity
+reference the twin gate measures against, and the macOS app (`Sources/DigUpApp`, SwiftUI) stays
+Swift.
 
-DigUp is built on [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) by Google DeepMind (Apache 2.0)
-and [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT). The Mac app uses [Sparkle](https://sparkle-project.org)
-(MIT) for updates. The Windows and Linux app is built with [Tauri](https://tauri.app) (MIT or Apache 2.0) and reads
-files with [PDFium](https://pdfium.googlesource.com/pdfium/) (BSD), [FFmpeg](https://ffmpeg.org) (LGPL),
-[stb](https://github.com/nothings/stb) (public domain) and [miniz](https://github.com/richgel999/miniz) (MIT). Their
-license notices ship with the app.
+Built on [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) by Google DeepMind
+(Apache 2.0) and [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT). The Windows/Linux
+app is built with [Tauri](https://tauri.app) (MIT or Apache 2.0) and reads files with
+[PDFium](https://pdfium.googlesource.com/pdfium/) (BSD), [FFmpeg](https://ffmpeg.org) (LGPL),
+[stb](https://github.com/nothings/stb) (public domain) and
+[miniz](https://github.com/richgel999/miniz) (MIT). Their license notices ship with the payload.
 
-DigUp isn't affiliated with Google, Apple or Microsoft. Gemma is a trademark of Google LLC; Mac and Spotlight are
-trademarks of Apple Inc.; Windows is a trademark of Microsoft Corporation.
+DigUp isn't affiliated with Google, Apple or Microsoft. Gemma is a trademark of Google LLC; Mac
+and Spotlight are trademarks of Apple Inc.; Windows is a trademark of Microsoft Corporation.
 
 ## License
 
