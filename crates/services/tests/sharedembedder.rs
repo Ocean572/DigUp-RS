@@ -129,7 +129,7 @@ fn a_media_call_buys_the_encoders_once_and_text_calls_keep_them() {
 
     // The queue said text; a scanned page shows up as a picture. The call upgrades the
     // shape on the spot (#155) — and the answer says so.
-    kept.embed_images(&["/var/tmp/a/page-3.jpg".to_string()], 1)
+    kept.embed_images(&["/media/a/page-3.jpg".to_string()], 1)
         .expect("the media call runs on the full model");
     assert!(
         !kept.info().text_only,

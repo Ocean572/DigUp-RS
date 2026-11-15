@@ -2441,13 +2441,13 @@ mod tests {
         }
         // Swift's writer's string escapes and container shapes (jsonprobe.out / 2.out).
         let rows = vec![serde_json::json!({
-            "path": "/var/tmp/a/b.jpg",
+            "path": "/media/a/b.jpg",
             "info": {},
             "excerpt": "“café” — বাংলা \n tab\\ end\u{01}\u{1c}\u{7f}",
             "n": 1.0,
             "neg": -0.0,
         })];
-        let want = "[\n  {\n    \"excerpt\" : \"“café” — বাংলা \\n tab\\\\ end\\u0001\\u001C\u{7f}\",\n    \"info\" : {\n\n    },\n    \"n\" : 1,\n    \"neg\" : -0,\n    \"path\" : \"\\/var\\/tmp\\/a\\/b.jpg\"\n  }\n]";
+        let want = "[\n  {\n    \"excerpt\" : \"“café” — বাংলা \\n tab\\\\ end\\u0001\\u001C\u{7f}\",\n    \"info\" : {\n\n    },\n    \"n\" : 1,\n    \"neg\" : -0,\n    \"path\" : \"\\/media\\/a\\/b.jpg\"\n  }\n]";
         assert_eq!(super::swift_json(&rows), want);
         // Empty top-level answers print "[", a blank line, "]" (jsonprobe.out).
         assert_eq!(super::swift_json(&[]), "[\n\n]");
