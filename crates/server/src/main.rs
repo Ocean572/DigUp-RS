@@ -822,28 +822,20 @@ fn file_response(
 
     if let media::Span::Range(start, end) = app_span {
         // 206 chunked (no content-length) — a 20 GB clip streams.
-        use std::io::{Read, Seek};
+        use std::io::Seek;
         let Ok(mut file) = std::fs::File::open(path) else {
             return ApiError::Internal.into_response();
         };
         if file.seek(std::io::SeekFrom::Start(start as u64)).is_err() {
             return ApiError::Internal.into_response();
         }
-        let mut data = vec![0u8; (end - start + 1) as usize];
-        let filled = match file.read(&mut data) {
-            Ok(n) => n,
-            Err(_) => return ApiError::Internal.into_response(),
-        };
-        data.truncate(filled);
-        // Chunked, 1 MiB chunks: a media element's seek answer must
-        // not carry a content-length (Starlette's StreamingResponse).
-        let chunks: Vec<Bytes> = data
-            .chunks(1 << 20)
-            .map(|chunk| Bytes::copy_from_slice(chunk))
-            .collect();
-        let body = Body::from_stream(futures_util::stream::iter(
-            chunks.into_iter().map(Ok::<_, std::io::Error>),
-        ));
+        // Chunked at 1 MiB pieces: a media element's seek answer must not carry a
+        // content-length (Starlette's StreamingResponse), and the span STREAMS piece by
+        // piece — `ranged()`'s generator (`media::span_stream`, api.py:761-768), one read
+        // per piece. The audit-base buffered the capped 8 MiB span in a `vec![0u8; span]`
+        // and served it from memory, reading it with ONE `read`: a short read (davfs2,
+        // FUSE, network mounts) truncated the body below its own Content-Range.
+        let body = Body::from_stream(media::span_stream(file, (end - start + 1) as u64));
         // The app's own header list (no stat headers: `extra` rode the File
         // path only); accept-ranges rides with the endpoint's headers.
         let mut headers = headers;
@@ -895,8 +887,14 @@ fn file_response(
         StarFull::Range(start, end) => {
             // FileResponse's single range: the span, WITH content-length and
             // the stat headers (measured: the media endpoint's FileResponse
-            // path and the static mount answer the same shape).
-            use std::io::{Read, Seek};
+            // path and the static mount answer the same shape). The span STREAMS
+            // (`media::span_stream`): the uncapped path takes `bytes=0-<size-1>` of a
+            // 20 GB clip — the audit-base's `vec![0u8; span]` + `read_exact` made ONE
+            // request allocate and fill the whole file in RAM (a memory amplification
+            // the wrapper never has: FileResponse seeks and iterates). With
+            // content-length riding, the piece sizes are wire-invisible; the span is
+            // read piece by piece, the answer bytes identical.
+            use std::io::Seek;
             let Ok(mut file) = std::fs::File::open(path) else {
                 return ApiError::Internal.into_response();
             };
@@ -904,10 +902,6 @@ fn file_response(
                 return ApiError::Internal.into_response();
             }
             let span = (end - start + 1) as usize;
-            let mut data = vec![0u8; span];
-            if file.read_exact(&mut data).is_err() {
-                return ApiError::Internal.into_response();
-            }
             extra.push(header("content-length", &span.to_string()));
             extra.push(header("content-type", media_type));
             extra.push(header(
@@ -917,7 +911,7 @@ fn file_response(
             let body = if head {
                 Body::empty()
             } else {
-                Body::from(data)
+                Body::from_stream(media::span_stream(file, span as u64))
             };
             status_with_headers(StatusCode::PARTIAL_CONTENT, extra, body)
         }

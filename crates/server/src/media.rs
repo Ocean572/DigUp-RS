@@ -16,9 +16,14 @@
 //!   range reads a whole 20 GB clip into RAM.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 
+use axum::body::Bytes;
+use std::pin::Pin;
+
+use futures_util::stream::{self, Stream};
 use regex::Regex;
 
 /// `HitCache(capacity=1024)`: media_id -> the hit's serving fields.
@@ -209,6 +214,57 @@ pub fn parse_range(header: Option<&str>, size: i64) -> Span {
     Span::Range(start, end)
 }
 
+/// `ranged()` (api.py:761-768) as a stream: the reader is ALREADY positioned at the
+/// span's start (the caller seeks first, so a seek failure can answer 500 before any
+/// header rides). Each piece is ONE read of at most `SPAN_CHUNK` bytes — Python's
+/// `while remaining > 0: chunk = read(min(remaining, 1 << 20)); if not chunk: break;
+/// yield chunk`, the fill loop living in the stream's poll instead of the request. The
+/// audit-base read the span with ONE `read` and truncated to what arrived: on any
+/// short-reading mount (davfs2, FUSE, network filesystems answer 64 KiB at a time on an
+/// 8 MiB request) that served a body SHORTER than the request's own Content-Range (a
+/// chunked 206 carries no content-length for the client to catch it with — the stream
+/// just ends), and it buffered the whole span in memory where the wrapper streams it —
+/// the uncapped Starlette arm turned `bytes=0-<size-1>` of a 20 GB clip into a 20 GB
+/// `vec!` per request. One read per piece keeps the fill loop AND the piece sizes the
+/// wrapper produces (a short read yields a short piece, both sides). EOF ends the
+/// stream: a file that shrank mid-request answers the truncated body the wrapper has —
+/// the same bytes, never a length that lies about the span. A read ERROR ends the
+/// stream carrying the error: hyper ends the response mid-body, uvicorn's generator
+/// exception ends it mid-body, and the headers/content-range rode identically.
+///
+/// Reads run synchronously in the poll (1 MiB from a positioned file, the same call
+/// Python's generator makes in its threadpool per piece); the 200 answer's whole-file
+/// stream rides `tokio::fs` (`ReaderStream`) as before.
+pub const SPAN_CHUNK: u64 = 1 << 20;
+
+pub fn span_stream<R>(
+    reader: R,
+    total: u64,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>
+where
+    R: Read + Send + 'static,
+{
+    Box::pin(stream::unfold(
+        (reader, total),
+        move |(mut reader, mut remaining)| async move {
+            if remaining == 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; remaining.min(SPAN_CHUNK) as usize];
+            match reader.read(&mut buf) {
+                Ok(0) => None, // the real EOF: the generator's break
+                Ok(n) => {
+                    remaining -= n as u64;
+                    let mut bytes = Bytes::from(buf);
+                    bytes.truncate(n);
+                    Some((Ok(bytes), (reader, remaining)))
+                }
+                Err(error) => Some((Err(error), (reader, 0))),
+            }
+        },
+    ))
+}
+
 /// `urllib.parse.quote(name)` + the RFC 5987 `filename*=UTF-8''…` shape: the
 /// safe set is Python's default (letters, digits, `_.-~`, `/`) — everything
 /// else percent-encoded from the UTF-8 bytes.
@@ -230,6 +286,151 @@ pub fn quote_filename(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
+
+    /// A reader that hands `per` bytes per `read` — the shape of a short-reading mount
+    /// taken to its limit (davfs2 / FUSE answer 64 KiB at a time on an 8 MiB request;
+    /// `per = 1` is the seam's contract at its smallest).
+    struct Short {
+        data: Vec<u8>,
+        at: usize,
+        per: usize,
+    }
+
+    impl Read for Short {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.per.min(buf.len()).min(self.data.len() - self.at);
+            if n == 0 {
+                return Ok(0); // the real EOF
+            }
+            buf[..n].copy_from_slice(&self.data[self.at..self.at + n]);
+            self.at += n;
+            Ok(n)
+        }
+    }
+
+    /// A reader that fills `per` bytes per read, then faults (EIO) after `fail_after`
+    /// reads — the mid-stream disk fault.
+    struct Flaky {
+        inner: Short,
+        fail_after: usize,
+        reads: usize,
+    }
+
+    impl Read for Flaky {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.reads >= self.fail_after {
+                return Err(std::io::Error::other("the disk faulted"));
+            }
+            self.reads += 1;
+            self.inner.read(buf)
+        }
+    }
+
+    async fn drain<S>(stream: S) -> Vec<Result<Bytes, std::io::Error>>
+    where
+        S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+    {
+        let mut stream = stream;
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        items
+    }
+
+    fn sizes(items: &[Result<Bytes, std::io::Error>]) -> Vec<usize> {
+        items
+            .iter()
+            .map(|item| item.as_ref().expect("a piece").len())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_span_streams_one_read_per_piece() {
+        // 5 bytes handed 1 byte at a time: pieces [1,1,1,1,1], the span WHOLE, the piece
+        // sizes ONE READ EACH (the wrapper's generator: one read() per yield). The
+        // audit-base's single `read` + `truncate` answered ONE byte for a five-byte
+        // Content-Range — the truncated 206 body the fix retires.
+        let reader = Short {
+            data: (0..5u8).collect(),
+            at: 0,
+            per: 1,
+        };
+        let items = drain(span_stream(reader, 5)).await;
+        assert_eq!(sizes(&items), vec![1, 1, 1, 1, 1], "one read per piece");
+        let total: usize = sizes(&items).iter().sum();
+        assert_eq!(total, 5, "the body IS the span the content-range names");
+    }
+
+    #[tokio::test]
+    async fn the_span_fills_across_short_reads() {
+        // davfs2's shape at per=3: pieces [3,2] fill a 5-byte span.
+        let reader = Short {
+            data: (0..5u8).collect(),
+            at: 0,
+            per: 3,
+        };
+        let items = drain(span_stream(reader, 5)).await;
+        assert_eq!(
+            sizes(&items),
+            vec![3, 2],
+            "short reads fill the span, both pieces"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_span_keeps_the_wrappers_chunk_size() {
+        // A reader that fills the request (a local file): pieces of 1 MiB, then the tail
+        // — the sizes api.py's `min(remaining, 1 << 20)` produces, piece for piece.
+        let reader = Short {
+            data: vec![7u8; 3 << 20],
+            at: 0,
+            per: 64 << 20,
+        };
+        let items = drain(span_stream(reader, 3 << 20)).await;
+        assert_eq!(
+            sizes(&items),
+            vec![1 << 20, 1 << 20, 1 << 20],
+            "1 MiB pieces at the wrapper's chunk size"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_span_ends_at_a_real_eof() {
+        // The file shrank mid-request: 2 bytes in a 5-byte span — pieces [1,1] and the
+        // stream ends (Python's `if not chunk: break`), the body the wrapper has.
+        let reader = Short {
+            data: vec![9u8; 2],
+            at: 0,
+            per: 1,
+        };
+        let items = drain(span_stream(reader, 5)).await;
+        assert_eq!(sizes(&items), vec![1, 1], "EOF ends the stream, not a lie");
+    }
+
+    #[tokio::test]
+    async fn the_span_reports_a_read_fault() {
+        // A fault mid-stream: the pieces read so far ride, then the error ends the
+        // stream — hyper terminates the response mid-body, uvicorn's generator exception
+        // ends it mid-body, the headers rode identically.
+        let reader = Flaky {
+            inner: Short {
+                data: vec![4u8; 8],
+                at: 0,
+                per: 2,
+            },
+            fail_after: 1,
+            reads: 0,
+        };
+        let items = drain(span_stream(reader, 8)).await;
+        assert_eq!(items.len(), 2, "the good piece, then the fault");
+        assert_eq!(sizes(&items[..1]), vec![2]);
+        assert!(
+            items[1].is_err(),
+            "the fault surfaces as the stream's error"
+        );
+    }
 
     #[test]
     fn ranges_clamp_and_refuse() {
