@@ -9,9 +9,23 @@
 //! size, 0)` SORTS the central directory by lowercased filename (a heapsort,
 //! miniz.c:3578), and `locate_file` (flags 0) binary-searches that order (miniz.c:4457) —
 //! which fixes WHICH duplicate (case-variant) entry wins, byte-for-byte.
+//!
+//! Reads ride miniz's `m_pRead` channel shape too (the Swift side's `FileReader`):
+//! positioned reads at offsets — EOCD windows, the central directory, the local header and
+//! the entry's bytes at extract. The audit-base read the WHOLE FILE into memory at open
+//! (`std::fs::read`): a 200 MB .pptx with embedded video cost 200 MB resident at open and
+//! double that per extract (the copy), where the engine's peak is a window, the central
+//! directory, and ONE entry — on a 64 GiB box the OOM killer's own words (model.rs:157)
+//! reach this server's children mid-index, and the measured interruption path is the kill.
 
 use flate2::read::DeflateDecoder;
+use std::fs::File;
 use std::io::Read;
+
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt;
 
 use crate::extract::ExtractError;
 
@@ -24,7 +38,9 @@ const EOCD64_SIZE: usize = 56;
 const EOCD64_LOCATOR_SIZE: usize = 20;
 
 fn not_a_zip() -> ExtractError {
-    // Every `mz_zip_reader_init` failure lands in the same Swift refusal.
+    // Every `mz_zip_reader_init` failure lands in the same Swift refusal — including a
+    // FAILED READ: `m_pRead` returning short is FILE_READ_FAILED/NOT_AN_ARCHIVE, and the
+    // Swift `FileReader` hands 0 on an `fread` fault (Docs+Portable.swift:59).
     ExtractError::Unreadable {
         why: "not a zip file".into(),
     }
@@ -44,11 +60,20 @@ struct Entry {
 
 #[derive(Debug)]
 pub struct ZipArchive {
-    bytes: Vec<u8>,
+    file: File,
+    /// `m_archive_size` — `FileReader.size`, the fstat length at open.
+    len: usize,
     entries: Vec<Entry>,
     /// `m_sorted_central_dir_offsets`: central-dir indices in filename order (the heapsort
     /// `mz_zip_reader_sort_central_dir_offsets_by_filename` produces, reproduced below).
     sorted: Vec<u32>,
+}
+
+/// `m_pRead` positioned read (`FileReader.read(at:into:count:)`).
+fn read_at(file: &File, at: u64, n: usize) -> std::io::Result<Vec<u8>> {
+    let mut buf = vec![0u8; n];
+    file.read_exact_at(&mut buf, at)?;
+    Ok(buf)
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> u16 {
@@ -73,6 +98,27 @@ fn lower(byte: u8) -> u8 {
         byte - b'A' + b'a'
     } else {
         byte
+    }
+}
+
+/// A positioned window — the deflate channel: miniz inflates the entry's `comp_size` bytes,
+/// fed through the read callback, and nothing past them.
+struct Window<'a> {
+    file: &'a File,
+    at: u64,
+    remaining: u64,
+}
+
+impl std::io::Read for Window<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0); // the window's EOF: miniz's read loop ends at `remaining`
+        }
+        let n = (buf.len() as u64).min(self.remaining) as usize;
+        let filled = self.file.read_at(&mut buf[..n], self.at)?;
+        self.at += filled as u64;
+        self.remaining -= filled as u64;
+        Ok(filled)
     }
 }
 
@@ -159,58 +205,75 @@ fn sort_by_filename(entries: &[Entry]) -> Vec<u32> {
 }
 
 impl ZipArchive {
-    /// `mz_zip_reader_init(handle, size, 0)`: the EOCD near the tail, the zip64 records when
-    /// their locator sits in front of it, the central directory it points at, and miniz's
-    /// sanity check of EVERY record (miniz.c:3867-3975). Any failure — no EOCD, a
-    /// multidisk layout, a masked/encrypted entry, an out-of-window central directory, a
-    /// local offset past the file, sizes that contradict their method — is `not a zip file`;
-    /// the audit-base accepted what miniz refuses and deferred its rejections per entry.
+    /// `mz_zip_reader_init(handle, size, 0)`: the EOCD near the tail (windowed scan), the
+    /// zip64 records when their locator sits in front of it, the central directory read into
+    /// the heap buffer miniz fills, and miniz's sanity check of EVERY record
+    /// (miniz.c:3867-3975). Any failure — no EOCD, a multidisk layout, a masked/encrypted
+    /// entry, an out-of-window central directory, a local offset past the file, sizes that
+    /// contradict their method — is `not a zip file`; the audit-base accepted what miniz
+    /// refuses and deferred its rejections per entry.
     pub fn open(path: &std::path::Path) -> Result<Self, ExtractError> {
-        let bytes = std::fs::read(path).map_err(|error| ExtractError::Unreadable {
+        let file = File::open(path).map_err(|error| ExtractError::Unreadable {
             why: error.to_string(),
         })?;
-        let len = bytes.len();
+        let len = file
+            .metadata()
+            .map_err(|error| ExtractError::Unreadable {
+                why: error.to_string(),
+            })?
+            .len() as usize;
         if len < 22 {
             return Err(not_a_zip()); // MZ_ZIP_END_OF_CENTRAL_DIR_HEADER_SIZE
         }
-        let eocd = Self::find_eocd(&bytes).ok_or_else(not_a_zip)?;
+        let eocd = Self::find_eocd(&file, len)?.ok_or_else(not_a_zip)?;
+        let eocd_bytes = read_at(&file, eocd as u64, 22).map_err(|_| not_a_zip())?;
 
-        let mut total = u16_at(&bytes, eocd + 10) as usize;
-        let mut on_disk = u16_at(&bytes, eocd + 8) as usize;
-        let mut this_disk = u16_at(&bytes, eocd + 4) as u32;
-        let mut cdir_disk = u16_at(&bytes, eocd + 6) as u32;
-        let mut size = u32_at(&bytes, eocd + 12) as usize;
-        let mut offset = u32_at(&bytes, eocd + 16) as u64;
+        let mut total = u16_at(&eocd_bytes, 10) as usize;
+        let mut on_disk = u16_at(&eocd_bytes, 8) as usize;
+        let mut this_disk = u16_at(&eocd_bytes, 4) as u32;
+        let mut cdir_disk = u16_at(&eocd_bytes, 6) as u32;
+        let mut size = u32_at(&eocd_bytes, 12) as usize;
+        let mut offset = u32_at(&eocd_bytes, 16) as u64;
 
         // The zip64 records: the locator IMMEDIATELY IN FRONT of the EOCD marks the archive
         // (miniz.c:3722-3731); the EOCD64 is read at eocd − 76 first, then at the locator's
         // own offset — one valid signature ends the search, two failures refuse the archive.
         let locator_at = eocd.checked_sub(EOCD64_LOCATOR_SIZE);
-        let zip64 = locator_at.is_some_and(|at| sig_at(&bytes, at) == 0x0706_4b50);
+        let locator: Option<Vec<u8>> = match locator_at {
+            Some(at) => read_at(&file, at as u64, EOCD64_LOCATOR_SIZE).ok(),
+            None => None,
+        };
+        let zip64 = locator
+            .as_ref()
+            .is_some_and(|l| sig_at(l, 0) == 0x0706_4b50);
         if zip64 {
             if eocd < EOCD64_LOCATOR_SIZE + EOCD64_SIZE {
                 return Err(not_a_zip());
             }
+            let locator = locator.expect("zip64 implies a readable locator");
             let mut at = eocd - EOCD64_LOCATOR_SIZE - EOCD64_SIZE;
-            if !Self::eocd64_sig(&bytes, at) {
-                let at64 = u64_at(&bytes, locator_at.expect("locator present"));
+            let mut record = Self::eocd64_at(&file, at, len);
+            if record.is_none() {
+                let at64 = u64_at(&locator, 8);
                 if at64 > (len - EOCD64_SIZE) as u64 {
                     return Err(not_a_zip());
                 }
                 at = at64 as usize;
-                if !Self::eocd64_sig(&bytes, at) {
+                record = Self::eocd64_at(&file, at, len);
+                if record.is_none() {
                     return Err(not_a_zip());
                 }
             }
-            if u64_at(&bytes, at + 4) < (EOCD64_SIZE - 12) as u64 {
+            let record = record.expect("just checked");
+            if u64_at(&record, 4) < (EOCD64_SIZE - 12) as u64 {
                 return Err(not_a_zip()); // m_size_of_center_direct
             }
-            if u32_at(&bytes, locator_at.expect("locator present") + 16) != 1 {
+            if u32_at(&locator, 16) != 1 {
                 return Err(not_a_zip()); // m_total_number_of_disks
             }
-            let total64 = u64_at(&bytes, at + 32);
-            let on_disk64 = u64_at(&bytes, at + 24);
-            let size64 = u64_at(&bytes, at + 40);
+            let total64 = u64_at(&record, 32);
+            let on_disk64 = u64_at(&record, 24);
+            let size64 = u64_at(&record, 40);
             if total64 > u32::MAX.into() || on_disk64 > u32::MAX.into() || size64 > u32::MAX.into()
             {
                 return Err(not_a_zip()); // miniz's practical limits
@@ -218,9 +281,9 @@ impl ZipArchive {
             total = total64 as usize;
             on_disk = on_disk64 as usize;
             size = size64 as usize;
-            offset = u64_at(&bytes, at + 48);
-            this_disk = u32_at(&bytes, at + 16);
-            cdir_disk = u32_at(&bytes, at + 20);
+            offset = u64_at(&record, 48);
+            this_disk = u32_at(&record, 16);
+            cdir_disk = u32_at(&record, 20);
         }
 
         // The archive-level checks (miniz.c:3808-3846).
@@ -244,32 +307,40 @@ impl ZipArchive {
             return Err(not_a_zip()); // the zip64 records between the central directory and the EOCD
         }
 
+        // The central directory, read whole into the heap buffer miniz fills — the ONE
+        // whole-structure read the engine makes (miniz.c:3861 `m_pRead(…, cdir_ofs, …,
+        // cdir_size)`; the buffer is bounded by `cdir_size <= archive_size`, checked above).
+        let mut cdir = Vec::new();
+        if size > 0 {
+            cdir = read_at(&file, offset as u64, size).map_err(|_| not_a_zip())?;
+        }
+
         // miniz's per-record sanity loop (miniz.c:3867), over the central-directory WINDOW:
         // `n` counts the WINDOW's bytes the record may use — the audit-base measured records
         // against the whole file, so a record running past the central directory's end into
         // the EOCD region opened here and died in miniz.
-        let mut at = offset;
+        let mut at = 0usize; // cdir-relative
         let mut remaining = size;
         let mut entries: Vec<Entry> = Vec::new();
         let mut zip64_has_extended = false; // m_zip64_has_extended_info_fields: set once, gates the scan
         for _ in 0..total {
-            if remaining < 46 || sig_at(&bytes, at) != 0x0201_4b50 {
+            if remaining < 46 || sig_at(&cdir, at) != 0x0201_4b50 {
                 return Err(not_a_zip());
             }
-            let name_len = u16_at(&bytes, at + 28) as usize;
-            let extra_len = u16_at(&bytes, at + 30) as usize;
-            let comment_len = u16_at(&bytes, at + 32) as usize;
+            let name_len = u16_at(&cdir, at + 28) as usize;
+            let extra_len = u16_at(&cdir, at + 30) as usize;
+            let comment_len = u16_at(&cdir, at + 32) as usize;
             let record = 46 + name_len + extra_len + comment_len;
             if record > remaining {
                 return Err(not_a_zip()); // MZ_ZIP_CENTRAL_DIR_HEADER_SIZE + … > n
             }
-            let name = bytes[at + 46..at + 46 + name_len].to_vec();
-            let extra = bytes[at + 46 + name_len..at + 46 + name_len + extra_len].to_vec();
-            let method = u16_at(&bytes, at + 10);
-            let flags = u16_at(&bytes, at + 8);
-            let comp = u32_at(&bytes, at + 20) as u64;
-            let uncomp = u32_at(&bytes, at + 24) as u64;
-            let local = u32_at(&bytes, at + 42) as u64;
+            let name = cdir[at + 46..at + 46 + name_len].to_vec();
+            let extra = cdir[at + 46 + name_len..at + 46 + name_len + extra_len].to_vec();
+            let method = u16_at(&cdir, at + 10);
+            let flags = u16_at(&cdir, at + 8);
+            let comp = u32_at(&cdir, at + 20) as u64;
+            let uncomp = u32_at(&cdir, at + 24) as u64;
+            let local = u32_at(&cdir, at + 42) as u64;
 
             // The zip64-extra MARKING scan (miniz.c:3884-3945): runs for the first record
             // that declares a 32-bit-limit size, walks the extra STRICTLY (a short field
@@ -304,7 +375,7 @@ impl ZipArchive {
             // must have equal sizes; nonzero size with zero storage is corrupt. Guarded by
             // both 32-bit sizes being real (a zip64 placeholder skips it).
             if comp != u32::MAX as u64 && uncomp != u32::MAX as u64 {
-                let head = u32_at(&bytes, at + 10); // method (10..12) + file time (12..14)
+                let head = u32_at(&cdir, at + 10); // method (10..12) + file time (12..14)
                 if (head == 0 && uncomp != comp) || (uncomp != 0 && comp == 0) {
                     return Err(not_a_zip());
                 }
@@ -312,7 +383,7 @@ impl ZipArchive {
 
             // The entry's disk (miniz.c:3957-3960): 0xFFFF, or a disk that is neither this
             // disk nor 1, is UNSUPPORTED_MULTIDISK.
-            let disk_index = u16_at(&bytes, at + 34);
+            let disk_index = u16_at(&cdir, at + 34);
             if disk_index == u16::MAX || (disk_index as u32 != this_disk && disk_index != 1) {
                 return Err(not_a_zip());
             }
@@ -346,26 +417,54 @@ impl ZipArchive {
 
         let sorted = sort_by_filename(&entries);
         Ok(Self {
-            bytes,
+            file,
+            len,
             entries,
             sorted,
         })
     }
 
     /// The EOCD signature, searched from the tail back through the comment window miniz scans
-    /// (64 KB + its own 22 bytes, `locate_header_sig`'s stop rule). The RIGHTMOST signature
-    /// match wins — miniz does not pre-filter candidates, it takes the first hit and its
-    /// archive-level checks refuse the file when the pair is implausible, so the port must
-    /// not skip to an older valid EOCD miniz never reaches.
-    fn find_eocd(bytes: &[u8]) -> Option<usize> {
-        let floor = bytes.len().saturating_sub(65_558);
-        (floor..=bytes.len() - 22)
-            .rev()
-            .find(|&at| sig_at(bytes, at) == 0x0605_4b50)
+    /// (64 KB + its own 22 bytes, `locate_header_sig`'s stop rule), in read windows like the
+    /// engine's 4 KB `m_pRead` buffer. The RIGHTMOST signature match wins — miniz does not
+    /// pre-filter candidates, it takes the first hit and its archive-level checks refuse the
+    /// file when the pair is implausible, so the port must not skip to an older valid EOCD
+    /// miniz never reaches.
+    fn find_eocd(file: &File, len: usize) -> Result<Option<usize>, ExtractError> {
+        let top = len - 22;
+        let floor = len.saturating_sub(65_558);
+        let mut scan_end = top;
+        while scan_end >= floor {
+            let win_hi = scan_end + 4; // exclusive: a signature at `scan_end` needs 4 bytes
+            let span = 4096usize.min(win_hi - floor);
+            let win_lo = win_hi - span;
+            let buf = match read_at(file, win_lo as u64, span) {
+                Ok(buf) => buf,
+                Err(_) => return Ok(None), // a window that won't read: the engine's short
+                                           // read returns 0 → locate_header_sig finds nothing → NOT_AN_ARCHIVE
+            };
+            let at_top = scan_end.min(win_hi - 4);
+            let at_bottom = floor.max(win_lo);
+            for at in (at_bottom..=at_top).rev() {
+                let off = at - win_lo;
+                if &buf[off..off + 4] == b"PK\x05\x06" {
+                    return Ok(Some(at));
+                }
+            }
+            scan_end = match at_bottom.checked_sub(1) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+        Ok(None)
     }
 
-    fn eocd64_sig(bytes: &[u8], at: usize) -> bool {
-        at + EOCD64_SIZE <= bytes.len() && sig_at(bytes, at) == 0x0606_4b50
+    fn eocd64_at(file: &File, at: usize, len: usize) -> Option<Vec<u8>> {
+        if at + EOCD64_SIZE > len {
+            return None;
+        }
+        let record = read_at(file, at as u64, EOCD64_SIZE).ok()?;
+        (sig_at(&record, 0) == 0x0606_4b50).then_some(record)
     }
 
     /// `mz_zip_reader_locate_file(zip, name, nil, 0)` — flags 0, a sorted central directory
@@ -410,6 +509,9 @@ impl ZipArchive {
     /// `mz_zip_reader_file_stat` == 0 lands in `can't read {name}`), then uncomp, comp,
     /// offset in miniz's order.
     fn file_stat(&self, entry: &Entry) -> Result<(u64, u64, u64), ExtractError> {
+        let bad = || ExtractError::Unreadable {
+            why: "zip64 extra".into(), // mapped to `can't read {name}` by the caller
+        };
         let mut uncomp = entry.uncomp_size;
         let mut comp = entry.comp_size;
         let mut offset = entry.offset;
@@ -417,43 +519,33 @@ impl ZipArchive {
             let mut scan = entry.extra.as_slice();
             while !scan.is_empty() {
                 if scan.len() < 4 {
-                    return Err(ExtractError::Unreadable {
-                        why: "zip64 extra".into(), // mapped to `can't read {name}` by the caller
-                    });
+                    return Err(bad());
                 }
                 let field = u16_at(scan, 0);
                 let field_size = u16_at(scan, 2) as usize;
                 if field_size + 4 > scan.len() {
-                    return Err(ExtractError::Unreadable {
-                        why: "zip64 extra".into(),
-                    });
+                    return Err(bad());
                 }
                 if field == 0x0001 {
                     let body = &scan[4..4 + field_size];
                     let mut at = 0usize;
                     if uncomp == u32::MAX as u64 {
                         if body.len() < at + 8 {
-                            return Err(ExtractError::Unreadable {
-                                why: "zip64 extra".into(),
-                            });
+                            return Err(bad());
                         }
                         uncomp = u64_at(body, at);
                         at += 8;
                     }
                     if comp == u32::MAX as u64 {
                         if body.len() < at + 8 {
-                            return Err(ExtractError::Unreadable {
-                                why: "zip64 extra".into(),
-                            });
+                            return Err(bad());
                         }
                         comp = u64_at(body, at);
                         at += 8;
                     }
                     if offset == u32::MAX as u64 {
                         if body.len() < at + 8 {
-                            return Err(ExtractError::Unreadable {
-                                why: "zip64 extra".into(),
-                            });
+                            return Err(bad());
                         }
                         offset = u64_at(body, at);
                     }
@@ -467,6 +559,8 @@ impl ZipArchive {
 
     /// The entry's bytes, or `None` when the zip has no such entry. Its declared size is checked
     /// first, before anything is allocated for it: a zip of a few KB can declare gigabytes.
+    /// The body rides the read channel — miniz reads `comp_size` bytes through `m_pRead` at
+    /// extract, allocates the entry's own bytes, and touches nothing else.
     pub fn data(&self, name: &str) -> Result<Option<Vec<u8>>, ExtractError> {
         let cannot = || ExtractError::Unreadable {
             why: format!("can't read {name}"),
@@ -483,13 +577,17 @@ impl ZipArchive {
         }
         // The local header: miniz inflates from there, with the central sizes.
         let head = offset as usize;
-        if head + 30 > self.bytes.len() || &self.bytes[head..head + 4] != b"PK\x03\x04" {
+        if head + 30 > self.len {
             return Err(cannot());
         }
-        let name_len = u16_at(&self.bytes, head + 26) as usize;
-        let extra_len = u16_at(&self.bytes, head + 28) as usize;
+        let header = read_at(&self.file, head as u64, 30).map_err(|_| cannot())?;
+        if &header[0..4] != b"PK\x03\x04" {
+            return Err(cannot());
+        }
+        let name_len = u16_at(&header, 26) as usize;
+        let extra_len = u16_at(&header, 28) as usize;
         let data = head + 30 + name_len + extra_len;
-        if data > self.bytes.len() {
+        if data > self.len {
             return Err(cannot());
         }
         if entry.flags & 0x01 != 0 {
@@ -502,22 +600,35 @@ impl ZipArchive {
                 // size — the init check enforced that for real 32-bit pairs; a zip64 override
                 // reaches here with 64-bit sizes.
                 let comp = comp as usize;
-                if comp != uncomp || self.bytes.len() < data + comp {
+                if comp != uncomp || self.len < data + comp {
                     return Err(cannot());
                 }
-                Ok(Some(self.bytes[data..data + comp].to_vec()))
+                read_at(&self.file, data as u64, comp)
+                    .map(Some)
+                    .map_err(|_| cannot())
             }
             8 => {
                 let comp = comp as usize;
-                if self.bytes.len() < data + comp {
+                if self.len < data + comp {
                     return Err(cannot()); // data_ofs + comp_size past the archive
                 }
-                let stream = &self.bytes[data..data + comp];
+                let stream = Window {
+                    file: &self.file,
+                    at: data as u64,
+                    remaining: comp as u64,
+                };
                 let mut reader = DeflateDecoder::new(stream);
                 let mut out: Vec<u8> = Vec::new();
                 // The stream must end cleanly and yield exactly the declared size — miniz
-                // inflates into a buffer of that size and fails when it overflows.
-                match reader.read_to_end(&mut out) {
+                // inflates into a buffer of that size and fails when it overflows. The take
+                // caps the amplification a hostile stream buys: a 1 MiB deflated window
+                // decodes 1 GB of filler; the declared size is the ceiling, plus one byte
+                // to see the overflow.
+                match reader
+                    .by_ref()
+                    .take(uncomp as u64 + 1)
+                    .read_to_end(&mut out)
+                {
                     Ok(_) if out.len() == uncomp => Ok(Some(out)),
                     _ => Err(cannot()),
                 }
@@ -895,6 +1006,73 @@ mod tests {
         let error =
             open_bytes("digup-zip-rightmost", &zip).expect_err("miniz refuses the rightmost");
         assert!(why(&error).contains("not a zip file"), "{error}");
+    }
+
+    /// F4 — miniz reads through the `m_pRead` callback in windows (the Swift side's
+    /// `FileReader.read(at:into:count:)`): the EOCD windows, the central directory, and ONE
+    /// entry's bytes at extract. The audit-base read the WHOLE FILE into memory at open
+    /// (`std::fs::read`) — opening a 200 MB .pptx with embedded video made all 200 MB
+    /// resident, and every extraction copied it again. Measured here (this box
+    /// ai-ubuntu-computer): open()'s VmSize delta on a 200 MiB zip — the streamed reader
+    /// pays its windows (kB), the whole-file reader pays the file (≥ 200 MB, fails-before,
+    /// recorded in the commit note). The gate threshold is 25 MB: eight times the
+    /// streamed reader's real delta, eight times under the whole-file one.
+    #[test]
+    fn opening_a_big_zip_does_not_make_the_whole_file_resident() {
+        let dir = tree("digup-zip-rss");
+        let path = dir.join("big.zip");
+        use std::io::Write;
+        let mut f = std::fs::File::create(&path).unwrap();
+        let body: u32 = 200 << 20;
+        let mut head = b"PK\x03\x04".to_vec();
+        head.extend(u16(20)); // version needed
+        head.extend(u16(0)); // flags
+        head.extend(u16(0)); // method: stored
+        head.extend(u16(0)); // time
+        head.extend(u16(0)); // date
+        head.extend(u32(0)); // crc
+        head.extend(u32(body)); // comp
+        head.extend(u32(body)); // uncomp
+        head.extend(u16(7)); // "big.bin"
+        head.extend(u16(0)); // extra
+        head.extend(b"big.bin");
+        f.write_all(&head).unwrap();
+        let zeros = [0u8; 1 << 20];
+        for _ in 0..200 {
+            f.write_all(&zeros).unwrap();
+        }
+        // The central record sits AFTER the 200 MiB body.
+        let cdir_ofs = (head.len() + body as usize) as u32;
+        f.write_all(&central(b"big.bin", &[], 0, 0, body, body, 0, 0))
+            .unwrap();
+        f.write_all(&eocd(1, 1, 0, 0, 53, cdir_ofs)).unwrap();
+        f.flush().unwrap();
+
+        let before = vm_size_kb();
+        let archive = ZipArchive::open(&path).expect("the archive opens");
+        let after = vm_size_kb();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(archive.entries.len(), 1, "the entry parses");
+        assert!(
+            after - before < (200 << 10) / 8,
+            "open's VmSize delta is {} kB — the file's bytes became resident",
+            after - before
+        );
+    }
+
+    fn vm_size_kb() -> usize {
+        let status = std::fs::read_to_string("/proc/self/status").expect("/proc/self/status");
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmSize:") {
+                return rest
+                    .trim()
+                    .trim_end_matches(" kB")
+                    .trim()
+                    .parse()
+                    .expect("kB");
+            }
+        }
+        panic!("no VmSize line")
     }
 
     /// The empty archive (EOCD at 0, everything zero) opens as a zip with no entries —
