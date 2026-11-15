@@ -32,9 +32,22 @@ impl std::fmt::Display for CliError {
 }
 
 /// One `digup` process to completion; stdout returned, engine errors raised
-/// verbatim (`cli.py:29`). The engine's one-shot outputs are small (a status
-/// table, a JSON line), so the pipes never need concurrent draining: poll to
-/// exit, then read what the kernel buffered.
+/// verbatim (`cli.py:29`, `subprocess.run(capture_output=True)` = `communicate()`).
+/// The pipes are drained CONCURRENTLY with the wait, to EOF — the audit-base polled
+/// to exit and read only after, and that deadlocks on the pipe buffer: a child whose
+/// stdout passes the kernel's 64 KiB blocks on `write`, never exits, and the poll loop
+/// burns the whole `timeout` answering a false timeout. The engine's estimate line is
+/// exactly that size class: one JSON line per root carrying `subfolders.prefix(500)`
+/// of per-subfolder estimates (main.swift:259 — folder, seconds, files, kind_seconds,
+/// long_files, later_seconds, bytes ≈ 300 B each), so a tree with hundreds of
+/// subfolders (the Nextcloud bench's thousands) puts well over 100 KiB on one line:
+/// `POST /api/v1/estimate` answered 502 "timed out" after
+/// `DIGUP_SERVER_ESTIMATE_TIMEOUT_S` while the engine sat blocked on a full pipe.
+/// The readers below drain in the background (std keeps only the READ ends in the
+/// parent, so the child's write-end closes at exit and the reads hit EOF), the child
+/// runs free, and the poll sees it exit. On the timeout the kill closes the
+/// write-end, the readers EOF, and the partials drop — `cli.py` discards
+/// `TimeoutExpired`'s partial output the same.
 pub fn run(
     argv: &[String],
     env: &[(String, OsString)],
@@ -53,6 +66,23 @@ pub fn run(
         Ok(child) => child,
         Err(error) => return Err(CliError(format!("cannot start the engine helper: {error}"))),
     };
+    // `communicate()`'s readers: each pipe drains to EOF on its own thread while the
+    // exit poll runs. A `read_to_end` here is the whole channel — no span, no size
+    // assumption, the stream ends when the write-end closes.
+    let mut stdout_reader = child.stdout.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut data = Vec::new();
+            let _ = pipe.read_to_end(&mut data);
+            data
+        })
+    });
+    let mut stderr_reader = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut data = Vec::new();
+            let _ = pipe.read_to_end(&mut data);
+            data
+        })
+    });
     let started = Instant::now();
     let code = loop {
         match child.try_wait() {
@@ -63,8 +93,10 @@ pub fn run(
         if started.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
-            // Python: TimeoutExpired → CLIError, quoting the same words (`cli.py:33`
-            // — "quote the engine instead", api.py:6's rule).
+            // The kill closed the write-ends: the readers EOF now. Their partials
+            // drop with the scope — cli.py's TimeoutExpired partials are discarded.
+            drop(stdout_reader.take());
+            drop(stderr_reader.take());
             return Err(CliError(format!(
                 "digup {} timed out after {} s",
                 argv.get(1).cloned().unwrap_or_else(|| "?".to_string()),
@@ -73,14 +105,16 @@ pub fn run(
         }
         std::thread::sleep(Duration::from_millis(5));
     };
-    let mut stdout = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        let _ = pipe.read_to_end(&mut stdout);
-    }
-    let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        let _ = pipe.read_to_end(&mut stderr);
-    }
+    // The child exited: its write-ends are closed, so both reads are at EOF and
+    // joining is prompt. (A panicking reader — the pipe read never panics; std maps
+    // the OS fault to Err, the readers ignore it and hand over what they got —
+    // joins to the empty vector, the same `read_to_end` swallow the audit-base had.)
+    let stdout = stdout_reader
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
     if code != Some(0) {
         // `(proc.stderr or proc.stdout).strip() or f"digup exited {returncode}"`.
         let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
@@ -170,4 +204,38 @@ pub fn status(config: &EngineConfig, timeout: Duration) -> Result<Value, CliErro
         }));
     }
     Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run;
+    use std::time::{Duration, Instant};
+
+    /// `communicate()`'s channel, measured at the pipe buffer. A child writing past
+    /// the kernel's 64 KiB blocks on `write` until a reader takes the bytes; the
+    /// audit-base polled to exit and read only after, so the child NEVER exited
+    /// (blocked on the full pipe), the poll burned the whole timeout, and the caller
+    /// got a false timeout. `dd` of 100 KiB is the engine's own size class: the
+    /// estimate JSON line carries `subfolders.prefix(500)` of per-subfolder estimates
+    /// (main.swift:259) — over 100 KiB on a tree with hundreds of subfolders, which is
+    /// every real media tree.
+    #[test]
+    fn a_child_writing_past_the_pipe_buffer_completes() {
+        let argv: Vec<String> = ["dd", "if=/dev/zero", "bs=1024", "count=100"]
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect();
+        let started = Instant::now();
+        let out = run(&argv, &[], Duration::from_secs(30)).expect("the child completes");
+        let elapsed = started.elapsed();
+        assert_eq!(
+            out.len(),
+            100 * 1024,
+            "the whole 100 KiB arrives (the pipe buffer is 64 KiB)"
+        );
+        assert!(
+            elapsed < Duration::from_secs(25),
+            "no timeout burned: {elapsed:?}"
+        );
+    }
 }
