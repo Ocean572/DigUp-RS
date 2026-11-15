@@ -2,6 +2,30 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-15 — The Rust core becomes `main`: audit-wave gates, history restructure, repo push
+
+Gate record for the audit wave (all measured on ai-ubuntu-computer): battery
+`scripts/rust/audit.sh` 18 PASS / 0 FAIL (`cargo test --workspace` 40 suites ok);
+contract suite over the Rust payload 139 passed / 0 failed / 0 SKIPPED (230.77 s,
+four mounts, the suite builds its indexes with the Rust binary); twin gate 19/19
+byte-identical against the Swift twin; compose 14 shapes validate and `server.yml`
+now pins the rust + rust+nvidia shapes; Rust Gate B 3/3 PASS — device choice
+`speed --model --json` device=gpu agreement 0.9997194609668691 (gpu-vs-cpu seconds
+picture 0.149/2.689, screen 0.321/5.794, text 0.0297/0.2384, frame 0.0812/1.465,
+sound 0.2204/4.8904), compose rust+nvidia /health 200, index job sampled at 0.15 s:
+peak 94 %, busy 36 % of 83 samples, model on card 80/83 (GTX 1070 sm_61, CUDA 11.8
+chain, CUDA_ARCHS 61). rusqlite 0.32→0.41 (lock 0.41.1 + libsqlite3-sys 0.39.1)
+clears RUSTSEC-2026-0459 with zero code edits on the port's db.rs surface; the
+ledger `docs/RUST_PORT_AUDIT.md` closes wave-5 rows W5-8..W5-10 + Clean-verified
+row 10.
+
+Structure (pushed 2026-11-15): `main` = the Rust core tip (`1023796`, fast-forward
+from the Swift integration tip `b1dff21` — 96 commits); the Swift engine is kept
+on branch `swift-reference` (`b1dff21`); `feature/rust-core-port` published as the
+work branch; the 11 merged local PR branches deleted. Repo renamed to
+`Ocean572/DigUp-RS` (GitHub UI action — old URL redirects); `origin` repointed to
+`git@github.com:Ocean572/DigUp-RS.git` (SSH key, IdentitiesOnly).
+
 ## 2026-11-13 — Rust port Stages 5–6: the CLI verbs + the eval twin, then the shipping image without Python
 
 The Rust workspace (`crates/`) is at its last CLI verbs and its first shipping shapes.
