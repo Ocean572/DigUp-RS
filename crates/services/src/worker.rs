@@ -19,6 +19,63 @@ use digup_runtime::LlamaEmbedder;
 
 use crate::emit::emit;
 
+/// Swift's `request["inputs"] as? [String] ?? []` (WorkerService.swift:26) —
+/// the cast is ALL-OR-NOTHING over the array: a string array is kept as it
+/// stands; ANY non-string element (a number, a bool, a null, a nested array)
+/// fails the whole cast and the request answers with `[]`; a non-array
+/// (a string, an object, a null, a missing key) is the same refusal.
+/// Measured on swift-corelibs 6.4 (2026-11-15, f7cast.swift):
+/// `["a",7,"b"]`->nil, `["a",true]`->nil, `["a",null]`->nil, `"a"`->nil,
+/// `{"a":"b"}`->nil; `["a","b"]`->kept, `[]`->kept. The empty answer runs
+/// the op on zero inputs: `ok:true` with `count:0`, `vectors:""`, `errors:[]`
+/// (Swift's `embedTexts` ends `if sequences > 0` — no batch for no inputs).
+/// The audit-base ran `filter_map` — per-element: `["a",7,"b"]` embedded
+/// `a` and `b` (count:2) where the engine embeds NOTHING (count:0).
+fn swift_cast_inputs(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| row.as_str().map(str::to_string))
+                .collect::<Option<Vec<String>>>()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+/// Swift's `request["budget"] as? Int` (WorkerService.swift:40) — the
+/// NSNumber bridge of swift-corelibs, measured 2026-11-15
+/// (f7cast.swift + f7cast2.swift): integers pass; WHOLE-VALUED doubles
+/// bridge (`280.0`->280, `140.0`->140, `-3.0`->-3, `1e18`->1e18);
+/// fractional doubles refuse (`2.5`, `140.5`); booleans bridge (`true`->1,
+/// `false`->0); strings and nulls refuse; values outside the Int64 range
+/// refuse (`1e19`, `2^63`; `2^63-1` passes). `?? 280` supplies the default
+/// for a refusal. The audit-base ran serde's `as_i64`, which refuses every
+/// JSON float and every bool: `140.0` defaulted to 280 where the engine
+/// embeds at 140 (the vectors differ — `ok:true` both sides, different
+/// bytes), and `true` defaulted to a silent 280-embed where the engine
+/// bridges 1, `budget must be one of [70, 140, 280, 560, 1120]` refuses
+/// and the reply is `ok:false`.
+fn swift_cast_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Bool(flag) => Some(i64::from(*flag)),
+        Value::Number(number) => {
+            if let Some(int) = number.as_i64() {
+                return Some(int);
+            }
+            let float = number.as_f64()?;
+            if float.fract() == 0.0
+                && (-9_223_372_036_854_775_808_f64..9_223_372_036_854_775_808_f64).contains(&float)
+            {
+                Some(float as i64)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// `workerService(_:)`. `text_only`: `--text-only` — queries only, no media encoders.
 pub fn worker_service(text_only: bool) -> i32 {
     let embedder = match LlamaModels::locate()
@@ -42,15 +99,7 @@ pub fn worker_service(text_only: bool) -> i32 {
             continue;
         };
         let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let inputs: Vec<String> = request
-            .get("inputs")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let inputs = swift_cast_inputs(request.get("inputs"));
         let reply = handle(&embedder, &request, &inputs, &id, &info_fields);
         match reply {
             Ok(reply) => emit(&reply),
@@ -105,8 +154,10 @@ fn handle(
                     .map(|rows| rows.into_iter().map(Embedding::made).collect())
                     .map_err(|e| e.to_string())?,
                 "image" => {
-                    let budget =
-                        request.get("budget").and_then(Value::as_i64).unwrap_or(280) as i32;
+                    let budget = request
+                        .get("budget")
+                        .and_then(swift_cast_int)
+                        .unwrap_or(280) as i32;
                     embedder
                         .embed_images(inputs, budget)
                         .map_err(|e| e.to_string())?
@@ -165,4 +216,79 @@ fn info_fields(info: &digup_runtime::worker::WorkerInfo) -> Value {
         "text_only": info.text_only,
         "load_seconds": info.load_seconds.unwrap_or(0.0),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{swift_cast_inputs, swift_cast_int};
+    use serde_json::json;
+
+    #[test]
+    fn inputs_are_the_all_or_nothing_string_cast() {
+        // Every row is a measurement of swift-corelibs 6.4 (2026-11-15).
+        assert_eq!(swift_cast_inputs(Some(&json!(["a", "b"]))), vec!["a", "b"]);
+        assert!(swift_cast_inputs(Some(&json!([]))).is_empty());
+        // The fails-before (recorded by `the_audit_base_casts_inputs_per_element`):
+        // the engine answers NOTHING for a mixed array — count:0, vectors:"" —
+        // where the audit-base's per-element filter_map embedded "a" and "b".
+        assert!(swift_cast_inputs(Some(&json!(["a", 7, "b"]))).is_empty());
+        assert!(swift_cast_inputs(Some(&json!(["a", true]))).is_empty());
+        assert!(swift_cast_inputs(Some(&json!(["a", null]))).is_empty());
+        assert!(swift_cast_inputs(Some(&json!(["a", ["b"]]))).is_empty());
+        assert!(swift_cast_inputs(Some(&json!("a"))).is_empty());
+        assert!(swift_cast_inputs(Some(&json!({"a": "b"}))).is_empty());
+        assert!(swift_cast_inputs(None).is_empty());
+    }
+
+    #[test]
+    fn budget_is_the_measured_number_bridge_with_the_280_default() {
+        assert_eq!(swift_cast_int(&json!(280)), Some(280));
+        assert_eq!(swift_cast_int(&json!(280.0)), Some(280));
+        assert_eq!(swift_cast_int(&json!(140.0)), Some(140)); // fails-before: 280 (audit-base)
+        assert_eq!(swift_cast_int(&json!(-3)), Some(-3));
+        assert_eq!(swift_cast_int(&json!(-3.0)), Some(-3));
+        assert_eq!(
+            swift_cast_int(&json!(1e18)),
+            Some(1_000_000_000_000_000_000)
+        );
+        assert_eq!(swift_cast_int(&json!(true)), Some(1)); // fails-before: 280 (audit-base)
+        assert_eq!(swift_cast_int(&json!(false)), Some(0));
+        assert_eq!(
+            swift_cast_int(&json!(9223372036854775807i64)),
+            Some(9223372036854775807)
+        );
+        assert_eq!(swift_cast_int(&json!(2.5)), None);
+        assert_eq!(swift_cast_int(&json!(140.5)), None);
+        assert_eq!(swift_cast_int(&json!(1e19)), None);
+        assert_eq!(swift_cast_int(&json!(9223372036854775808u64)), None);
+        assert_eq!(swift_cast_int(&json!("280")), None);
+        assert_eq!(swift_cast_int(&json!(null)), None);
+    }
+
+    #[test]
+    fn the_audit_base_casts_inputs_per_element_and_defaults_the_bridge() {
+        // F-07's fails-before, recorded at the fixed tip: the audit-base
+        // expressions verbatim. `filter_map` KEEPS the string elements of a
+        // mixed array (a 2-input embed where the engine embeds nothing), and
+        // serde's `as_i64` refuses whole-valued doubles and bools, so
+        // `unwrap_or(280)` silently embeds at 280 where the engine embeds at
+        // 140 (`140.0`) or refuses the whole request (`true` -> 1 ->
+        // `budget must be one of [70, 140, 280, 560, 1120]` -> ok:false).
+        let rows = json!(["a", 7, "b"]);
+        let audit_inputs: Vec<String> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        assert_eq!(audit_inputs, vec!["a", "b"]); // the engine's answer is []
+        for budget in [json!(140.0), json!(true)] {
+            assert_eq!(
+                budget.as_i64().unwrap_or(280),
+                280, // the audit-base: a silent 280-embed on BOTH
+            );
+        }
+        assert_eq!(swift_cast_int(&json!(140.0)), Some(140)); // the engine: embed at 140
+        assert_eq!(swift_cast_int(&json!(true)), Some(1)); // the engine: refuse (1 is no budget)
+    }
 }
