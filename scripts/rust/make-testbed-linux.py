@@ -35,7 +35,6 @@ Commons picture subjects are the eval ground truth: a penguin photo answers
 "a penguin"). Everything generated here is synthetic — no personal data.
 """
 import argparse
-import json
 import os
 import shutil
 import subprocess
@@ -43,11 +42,10 @@ import sys
 import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from getimg import subject_url, get  # the Commons fetcher, same folder
-
 import arabic_reshaper
 from bidi.algorithm import get_display
 from fpdf import FPDF
+from getimg import get, subject_url  # the Commons fetcher, same folder
 from PIL import Image, ImageDraw, ImageFont
 
 NOTO = "/usr/share/fonts/truetype/noto"
@@ -252,17 +250,17 @@ def shot_swift_code(path):
 
 ANNUAL = [
     ("Quarterly business review",
-     "Revenue grew 20% compared to last year, driven by strong sales in Europe and a new enterprise plan. "
+     ("Revenue grew 20% compared to last year, driven by strong sales in Europe and a new enterprise plan. "
      "Operating costs stayed flat, and the team hired four engineers. Next quarter we will focus on retention "
-     "and on expanding the partner program in Japan."),
+     "and on expanding the partner program in Japan.")),
     ("Hiking trip to Mount Fuji",
-     "We started the climb from the Yoshida trail at the fifth station before sunrise. The path was rocky and "
+     ("We started the climb from the Yoshida trail at the fifth station before sunrise. The path was rocky and "
      "cold near the summit, but the view of the clouds below the crater was unforgettable. Pack warm gloves, "
-     "a headlamp and enough water; the mountain huts sell instant noodles."),
+     "a headlamp and enough water; the mountain huts sell instant noodles.")),
     ("Sourdough bread recipe",
-     "Feed the starter the night before. Mix 500 g flour, 350 g water and 100 g active starter, rest for an "
+     ("Feed the starter the night before. Mix 500 g flour, 350 g water and 100 g active starter, rest for an "
      "hour, then add 10 g salt. Stretch and fold four times, shape a boule, proof overnight in the fridge and "
-     "bake in a Dutch oven at 250 °C."),
+     "bake in a Dutch oven at 250 °C.")),
 ]
 
 RECEIPT = ["BLUE BOTTLE COFFEE", "Hayes Valley, San Francisco", "", "Oat latte            5.50",
@@ -444,15 +442,15 @@ BN = {
 }
 BN_PDF = [
     ("বাড়ি ভাড়ার চুক্তিপত্র",
-     "ধানমন্ডি ৭ নম্বর রোডের তিন বেডরুমের ফ্ল্যাটটি মাসিক ২৫,০০০ টাকা ভাড়ায় দেওয়া হলো। ভাড়াটিয়া দুই মাসের "
+     ("ধানমন্ডি ৭ নম্বর রোডের তিন বেডরুমের ফ্ল্যাটটি মাসিক ২৫,০০০ টাকা ভাড়ায় দেওয়া হলো। ভাড়াটিয়া দুই মাসের "
      "ভাড়া অগ্রিম জমা দেবেন। প্রতি মাসের পাঁচ তারিখের মধ্যে ভাড়া পরিশোধ করতে হবে। বিদ্যুৎ, পানি ও গ্যাস বিল "
      "ভাড়াটিয়া আলাদাভাবে দেবেন। চুক্তির মেয়াদ এক বছর, এবং বাড়ি ছাড়ার আগে অন্তত দুই মাস আগে বাড়িওয়ালাকে "
-     "লিখিতভাবে জানাতে হবে। ফ্ল্যাটে কোনো স্থায়ী পরিবর্তন করতে হলে বাড়িওয়ালার অনুমতি লাগবে।"),
+     "লিখিতভাবে জানাতে হবে। ফ্ল্যাটে কোনো স্থায়ী পরিবর্তন করতে হলে বাড়িওয়ালার অনুমতি লাগবে।")),
     ("প্রোগ্রামিং ক্লাসের নোট",
-     "আজকের ক্লাসে আমরা পাইথনে লুপ আর ফাংশন শিখেছি। for লুপ দিয়ে একটি তালিকার প্রতিটি উপাদানের উপর কাজ করা "
+     ("আজকের ক্লাসে আমরা পাইথনে লুপ আর ফাংশন শিখেছি। for লুপ দিয়ে একটি তালিকার প্রতিটি উপাদানের উপর কাজ করা "
      "যায়, আর while লুপ চলতে থাকে যতক্ষণ শর্তটি সত্য থাকে। ফাংশন তৈরি করতে def শব্দটি ব্যবহার করা হয়, এবং "
      "return দিয়ে ফলাফল ফেরত পাঠানো হয়। বাড়ির কাজ: একটি ফাংশন লিখুন যা একটি সংখ্যার ফ্যাক্টোরিয়াল বের "
-     "করে, তারপর লুপ দিয়ে এক থেকে দশ পর্যন্ত সব সংখ্যার ফ্যাক্টোরিয়াল ছাপুন।"),
+     "করে, তারপর লুপ দিয়ে এক থেকে দশ পর্যন্ত সব সংখ্যার ফ্যাক্টোরিয়াল ছাপুন।")),
 ]
 BN_SUNDARBANS = (
     "সুন্দরবন ভ্রমণ\n\nখুলনা থেকে লঞ্চে করে আমরা তিন দিনের জন্য সুন্দরবনে গিয়েছিলাম। ম্যানগ্রোভ বনের খালে "
@@ -478,13 +476,13 @@ AR = {
 }
 AR_PDF = [
     ("التقرير الربعي",
-     "ارتفعت المبيعات بنسبة خمسة عشر بالمئة في الربع الثالث مقارنة بالعام الماضي، بفضل نمو قوي في أسواق الخليج "
+     ("ارتفعت المبيعات بنسبة خمسة عشر بالمئة في الربع الثالث مقارنة بالعام الماضي، بفضل نمو قوي في أسواق الخليج "
      "وإطلاق خدمة الاشتراك الجديدة. بقيت التكاليف التشغيلية مستقرة، وانضم ثلاثة مهندسين جدد إلى الفريق. في "
-     "الربع القادم سنركز على رضا العملاء وتوسيع شبكة الشركاء."),
+     "الربع القادم سنركز على رضا العملاء وتوسيع شبكة الشركاء.")),
     ("رحلة إلى البتراء",
-     "زرنا مدينة البتراء الأثرية في جنوب الأردن. مشينا عبر السيق الضيق حتى ظهرت الخزنة المنحوتة في الصخر "
+     ("زرنا مدينة البتراء الأثرية في جنوب الأردن. مشينا عبر السيق الضيق حتى ظهرت الخزنة المنحوتة في الصخر "
      "الوردي. صعدنا إلى الدير في الصباح الباكر لتجنب الحر، وتناولنا الغداء في قرية وادي موسى. أنصح بارتداء "
-     "حذاء مريح وحمل الكثير من الماء."),
+     "حذاء مريح وحمل الكثير من الماء.")),
 ]
 
 
@@ -576,8 +574,8 @@ def build_media(tb, img, audio, espeak):
         "-loop", "1", "-t", "6", "-i", os.path.join(img, "Animals-Penguin.jpg"),
         "-loop", "1", "-t", "6", "-i", os.path.join(img, "Animals-Zebra.jpg"),
         "-loop", "1", "-t", "6", "-i", os.path.join(img, "Animals-Parrot.jpg"),
-        "-filter_complex", "[0:v]scale=768:768,setsar=1[a];[1:v]scale=768:768,setsar=1[b];[2:v]scale=768:768,setsar=1[c];"
-                            "[a][b][c]concat=n=3:v=1:a=0,format=yuv420p", "-r", "24", film])
+        "-filter_complex", ("[0:v]scale=768:768,setsar=1[a];[1:v]scale=768:768,setsar=1[b];[2:v]scale=768:768,setsar=1[c];"
+                            "[a][b][c]concat=n=3:v=1:a=0,format=yuv420p"), "-r", "24", film])
     for s in (0, 6, 12):
         sh(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(s), "-t", "6", "-i", film, "-c:v", "libx264",
             "-pix_fmt", "yuv420p", os.path.join(V, f"seg_{s}s.mp4")])

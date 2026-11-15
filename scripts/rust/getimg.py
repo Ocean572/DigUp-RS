@@ -63,7 +63,12 @@ def main():
         try:
             written = get(subject_url(search), os.path.join(out_dir, out))
             print(f"ok  {out}  {written}")
-        except (SystemExit, Exception) as e:
+        except (SystemExit, OSError, ValueError, KeyError) as e:
+            # The realistic failures, named: SystemExit (subject_url's "no usable file"),
+            # OSError (urllib's URLError/HTTPError, timeouts, the local write),
+            # ValueError (json.JSONDecodeError, UnicodeDecodeError), KeyError (an API
+            # reply missing a key). Anything else is the builder's own bug — let it
+            # raise; a fixture script that swallows its defects invents fixtures.
             print(f"FAIL {out}: {e}")
             fails.append(out)
     if fails:

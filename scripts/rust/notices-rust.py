@@ -52,8 +52,8 @@ def section(title, *texts):
 
 def ffmpeg_versions():
     script = read(ROOT / "scripts/build-ffmpeg.sh")
-    return (re.search(r"^FFMPEG_VERSION=(\S+)", script, re.M).group(1),
-            re.search(r"^DAV1D_VERSION=(\S+)", script, re.M).group(1))
+    return (re.search(r"^FFMPEG_VERSION=(\S+)", script, re.MULTILINE).group(1),
+            re.search(r"^DAV1D_VERSION=(\S+)", script, re.MULTILINE).group(1))
 
 
 def stb_license():
@@ -115,13 +115,13 @@ def rust_section(platform):
             text = read(path)
             by_text.setdefault(" ".join(text.split()), (text, []))[1].append(label)
     parts = [RULE, f"Rust crates in the payload ({len(found)}), each under its own license", RULE, "",
-             "digup and digup-server (the DigUp engine's Rust core) are built from these crates, with "
-             "the license files they ship; a text several crates share is printed once, after their names.", ""]
+             ("digup and digup-server (the DigUp engine's Rust core) are built from these crates, with "
+             "the license files they ship; a text several crates share is printed once, after their names."), ""]
     for text, labels in sorted(by_text.values(), key=lambda item: item[1][0]):
         parts += ["-" * 80, *labels, "-" * 80, "", text, ""]
     if without:
-        parts += ["-" * 80, "Crates that ship no license file: their license, authors and source (the license texts "
-                  "are above, as other crates ship them):", "-" * 80, ""]
+        parts += ["-" * 80, ("Crates that ship no license file: their license, authors and source (the license texts "
+                  "are above, as other crates ship them):"), "-" * 80, ""]
         for label, crate in without:
             authors = ", ".join(crate.get("authors") or []) or "its authors"
             source = crate.get("repository") or f"https://crates.io/crates/{crate['name']}"
@@ -148,9 +148,9 @@ def main():
     parts = [
         "The DigUp Rust payload includes code from these projects, under their own licenses. Thank you.",
         "",
-        "DigUp (https://github.com/ARahim3/DigUp) is MIT licensed; its license is the first one below. The model it "
+        ("DigUp (https://github.com/ARahim3/DigUp) is MIT licensed; its license is the first one below. The model it "
         "uses, Google DeepMind's EmbeddingGemma 2 (Apache 2.0), isn't part of this download: DigUp downloads it from "
-        "Hugging Face (`digup download-model`).",
+        "Hugging Face (`digup download-model`)."),
         "",
         section("DigUp", need(ROOT / "LICENSE")),
         section("llama.cpp and ggml (https://github.com/ggml-org/llama.cpp), the embedding runtime, with one small "
