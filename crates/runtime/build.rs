@@ -141,21 +141,42 @@ fn main() {
     // modules that load at run time sit where the loader already looks (Package.swift:31 does the
     // same with `-Xlinker -rpath`).
     println!("cargo::rustc-link-search=native={}", lib.display());
-    for name in [
-        "llama",
-        "mtmd",
-        "ggml",
-        "ggml-base",
-        "stdc++",
-        "m",
-        "pthread",
-        "dl",
-    ] {
-        println!("cargo::rustc-link-lib=dylib={name}");
+    // The vendored llama.cpp, named per platform — the way `scripts/build-llama.sh` lays it out
+    // and the Swift `CLlama` modulemap links it:
+    //   • macOS: one static `libllamacpp.a` (Metal + BLAS baked in) with Apple's frameworks.
+    //   • Linux: the shared libraries, with the CPU/GPU backends loaded as modules at run time.
+    //   • Windows: the DLLs' import libraries (the DLLs ride beside the binary); MSVC links the
+    //     C++ runtime and the CRT itself, so no `-l` for them and no `-lm -lpthread -ldl`.
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo::rustc-link-lib=static=llamacpp");
+        println!("cargo::rustc-link-lib=dylib=c++");
+        for framework in ["Accelerate", "Foundation", "Metal", "MetalKit"] {
+            println!("cargo::rustc-link-lib=framework={framework}");
+        }
     }
+    #[cfg(target_os = "linux")]
+    {
+        for name in ["llama", "mtmd", "ggml", "ggml-base"] {
+            println!("cargo::rustc-link-lib=dylib={name}");
+        }
+        println!("cargo::rustc-link-lib=dylib=stdc++");
+        for name in ["m", "pthread", "dl"] {
+            println!("cargo::rustc-link-lib=dylib={name}");
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for name in ["llama", "mtmd", "ggml", "ggml-base"] {
+            println!("cargo::rustc-link-lib=dylib={name}");
+        }
+    }
+
     // One rpath on the vendor lib folder for this crate's targets (its tests and examples link
     // it). A downstream binary finds the same libraries through LD_LIBRARY_PATH=Vendor/llama/lib,
     // which is how the Swift helper's payload is run too (`Package.swift:31` uses `-Xlinker -rpath`).
+    // Windows takes no rpath: its DLLs sit beside the binary (Package.swift's note).
+    #[cfg(not(target_os = "windows"))]
     println!("cargo::rustc-link-arg=-Wl,-rpath,{}", lib.display());
 
     // ⑨ (the Indexer): this crate now links `crates/native` for the prepare stage (stb
@@ -170,6 +191,11 @@ fn main() {
     let pdfium = root.join("Vendor").join("pdfium").join("lib");
     println!("cargo::rustc-link-search=native={}", pdfium.display());
     println!("cargo::rustc-link-lib=dylib=pdfium");
+    // PDFium is C++. Its C++ runtime rides with llama on macOS; Linux names it here too; MSVC
+    // (Windows) links its own.
+    #[cfg(target_os = "linux")]
     println!("cargo::rustc-link-lib=dylib=stdc++");
+    // Windows takes no rpath (see above).
+    #[cfg(not(target_os = "windows"))]
     println!("cargo::rustc-link-arg=-Wl,-rpath,{}", pdfium.display());
 }
