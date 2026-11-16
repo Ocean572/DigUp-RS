@@ -22,10 +22,10 @@ use flate2::read::DeflateDecoder;
 use std::fs::File;
 use std::io::Read;
 
+#[cfg(windows)]
+use std::io::{Seek, SeekFrom};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
-#[cfg(windows)]
-use std::os::windows::fs::FileExt;
 
 use crate::extract::ExtractError;
 
@@ -72,8 +72,43 @@ pub struct ZipArchive {
 /// `m_pRead` positioned read (`FileReader.read(at:into:count:)`).
 fn read_at(file: &File, at: u64, n: usize) -> std::io::Result<Vec<u8>> {
     let mut buf = vec![0u8; n];
+    #[cfg(unix)]
     file.read_exact_at(&mut buf, at)?;
+    #[cfg(windows)]
+    read_exact_at_win(file, &mut buf, at)?;
     Ok(buf)
+}
+
+/// Windows arm of the positioned read: std's windows `FileExt` is NOT an
+/// option for the payload targets — measured 2026-11-16 on the CI's msvc
+/// leg (`read_at`/`read_exact_at` absent, the import unused) and reproduced
+/// on a gnu cross-target, so the local check sees what the CI sees. The
+/// same contract, std-only: `try_clone` yields a private cursor, and
+/// seek + `read_exact` fills the buffer exactly, leaving the primary
+/// File's cursor untouched — which is what `read_at` means. `try_clone`
+/// is stable since 1.70, well under the workspace floor.
+#[cfg(windows)]
+fn read_exact_at_win(file: &File, buf: &mut [u8], at: u64) -> std::io::Result<()> {
+    let mut cursor = file.try_clone()?;
+    cursor.seek(SeekFrom::Start(at))?;
+    cursor.read_exact(buf)
+}
+
+/// The deflate window's positioned partial read. unix: `FileExt`'s pread.
+/// Windows: the clone-cursor shape as `read_exact_at_win`, a fresh clone
+/// per call — the window advances in the decoder's ~8 KB chunks and the
+/// clone is one syscall per chunk, not the measured hot path.
+fn read_partial(file: &File, at: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+    #[cfg(unix)]
+    {
+        file.read_at(buf, at)
+    }
+    #[cfg(windows)]
+    {
+        let mut cursor = file.try_clone()?;
+        cursor.seek(SeekFrom::Start(at))?;
+        cursor.read(buf)
+    }
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> u16 {
@@ -115,7 +150,7 @@ impl std::io::Read for Window<'_> {
             return Ok(0); // the window's EOF: miniz's read loop ends at `remaining`
         }
         let n = (buf.len() as u64).min(self.remaining) as usize;
-        let filled = self.file.read_at(&mut buf[..n], self.at)?;
+        let filled = read_partial(self.file, self.at, &mut buf[..n])?;
         self.at += filled as u64;
         self.remaining -= filled as u64;
         Ok(filled)
