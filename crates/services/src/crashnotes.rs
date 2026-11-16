@@ -89,7 +89,9 @@ extern "C" fn crash_note_and_reraise(sig: c_int) {
             let fd = libc::open(
                 path,
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
-                0o644 as libc::mode_t,
+                // `open`'s mode is variadic: pass it as the C-promoted `unsigned int` (the
+                // Linux `mode_t`), which macOS's `mode_t` (`c_int`) would not be.
+                0o644 as libc::c_uint,
             );
             if fd >= 0 {
                 let _ = libc::write(fd, bytes as *const libc::c_void, len);
