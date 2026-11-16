@@ -63,10 +63,13 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
       - name: Rust (pinned — the workspace's floor is rust-version = 1.88, sha2 0.11's demand)
         run: |
+          # /opt toolchain homes, world-readable: the suite runs as an unprivileged
+          # user (see the suite step), and /root/.cargo would be 700 to it.
           curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o rustup.sh
-          sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1
+          CARGO_HOME=/opt/cargo RUSTUP_HOME=/opt/rustup sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1
           rm -f rustup.sh
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          chmod -R a+rX /opt/cargo /opt/rustup
+          echo "/opt/cargo/bin" >> "$GITHUB_PATH"
         shell: bash
       - name: Vendored libraries and llama.cpp (native on the base image — glibc floor)
         run: |
@@ -96,16 +99,26 @@ jobs:
           sha256sum -c "$RUNNER_TEMP/pins.txt"
         shell: bash
       - name: Workspace suite (schema v6, vector parity, protocol, CLI units — the ⑩ suite included)
-        run: cargo test --workspace
+        run: |
+          # The suite runs as an unprivileged user, measured necessity (2026-11-16):
+          # the suite pins WRITE-FAILURE refusals (pdf.rs: the render folder goes
+          # chmod 0500, the seam must answer "can't write …png" — Swift's throw at
+          # PDF+Portable.swift:111), and a container's root overrides DAC: the
+          # "unwritable" folder takes the writes, the premise is nullified, and the
+          # test's terminal panic (the fails-before pin) fires with the writes
+          # SUCCEEDING (measured on CI as root: "3 pages with 3 pictures, 3 files
+          # on disk"). Every measured suite run — the Mac, the battery host — was a
+          # normal user; the gates answer as one too. Build stays root's (chown to
+          # the suite user, toolchain homes world-readable).
+          useradd -m -d /home/ci ci
+          chown -R ci:ci "$GITHUB_WORKSPACE"
+          chmod -R a+rX "$RUNNER_TEMP/models"
+          su ci -s /bin/bash -c 'cd "$1" && HOME=/home/ci RUSTUP_HOME=/opt/rustup CARGO_HOME=/home/ci/.cargo PATH=/opt/cargo/bin:/usr/bin:/bin \
+            LD_LIBRARY_PATH="$1/Vendor/pdfium/lib:$1/Vendor/llama/lib" \
+            DIGUP_BACKENDS="$1/Vendor/llama/lib" DIGUP_MODELS="$2" DIGUP_FFMPEG=/usr/bin \
+            DIGUP_DEVICE=cpu DIGUP_THREADS=8 CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            cargo test --workspace' _ "$GITHUB_WORKSPACE" "$RUNNER_TEMP/models"
         shell: bash
-        env:
-          CARGO_NET_GIT_FETCH_WITH_CLI: true
-          LD_LIBRARY_PATH: ${{ github.workspace }}/Vendor/pdfium/lib:${{ github.workspace }}/Vendor/llama/lib
-          DIGUP_BACKENDS: ${{ github.workspace }}/Vendor/llama/lib
-          DIGUP_MODELS: ${{ runner.temp }}/models
-          DIGUP_FFMPEG: /usr/bin
-          DIGUP_DEVICE: cpu
-          DIGUP_THREADS: 8
       - name: The CLI answers from its own build
         run: ./target/debug/digup --help | sed -n '2p'
         shell: bash
