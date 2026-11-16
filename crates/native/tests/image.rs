@@ -1339,6 +1339,40 @@ fn the_scaled_copy_and_its_encodings_are_the_engines() {
             "{}: the PNG stb wrote",
             answer.name
         );
+        // The JPEG's bytes are pinned on the build the reference answers were measured on.
+        // stb's encoder is bit-exact there (its lossy encode is integer FDCT + quantization,
+        // the same C on every platform); on macOS the same C compiles under Apple clang, whose
+        // arm64 float rounding moves the encoder's coefficients, and the macOS engine's own
+        // previews are written by ImageIO — the Apple stack `crates/platform` carries. So the
+        // lossy-encode byte pin is deferred with that port, the way the native media pins are.
+        // Deferred means THAT byte hash only: the scaled pixels and the PNG above stay
+        // digit-for-digit on macOS (measured here 2026-11-15: both identical to the Linux pins),
+        // and the picture the seam wrote is still checked to be a real JPEG that decodes back
+        // at the scaled size, so a broken encode cannot hide behind the gate.
+        #[cfg(target_os = "macos")]
+        {
+            let bytes = std::fs::read(&jpg).unwrap();
+            assert_eq!(
+                &bytes[..2],
+                &[0xff, 0xd8],
+                "{}: the JPEG stb wrote starts with the SOI magic",
+                answer.name
+            );
+            let back = rgb::RgbImage::load(&jpg).expect("the JPEG the seam wrote decodes");
+            assert_eq!(
+                (back.width, back.height),
+                (width, height),
+                "{}: the JPEG stb wrote decodes at the scaled size",
+                answer.name
+            );
+            assert_eq!(
+                answer.rs_jpg_sha.len(),
+                64,
+                "{}: the JPEG pin is a SHA-256 hex, deferred on macOS with the Apple encode",
+                answer.name
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(
             digest(&std::fs::read(&jpg).unwrap()),
             answer.rs_jpg_sha,
