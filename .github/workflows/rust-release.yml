@@ -208,6 +208,11 @@ jobs:
             runs-on: windows-latest
             script: scripts/rust/package-windows.sh
     runs-on: ${{ matrix.runs-on }}
+    # The matrix's container is a JOB property — it applies only when the job names
+    # it (measured 2026-11-16: linux legs ran on the ubuntu-24.04 HOST, apt-get died
+    # on the root lock, and the glibc floor of §11 silently broke). null (macOS,
+    # Windows) = the plain host runner, exactly as those legs need.
+    container: ${{ matrix.container }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -266,6 +271,14 @@ jobs:
           scripts/fetch-vendor.sh
           scripts/build-llama.sh
           scripts/rust/package-windows.sh
+      - name: The glibc floor of §11 (the payload is built in 22.04 and asks 2.35)
+        if: startsWith(matrix.name, 'linux')
+        shell: bash
+        run: |
+          newest=$( (objdump -T dist/*/payload/digup dist/*/payload/digup-server 2>/dev/null || true) \
+            | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "newest glibc asked for: $newest"
+          [ -n "$newest" ] && [ "$(printf '%s\n' "$newest" GLIBC_2.35 | sort -V | tail -1)" = GLIBC_2.35 ]
       - name: The packaged CLI answers
         shell: bash
         run: |
