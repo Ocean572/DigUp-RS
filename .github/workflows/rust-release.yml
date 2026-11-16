@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - name: Rust (pinned — the workspace's floor is rust-version = 1.89: sha2 0.11's demand + File::try_lock, the Windows writer lock)
+      - name: Rust (pinned — the workspace's floor is rust-version = 1.89, raised by File::try_lock; sha2 0.11 demanded 1.88)
         run: |
           # /opt toolchain homes, world-readable: the suite runs as an unprivileged
           # user (see the suite step), and /root/.cargo would be 700 to it.
