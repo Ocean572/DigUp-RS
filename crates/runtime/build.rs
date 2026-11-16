@@ -64,7 +64,17 @@ fn libclang_shim(out: &Path) -> Option<PathBuf> {
     std::fs::create_dir_all(&shim).ok()?;
     let link = shim.join("libclang.so");
     std::fs::remove_file(&link).ok();
+    // Symlink is a unix API — the module does not exist on Windows targets
+    // (measured 2026-11-16: E0433 "cannot find `unix` in `os`" compiled this
+    // build script on the Windows payload leg). The unix behavior is untouched;
+    // the copy fallback covers non-unix shared-library layouts, and Windows
+    // finds no `found` to link in the first place — libclang ships as a .dll
+    // beside MSVC (msvc-dev-cmd exports LIBCLANG_PATH), not a .so in these
+    // unix folders.
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&found, &link).ok()?;
+    #[cfg(not(unix))]
+    std::fs::copy(&found, &link).ok()?;
     Some(shim)
 }
 
