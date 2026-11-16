@@ -447,6 +447,10 @@ mod tests {
     /// Measured on this box (2026-11-13, the drain installed / the head index installed,
     /// same fixture, same run): the drained stream adds < 32 MB of RSS; the head index
     /// adds the hour's buffer (~115 MB).
+    /// RSS is measured from `/proc/self`: a Linux-only view of the process. This gate runs where
+    /// that file exists (Linux) and is skipped where it does not (macOS, Windows); the streaming
+    /// window logic itself is covered by `the_drained_overlap_is_the_engine_s_window_minus_hop`.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_long_stream_keeps_one_window_of_memory() {
         let dir = std::env::temp_dir().join(format!("digup-windows-{}", std::process::id()));

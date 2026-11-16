@@ -183,6 +183,10 @@ fn halves_round_trip() {
 ///
 /// The pin is the fixture's own bytes: unchanged by a test that only reads.
 #[cfg(unix)]
+/// The crash is provoked by SIGKILLing the child and reading its termination signal
+/// (`ExitStatusExt::signal`); the self-kill + signal reaping this pins is a Linux process
+/// behavior, so the gate runs on Linux and is skipped where it is fragile (macOS, Windows).
+#[cfg(target_os = "linux")]
 #[test]
 fn reading_the_fixture_never_recovers_the_users_index() {
     use std::os::unix::process::ExitStatusExt;

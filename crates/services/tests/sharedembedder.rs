@@ -88,6 +88,10 @@ fn counts(builds: &Arc<Mutex<Vec<bool>>>) -> (usize, usize) {
     (built.len(), built.iter().filter(|t| !*t).count())
 }
 
+/// The footprint is read from `/proc/self/statm`: a Linux-only view of the process, so this
+/// gate runs where that file exists (Linux) and is skipped where it does not (macOS, Windows).
+/// The allocation-shape intent (one value, no per-call copy) is covered by the loop it wraps.
+#[cfg(target_os = "linux")]
 #[test]
 fn info_answers_from_the_shape_and_allocates_nothing_per_call() {
     let builds = Arc::new(Mutex::new(Vec::new()));

@@ -1021,6 +1021,9 @@ mod tests {
     /// pays its windows (kB), the whole-file reader pays the file (≥ 200 MB, fails-before,
     /// recorded in the commit note). The gate threshold is 25 MB: eight times the
     /// streamed reader's real delta, eight times under the whole-file one.
+    /// VmSize is read from `/proc/self/status`: a Linux-only view of the process, so this gate
+    /// runs where that file exists (Linux) and is skipped where it does not (macOS, Windows).
+    #[cfg(target_os = "linux")]
     #[test]
     fn opening_a_big_zip_does_not_make_the_whole_file_resident() {
         let dir = tree("digup-zip-rss");
