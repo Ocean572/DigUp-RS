@@ -195,9 +195,7 @@ pub fn is_lowercase_character(c: char) -> bool {
 /// box with no macOS runner, and it made the port diverge from the Swift app on the very
 /// platform it named. The set is the same on Linux, macOS and Windows; ZWSP trims everywhere.
 pub fn is_whitespace_set(c: char) -> bool {
-    c == '\t'
-        || get_general_category(c) == GeneralCategory::SpaceSeparator
-        || c == '\u{200B}'
+    c == '\t' || get_general_category(c) == GeneralCategory::SpaceSeparator || c == '\u{200B}'
 }
 
 /// Foundation's `CharacterSet.whitespacesAndNewlines`: `.whitespaces` (ZWSP included on
@@ -631,7 +629,10 @@ mod tests {
         }
         // ZWSP: in `.whitespaces` on every Foundation family (corelibs and Apple both,
         // measured on a Mac), so it is in `.whitespacesAndNewlines` too. No platform split.
-        assert!(is_whitespace_set('\u{200B}'), "200B IS in, on every platform");
+        assert!(
+            is_whitespace_set('\u{200B}'),
+            "200B IS in, on every platform"
+        );
         assert!(
             is_whitespace_newline_set('\u{200B}'),
             "wn = ws ∪ controls ⊇ 200B"
