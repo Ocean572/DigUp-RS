@@ -122,6 +122,14 @@ jobs:
       - name: The CLI answers from its own build
         run: ./target/debug/digup --help | sed -n '2p'
         shell: bash
+        env:
+          # The loader needs the llama.cpp libraries (measured 2026-11-16: 127 =
+          # "libllama.so.0: cannot open shared object file" — a direct NEEDED from
+          # the efc8b9e link change; PDFium's own rpath resolves, the ggml trio
+          # rides the library path). Each CI step gets a fresh environment, so the
+          # suite step's LD_LIBRARY_PATH does not reach this one — the payload
+          # ships these libraries beside the binary; here they live in Vendor/.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/Vendor/llama/lib:${{ github.workspace }}/Vendor/pdfium/lib
 
   # The contract suite against the Rust payload, for the commit being published:
   # the same zero-skip bar as server.yml's server-rust job, with every mount.
