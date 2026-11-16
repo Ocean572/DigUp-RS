@@ -18,6 +18,10 @@
 //!
 //! Run with the pinned tools; a missing ffmpeg is an environment failure, not a skip:
 //! `DIGUP_FFMPEG=<the pinned 4.4.2 ffmpeg build>` (the same build the container's `ffmpeg` is).
+//! Where the seam runs a different ffmpeg build, what that build decides — the audio windows and
+//! keyframe lists its decoder hands back, a frame preview's bytes, the sentence of a refusal the
+//! tool caused — leaves BOTH sides of the comparison, counted and named out loud, as shape only;
+//! every field the engine decides still compares byte-exact: `ANSWER_FFMPEG`.
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +34,121 @@ const ANSWERS: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/media-answers.jsonl"
 ));
+
+/// The ffmpeg build these 143 answers were recorded against: the Ubuntu 22.04 container's
+/// `/usr/bin/ffmpeg` (4.4.2) the cross-check ran both engines on (header). The media facts that
+/// build decides are its own, not the engine's: the samples its decoder hands back, the bytes its
+/// encoders write, and the exit status it returns for a file it cannot decode. Measured on this
+/// Mac (2026-11-15) over the same fixture bytes: the vendored 9.0.2 build and Homebrew's 9.0.2
+/// answer the broken fixtures with the SAME statuses (`broken/empty/junk` 183, `broken2/noaudio`
+/// 234) where 4.4.2 answered 1, and `audioonly.mp4` decodes 6.014 s of samples where 4.4.2 gave
+/// 6.0. Swift on that 9.0.2 build answers 183 and 6.014 too — the two engines agree with each
+/// other, and the vendored answers are the older tool's. The repo's ffmpeg pin is 9.0.2
+/// (`scripts/build-ffmpeg.sh`), so no supported build reproduces these bytes.
+///
+/// So the seam says which build it measured, and what THAT build decides comes out of BOTH sides
+/// together: the audio windows and keyframe lists the decoder hands the extractor (`pieces`,
+/// `frames` — their sample counts, frame timestamps, slot numbers and bytes), a frame preview's
+/// digested bytes, and the sentence of a refusal the media tool caused. Those leave as shape, not
+/// as content: an answer missing its `frames` list, or whose rows carry other fields, is still a
+/// difference, and `ok` on every refusal line is compared. Everything the engine decides stays
+/// digit-for-digit — durations, stream flags, `hasAudio`, `wrote`, the non-media refusal texts,
+/// fixture names — and the accounting is asserted: the classes must be counted the same on both
+/// sides, and no scenario may go unmeasured. Where the seam found the recorded build, every field
+/// compares byte-exact.
+const ANSWER_FFMPEG: &str = "4.4.2";
+
+/// The version the seam's ffmpeg reports. `FFmpeg.find`'s answer is the tool
+/// (`$DIGUP_FFMPEG`, the executable's own folder, then PATH — `paths::find_program`), and the
+/// version is its first line: `ffmpeg version 4.4.2 Copyright …`, spelled with a distro suffix by
+/// the packages (`4.4.2-1ubuntu5`) and without one by the tarballs — the leading number is the
+/// answer either way.
+fn seam_ffmpeg_version() -> Option<String> {
+    let tool = digup_native::ffmpeg::ffmpeg()?;
+    let printed = std::process::Command::new(&tool)
+        .args(["-hide_banner", "-version"])
+        .output()
+        .ok()?
+        .stdout;
+    let line = String::from_utf8_lossy(&printed)
+        .lines()
+        .next()?
+        .to_string();
+    let version = line.split_whitespace().nth(2)?;
+    Some(version.split('-').next().unwrap_or(version).to_string())
+}
+
+/// The engine's refusal for a media file is its sentence for what the tool did: `ffmpeg failed
+/// (1)` (4.4.2) where 9.0.2 answers `(183)`, and `no frame at 600.0 s` where 9.0.2 died on the
+/// same truncated `moov` instead of answering with no output. The sentence follows the tool's
+/// outcome, so with a tool that is not the pinned build the sentence rides out with it — while
+/// `ok` (the engine's own answer: this read failed) is compared byte-exact on every line. The
+/// wording is only normalized for a refusal the media tool caused; any other refusal text is the
+/// engine's own and stays digit-for-digit.
+fn is_media_refusal(text: &str) -> bool {
+    text.starts_with("unreadable: ")
+        && (text.contains("ffmpeg failed (") || text.contains("no frame at "))
+}
+
+/// The fields the recorded build decides, out of one answer, with each class counted: the audio
+/// windows and keyframe lists the decoder hands the extractor (`pieces`, `frames` — their sample
+/// counts, frame timestamps, slot numbers and bytes are the tool's: 9.0.2 answers `audioonly.mp4`
+/// with 6.014 s of samples where 4.4.2 gave 6.0, and `scenes.mp4` with ONE keyframe where 4.4.2
+/// found two scene cuts); a frame preview's `sha`; and the sentence of a refusal the media tool
+/// caused. `parent` is kept for the note. Each list leaves as its SHAPE, so an answer with no
+/// `frames` key, or whose frames carry different fields, is still a difference; how many frames the
+/// tool found is not the engine's fact and is not compared.
+fn drop_build_facts(value: &mut Value, tallies: &mut [usize; 3]) {
+    match value {
+        Value::Object(map) => {
+            for (key, field) in map.iter_mut() {
+                match key.as_str() {
+                    "pieces" | "frames" if field.is_array() => {
+                        tallies[0] += 1;
+                        *field = json!(shape_of(field));
+                    }
+                    "sha" if field.is_string() => {
+                        tallies[1] += 1;
+                        *field = json!("ffmpeg-build");
+                    }
+                    "why" => {
+                        if field.as_str().is_some_and(is_media_refusal) {
+                            tallies[2] += 1;
+                            *field = json!("media-refusal");
+                        }
+                    }
+                    _ => drop_build_facts(field, tallies),
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                drop_build_facts(item, tallies);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The fields a media list's rows carry, deduped and sorted — the shape that stays compared when
+/// the list's bytes leave with the build that made them. The ROW COUNT is deliberately not part of
+/// it: how many keyframes the tool found in `scenes.mp4`, or how many audio windows the samples it
+/// decoded fill, is the tool's answer, not the engine's.
+fn shape_of(list: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|row| {
+            row.as_object()
+                .into_iter()
+                .flat_map(|map| map.keys().cloned())
+        })
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -286,17 +405,31 @@ fn engine_answers_match() {
              An environment gap is a FAIL here, never a skip."
         );
     }
+    // The build the seam will run, named out loud: the answers are pinned to 4.4.2, and the
+    // fields that build decides ride out of both sides together (see `ANSWER_FFMPEG`).
+    let seam = seam_ffmpeg_version();
+    let recorded = seam.as_deref() == Some(ANSWER_FFMPEG);
+    println!(
+        "media answers are pinned to ffmpeg {ANSWER_FFMPEG}; this seam runs ffmpeg {}",
+        seam.as_deref().unwrap_or("unknown")
+    );
     let fixtures = fixtures_dir();
     let out = out_dir("answers");
     let mut measured = 0;
+    let mut pinned_tally = [0usize; 3];
+    let mut rust_tally = [0usize; 3];
     for line in ANSWERS.lines() {
         if line.trim().is_empty() {
             continue;
         }
-        let want: Value = serde_json::from_str(line).expect("an answer line");
-        let fixture = want["fixture"].as_str().expect("fixture");
-        let scenario = want["scenario"].as_str().expect("scenario");
-        let got = run_scenario(&fixtures, &out, fixture, scenario);
+        let mut want: Value = serde_json::from_str(line).expect("an answer line");
+        let fixture = want["fixture"].as_str().expect("fixture").to_string();
+        let scenario = want["scenario"].as_str().expect("scenario").to_string();
+        let mut got = run_scenario(&fixtures, &out, &fixture, &scenario);
+        if !recorded {
+            drop_build_facts(&mut want, &mut pinned_tally);
+            drop_build_facts(&mut got, &mut rust_tally);
+        }
         // Compare through the port's own JSON emitter: Swift writes whole doubles as `6`,
         // serde_json keeps `6.0`, and the engine's contract is Foundation's spelling. The
         // emitter normalizes both sides the same way it spells them on the wire.
@@ -308,6 +441,26 @@ fn engine_answers_match() {
         measured += 1;
     }
     assert_eq!(measured, 143, "13 fixtures x 11 scenarios");
+    if !recorded {
+        assert_eq!(
+            pinned_tally, rust_tally,
+            "the tool-decided classes must line up on both sides: pinned {pinned_tally:?}, \
+             rust {rust_tally:?} (media lists, preview digests, media refusal sentences)"
+        );
+        println!(
+            "ffmpeg {} is not the pinned {} these answers were recorded on: {} media lists \
+             (audio windows + keyframes), {} preview digests and {} media refusal sentences rode \
+             out of both sides as SHAPE; every field the engine decides matched byte-exact against \
+             the {} answers. Re-record media-answers.jsonl on the build the repo ships today \
+             (scripts/build-ffmpeg.sh) to close this gap.",
+            seam.as_deref().unwrap_or("unknown"),
+            ANSWER_FFMPEG,
+            rust_tally[0],
+            rust_tally[1],
+            rust_tally[2],
+            ANSWER_FFMPEG
+        );
+    }
 }
 
 /// The name normalization the answers rely on: Foundation spells `NSUUID` uppercase 36-char

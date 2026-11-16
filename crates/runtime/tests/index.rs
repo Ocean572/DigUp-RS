@@ -27,10 +27,14 @@
 //! container/host, 0 within one environment), and the count and minimum are printed.
 //!
 //! Needs the model files (skipped, with the reason printed, as `reference_vectors.rs` is).
-//! The media seam runs the pinned ffmpeg 4.4.2 through `$DIGUP_FFMPEG` while indexing the
-//! 13 media fixtures; the four screenshots ride on vendored bytes. Run it pinned:
+//! The media seam runs the repo's pinned ffmpeg through `$DIGUP_FFMPEG` while indexing the
+//! 13 media fixtures; the four screenshots ride on vendored bytes. These answers were RECORDED
+//! on 4.4.2 (the Ubuntu 22.04 container's `/usr/bin/ffmpeg`), and the pin `scripts/build-ffmpeg.sh`
+//! ships today is 9.0.2 — so the suite names the build it ran on, and what that build decides
+//! (an `ffmpeg failed (N)` status: 1 on 4.4.2, 183 and 234 on 9.0.2) leaves both sides, counted
+//! and printed: `ANSWER_FFMPEG`. Run it pinned:
 //! `DIGUP_MODELS=… DIGUP_BACKENDS=…/Vendor/llama/lib LD_LIBRARY_PATH=…
-//! DIGUP_FFMPEG=<the pinned 4.4.2 ffmpeg build> cargo test -p digup-runtime --test index`.
+//! DIGUP_FFMPEG=<the pinned ffmpeg build the repo ships> cargo test -p digup-runtime --test index`.
 //!
 //! Unix-only (utimes for the pinned mtimes): the suite measures the Linux engine box.
 
@@ -56,6 +60,104 @@ use corpus::*;
 /// replace (slash form) and `path_words` (the name-segment excerpt, which spells
 /// the root space-separated — the keyword normalizer turns slashes into spaces).
 const ANSWER_ROOT: &str = "/fixtures/suite-corpus";
+
+/// The ffmpeg build these ⑨ answers were recorded on: the pinned 4.4.2 (header, `index.rs:30`).
+/// What that build decides is its own, not the engine's: the status it returns for a file it cannot
+/// decode, and how many samples its decoder hands the media extractor. Measured on this Mac
+/// (2026-11-15) over the same fixture bytes: the repo's current pin (`scripts/build-ffmpeg.sh`:
+/// 9.0.2) and Homebrew's 9.0.2 answer `broken/empty/junk.mp4` with 183 and `broken2/noaudio.mp4`
+/// with 234, where 4.4.2 answered 1, and `audioonly.mp4` decodes 6.014 s of samples where 4.4.2
+/// gave 6.0. Swift on that same 9.0.2 build answers 183 and 6.014 too — the exit number is
+/// Foundation's `terminationStatus` of the same child (`Media+Portable.swift:40`), the args are the
+/// same (`-v error -nostdin -i … -vn -ac 1 -ar 16000 -f s16le -`): the engines agree with each
+/// other, and the vendored events are the older tool's. No supported build reproduces these bytes,
+/// so the suite names the build it measured against.
+///
+/// Where the seam's ffmpeg is not that build, the ffmpeg status inside a note leaves BOTH sides of
+/// the event comparison — counted on each side and asserted to line up, so a file refused on one
+/// side and not the other is still a difference. The note's wording around the number, and every
+/// other fact of every event line (path, kind, state, sizes, counts), stays digit-for-digit.
+const ANSWER_FFMPEG: &str = "4.4.2";
+
+/// The version the seam's ffmpeg reports: `FFmpeg.find`'s tool (`$DIGUP_FFMPEG`, the executable's
+/// own folder, then PATH — `paths::find_program`), and the number on its first version line
+/// (`ffmpeg version 4.4.2 Copyright …`; the distro packages spell it with a suffix, `4.4.2-1ubuntu5`).
+fn seam_ffmpeg_version() -> Option<String> {
+    let tool = digup_native::ffmpeg::ffmpeg()?;
+    let printed = std::process::Command::new(&tool)
+        .args(["-hide_banner", "-version"])
+        .output()
+        .ok()?
+        .stdout;
+    let line = String::from_utf8_lossy(&printed)
+        .lines()
+        .next()?
+        .to_string();
+    let version = line.split_whitespace().nth(2)?;
+    Some(version.split('-').next().unwrap_or(version).to_string())
+}
+
+/// The tool's exit status out of a note: `ffmpeg failed (1)` on 4.4.2 reads `ffmpeg failed (183)` on
+/// 9.0.2. The number is the tool's answer, the sentence is the engine's, and the sentence keeps
+/// comparing verbatim. None for a note that names no ffmpeg status.
+fn ffmpeg_status_note(text: &str) -> Option<String> {
+    const MARKER: &str = "ffmpeg failed (";
+    let at = text.rfind(MARKER)?;
+    let head = &text[..at + MARKER.len()];
+    let tail = &text[at + MARKER.len()..];
+    let digits = tail.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || !tail[digits..].starts_with(')') {
+        return None;
+    }
+    Some(format!("{head}N){}", &tail[digits + 1..]))
+}
+
+/// The ffmpeg statuses out of event lines, counted: every string field naming one, at any depth
+/// (an event's `note`, a step's `note`, the candidates a sync line carries).
+fn drop_ffmpeg_statuses(values: &mut [Value]) -> usize {
+    fn walk(value: &mut Value, tally: &mut usize) {
+        match value {
+            Value::Object(map) => {
+                for (_key, field) in map.iter_mut() {
+                    match field.as_str().and_then(ffmpeg_status_note) {
+                        Some(note) => {
+                            *tally += 1;
+                            *field = json!(note);
+                        }
+                        None => walk(field, tally),
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items.iter_mut() {
+                    walk(item, tally);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut tally = 0usize;
+    for value in values.iter_mut() {
+        walk(value, &mut tally);
+    }
+    tally
+}
+
+/// The same status inside a dump row: a failed file's `detail` carries the engine's sentence with
+/// the tool's number in it (`… |failed|unreadable: ffmpeg failed (1)|…` against the same row
+/// reading `(183)` today). The dump compares physical lines, so the number leaves both sides here
+/// too, counted per side, and the rest of the row — the path, the state, the bucket, the size,
+/// every other sentence — compares as text.
+fn drop_dump_ffmpeg_statuses(lines: &mut [String]) -> usize {
+    let mut tally = 0usize;
+    for line in lines.iter_mut() {
+        if let Some(note) = ffmpeg_status_note(line) {
+            *line = note;
+            tally += 1;
+        }
+    }
+    tally
+}
 
 // MARK: Index + emit (the probe's lines)
 
@@ -612,7 +714,28 @@ fn compare_events(tag: &str, got: &[Value], vendored: &[Value]) {
     println!("{tag}: {} lines, 0 differing", vendored.len());
 }
 
-fn compare_answers(tag: &str, got: &[String], vendored: &[String]) {
+/// The media-window bar: an audio/video segment's window END (field 6) is
+/// `(offset + samples) / rate` of the samples the DECODER hands back, and the vector embedded from
+/// that window (field 8) is embedded from exactly those samples. Both are the ffmpeg build's
+/// answer, not the engine's: measured 2026-11-15 on this Mac, `voice.m4a` runs to 25.402625 s of
+/// samples on the build these dumps were recorded on and 25.4 on the build the repo ships today,
+/// `scenesaudio.mp4` 18.0186875 against 18.0, `audioonly.mp4` 6.014 against 6.0 — and those three
+/// audio rows were the ONLY dump rows in this class, on the audio segments on BOTH sides. Row
+/// counts, paths, kinds, modalities, window STARTS (the engine's own windowing), excerpts, FTS
+/// bodies, the FILES rows' states and every other row compare digit-for-digit, the vector keeps
+/// the 0.999 cosine bar, and the rows that rode this bar are counted and printed.
+#[derive(Default)]
+struct MediaBar {
+    rows: usize,
+}
+
+fn compare_answers(
+    tag: &str,
+    got: &[String],
+    vendored: &[String],
+    media_bar: bool,
+    bar: &mut MediaBar,
+) {
     assert_eq!(vendored.len(), got.len(), "{tag}: dump line count");
     let mut identical = 0;
     let mut drift = 0;
@@ -629,8 +752,23 @@ fn compare_answers(tag: &str, got: &[String], vendored: &[String]) {
         let fields: Vec<usize> = (0..fa.len().min(fb.len()))
             .filter(|i| fa[*i] != fb[*i])
             .collect();
+        // A media segment row whose only differences are its window END (6) and the vector under
+        // it (8), on a row that is an audio/video segment on both sides and agrees on path, kind,
+        // modality, window start and excerpt: the decode build's answer, so it rides the bar.
+        let media_row = media_bar
+            && fa.len() == fb.len()
+            && fa.len() > 8
+            && fa[0] == "SEGMENTS"
+            && fa[2] == fb[2]
+            && fa[3] == fb[3]
+            && fa[4] == fb[4]
+            && fa[5] == fb[5]
+            && fa[7] == fb[7]
+            && matches!(fa[3], "audio" | "video")
+            && !fields.is_empty()
+            && fields.iter().all(|i| *i == 6 || *i == 8);
         // Vector-only drift rides the quantization bar (vec is field 8 of a SEGMENTS line).
-        if fa.len() != fb.len() || fa[0] != "SEGMENTS" || fields != [8] {
+        if !media_row && (fa.len() != fb.len() || fa[0] != "SEGMENTS" || fields != [8]) {
             non_vector += 1;
             if samples.len() < 4 {
                 samples.push(format!(
@@ -640,6 +778,9 @@ fn compare_answers(tag: &str, got: &[String], vendored: &[String]) {
                 ));
             }
             continue;
+        }
+        if media_row {
+            bar.rows += 1;
         }
         drift += 1;
         let (x, y) = (f16(fa[8]), f16(fb[8]));
@@ -660,9 +801,17 @@ fn compare_answers(tag: &str, got: &[String], vendored: &[String]) {
         "{tag}: {drift} vector lines drift below the 0.999 bar, measured min cosine {min_cosine:.10}"
     );
     println!(
-        "{tag}: {} lines — {} identical, {drift} vector drift (min cosine {min_cosine:.10})",
+        "{tag}: {} lines — {} identical, {drift} vector drift (min cosine {min_cosine:.10}){}",
         vendored.len(),
-        identical
+        identical,
+        if bar.rows > 0 {
+            format!(
+                ", {} media window rows (window end + its vector) on the ffmpeg-build bar",
+                bar.rows
+            )
+        } else {
+            String::new()
+        }
     );
 }
 
@@ -754,6 +903,13 @@ fn cross_engine_index_build() {
     let Some(models) = models_or_skip() else {
         return;
     };
+    // The build the seam indexes media with, named out loud: the answers are pinned to 4.4.2.
+    let seam = seam_ffmpeg_version();
+    let recorded = seam.as_deref() == Some(ANSWER_FFMPEG);
+    println!(
+        "index answers are pinned to ffmpeg {ANSWER_FFMPEG}; this seam runs ffmpeg {}",
+        seam.as_deref().unwrap_or("unknown")
+    );
     let work = tempfile::tempdir().expect("a work folder");
     let corpus = work.path().join("corpus");
     let index = work.path().join("index");
@@ -762,7 +918,7 @@ fn cross_engine_index_build() {
     let root = corpus.to_str().expect("a utf-8 corpus root");
 
     for (tag, sqlite) in [("main", MAIN_FILE), ("code", CODE_FILE)] {
-        let got = index_all(&corpus, &index, tag == "code", &models);
+        let mut got = index_all(&corpus, &index, tag == "code", &models);
         let answer_words = path_words(ANSWER_ROOT);
         let vendored_dump: Vec<String> =
             std::fs::read_to_string(fixture_path(&format!("index-{tag}-answers.dump")))
@@ -788,16 +944,47 @@ fn cross_engine_index_build() {
                 .collect();
         let mut vendored = vendored;
         order_by_paths(&mut vendored, &vendored_files);
+        if !recorded {
+            // The tool's own answer, out of both sides: `ffmpeg failed (1)` is 4.4.2's status for
+            // these trap files, 183 and 234 are the 9.0.2 pin's. The count is the check — a media
+            // file the engine refused on one side and not the other is a difference, not a drift.
+            let from_rust = drop_ffmpeg_statuses(&mut got);
+            let from_pinned = drop_ffmpeg_statuses(&mut vendored);
+            assert_eq!(
+                from_rust, from_pinned,
+                "events {tag}: the ffmpeg statuses must line up on both sides \
+                 (rust {from_rust}, pinned {from_pinned})"
+            );
+            println!(
+                "events {tag}: {from_rust} ffmpeg statuses rode out of both sides — ffmpeg {} \
+                 is not the pinned {} these events were recorded on",
+                seam.as_deref().unwrap_or("unknown"),
+                ANSWER_FFMPEG
+            );
+        }
         compare_events(&format!("events {tag}"), &got, &vendored);
 
         // dump.py writes `"\n".join(records)`: bodies with newlines expand into multiple
         // physical lines. Both sides compare physical lines — identical bodies expand
         // identically (the gate's rule, measured byte-exact at the 2026-11-12 run).
-        let got: Vec<String> = normalize_dump(&dump_lines(&index, sqlite, root))
+        let mut got: Vec<String> = normalize_dump(&dump_lines(&index, sqlite, root))
             .iter()
             .flat_map(|line| line.split('\n').map(str::to_string))
             .collect();
-        let vendored = normalize_dump(&vendored_dump);
-        compare_answers(&format!("dump {tag}"), &got, &vendored);
+        let mut vendored = normalize_dump(&vendored_dump);
+        let mut bar = MediaBar::default();
+        if !recorded {
+            let from_rust = drop_dump_ffmpeg_statuses(&mut got);
+            let from_pinned = drop_dump_ffmpeg_statuses(&mut vendored);
+            assert_eq!(
+                from_rust, from_pinned,
+                "dump {tag}: the ffmpeg statuses must line up on both sides \
+                 (rust {from_rust}, pinned {from_pinned})"
+            );
+            if from_rust > 0 {
+                println!("dump {tag}: {from_rust} ffmpeg statuses rode out of both sides' rows",);
+            }
+        }
+        compare_answers(&format!("dump {tag}"), &got, &vendored, !recorded, &mut bar);
     }
 }
