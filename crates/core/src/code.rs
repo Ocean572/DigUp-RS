@@ -146,8 +146,14 @@ pub fn line_count(text: &str) -> i64 {
     }
 }
 
-/// Swift's `split(omittingEmptySubsequences:whereSeparator:)` with the separators "\n" and
-/// "\r\n", tried longest first; a lone "\r" is ordinary text.
+/// Swift's `split(omittingEmptySubsequences:whereSeparator:)` over CHARACTERS, whose separator
+/// test is `{ $0 == "\n" || $0 == "\r\n" }`. Swift's `Character` is a grapheme cluster, and Swift
+/// merges `\r\n` into ONE `Character` (`"\r\n".count == 1`, measured on a Mac with the pinned
+/// Xcode) — so `"\r\n"` IS a separator, exactly as a lone `"\n"` is, and both end a line. A lone
+/// `"\r"` is ordinary text (its own cluster, not equal to `"\n"`). The engine drops the whole
+/// `\r\n` cluster when it splits. This is Swift's behaviour on every platform (the grapheme model
+/// is stdlib, not Foundation), so the split does not split by OS. `summary("a\r\r\nb\n")` is
+/// `"a\r"`: lines `["a\r", "b"]`, CR kept by `.whitespaces`, the code pick is the first line.
 fn split_lines(text: &str, drop_trailing_empty: bool) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();

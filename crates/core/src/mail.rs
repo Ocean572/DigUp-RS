@@ -570,7 +570,10 @@ mod tests {
         // Linux engine) and WITHOUT the line controls; `.whitespacesAndNewlines`
         // adds LF VT FF CR NEL LS PS. The header sites (MailMessage.swift:105,111,115)
         // ride `.whitespaces`, so:
-        // ZWSP edges TRIM (it is in the set):
+        // ZWSP edges TRIM on every platform: Apple's Foundation and swift-corelibs both
+        // include U+200B in `.whitespaces` (measured on a Mac, `wsprobe.swift` 2026-11-15),
+        // so the name and value edges trim and the header is collected the same on Linux,
+        // macOS and Windows.
         assert_eq!(
             header_field("Subject", "\u{200b}Subject\u{200b}: \u{200b}cafe\u{200b}"),
             vec!["cafe"]
@@ -586,7 +589,8 @@ mod tests {
             header_field("Subject", "Subject\u{85}: x"),
             Vec::<String>::new()
         );
-        // a continuation line joins with one space, ZWSP edges trimmed:
+        // a continuation line joins with one space, ZWSP edges trimmed (`.whitespaces`
+        // includes ZWSP on every Foundation family):
         assert_eq!(
             header_field("Subject", "Subject: a\r\n \u{200b}b"),
             vec!["a b"]
@@ -595,7 +599,7 @@ mod tests {
         // a CR never reaches these trims - the `.whitespaces` CR-survival of F9 is
         // unreachable HERE; it lives at the code.rs line channels.
         // The shared `.whitespacesAndNewlines` trim (office/doc sites, the mail out
-        // filter) gains ZWSP too (F9 set):
+        // filter) gains ZWSP too (it is in `.whitespaces` on every Foundation family):
         assert_eq!(crate::office::trim_ws("\u{200b}a\u{200b}"), "a");
         // and the two sets differ on the line controls (the site split):
         assert_eq!(

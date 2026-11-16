@@ -330,46 +330,44 @@ fn the_line_trim_is_the_whitespaces_set() {
 }
 
 #[test]
-// F9 (macOS branch) — the SAME channels on the Darwin engine: `.whitespaces` trims the
-// line controls and KEEPS ZWSP (the ⑩a macOS facts the set doc records). The cfg split
-// in `search_text::is_whitespace_set` answers this shape on macOS.
+// F9 — the CRLF/grapheme and ZWSP channels, measured on a Mac with the pinned Xcode
+// (`wsprobe.swift`/`probe2.swift`, 2026-11-15). Swift merges `\r\n` into ONE `Character`
+// (`"\r\n".count == 1`), so `split` drops the whole cluster and a lone `\r` survives as text;
+// `.whitespaces` (Apple's Foundation) keeps a CR and trims ZWSP. Both facts hold on every
+// Foundation family, so this shape is not platform-specific — the Linux engine answers it the
+// same way (the grapheme model is stdlib; the trim set matches corelibs).
 fn the_line_trim_on_macos_is_the_darwin_set() {
-    if cfg!(target_os = "macos") {
-        assert_eq!(code::summary("a\r\r\nb\n"), "b"); // CR trimmed: "a" empties, code pick is "b"
-        let pieces = code::lines("def a():\n    x = 1\nend\r\r\n    y = 2\n", 18);
-        // The traced handover shape (offsets 0,9,18,23,30; floor 7; the fallback cuts at
-        // line 3, handover max(3-2,1)=1, second handover max(4-2,2)=2).
-        assert_eq!(
-            pieces
-                .iter()
-                .map(|p| (p.first, p.last))
-                .collect::<Vec<(i64, i64)>>(),
-            vec![(1, 1), (2, 3), (3, 4)],
-            "Darwin: `end\r` trims to the closer `end` (the audit-base shape IS the engine here)"
-        );
-    }
+    // Swift splits `\r\n` as one line-ending and keeps the lone `\r`: lines ["a\r", "b"].
+    // `.whitespaces` keeps the CR, so the code pick is the first line, "a\r" (not "b", not
+    // "a\r\r"): the earlier macOS-pinned "b" was a hand-guess with no Mac to check it on.
+    assert_eq!(code::summary("a\r\r\nb\n"), "a\r");
+    let pieces = code::lines("def a():\n    x = 1\nend\r\r\n    y = 2\n", 18);
+    // The traced handover shape: "end\r\r\n" splits the `\r\n` cluster so the line is `end\r`,
+    // `.whitespaces` keeps its CR, so it is NOT the closer `end` and starts a new block.
+    assert_eq!(
+        pieces
+            .iter()
+            .map(|p| (p.first, p.last))
+            .collect::<Vec<(i64, i64)>>(),
+        vec![(1, 1), (2, 3), (3, 4)],
+        "`end\\r` keeps its CR (not the closer); the handover shape the Mac measures"
+    );
 }
 
 #[test]
-// F9 — ZWSP (U+200B): IN `.whitespaces` on swift-corelibs (f9full.swift, 2026-11-14:
-// the set answers 19 scalars — tab, space, the Zs separators, and 200B; ZWJ 200D is
-// NOT); NOT in it on Darwin. A summary line led by ZWSP trims to its definition on
-// Linux (the engine picks it as the `def` line); the audit-base's str::trim (White_Space
-// excludes ZWSP) kept the ZWSP, the definition test failed on the glued token
-// "\u{200B}def", and the summary returned the ZWSP-led line.
+// F9 — ZWSP (U+200B) is IN `.whitespaces` on BOTH Foundation families: swift-corelibs
+// (f9full.swift, 2026-11-14: 19 scalars — tab, space, the Zs separators, and 200B; ZWJ 200D
+// NOT) and Apple's Foundation (measured on a Mac, `wsprobe.swift` 2026-11-15:
+// `"\u{200B}a\u{200B}".trimmingCharacters(in: .whitespaces)` is `"a"`). So a summary line led
+// by ZWSP trims to its `def` line on every platform; the engine picks it as the definition.
+// The audit-base's `str::trim` (Rust's White_Space excludes ZWSP) kept the ZWSP, the definition
+// test failed on the glued token "\u{200B}def", and the summary returned the ZWSP-led line.
 fn the_summary_trim_takes_a_leading_zero_width_space() {
     let s = code::summary("\u{200B}def f():\n");
-    if cfg!(target_os = "macos") {
-        assert_eq!(
-            s, "\u{200B}def f():",
-            "Darwin keeps the ZWSP (the ⑩a set fact)"
-        );
-    } else {
-        assert_eq!(
-            s, "def f():",
-            "corelibs trims the ZWSP (f9full: 200B IS in .whitespaces)"
-        );
-    }
+    assert_eq!(
+        s, "def f():",
+        "ZWSP trims on every platform (200B IS in .whitespaces on corelibs and Apple)"
+    );
 }
 
 #[test]

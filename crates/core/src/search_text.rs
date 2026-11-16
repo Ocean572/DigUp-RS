@@ -187,17 +187,17 @@ pub fn is_lowercase_character(c: char) -> bool {
 /// separators (NBSP, Ogham, U+2000–200A, narrow NBSP, medium mathematical, ideographic)
 /// and **ZWSP U+200B** (the glibc locale's `iswspace` includes it; ZWJ U+200D is NOT in,
 /// measured scalar-by-scalar over the whole range, `f9full.swift` 2026-11-14 in
-/// `digup-builder:fixes3`). Darwin (the macOS engine) answers the same set WITHOUT ZWSP
-/// (the ⑩a macOS measurement: "ZWSP is NOT") — so ZWSP splits by platform, the
-/// established engine-split shape (`paths::real_path`, `stb::c_path`, the crawler's
-/// `isDirectory`). A trim on swift-corelibs drops a trailing ZWSP — `"end\u{200B}"`
-/// trims to `"end"` — and `str::trim` (Rust's White_Space, which excludes ZWSP) keeps
-/// it: the snippet/query/closer edges that ride these trims diverge on any text carrying
-/// ZWSP at its edges (scraped and OCR'd text carries it).
+/// `digup-builder:fixes3`). Apple's Foundation answers the SAME 19 scalars: tab + the Zs
+/// separators + ZWSP, and NOT the line controls — measured on a Mac with the pinned Xcode's
+/// `xcrun swift` (`wsprobe.swift`, 2026-11-15): `"\u{200B}a\u{200B}".trimmingCharacters(in:
+/// .whitespaces)` is `"a"` (ZWSP trims) and `"a\r"` keeps its CR. So there is NO platform
+/// split — the earlier "Darwin excludes ZWSP, trims the CR" note was a measurement taken on a
+/// box with no macOS runner, and it made the port diverge from the Swift app on the very
+/// platform it named. The set is the same on Linux, macOS and Windows; ZWSP trims everywhere.
 pub fn is_whitespace_set(c: char) -> bool {
     c == '\t'
         || get_general_category(c) == GeneralCategory::SpaceSeparator
-        || (c == '\u{200B}' && !cfg!(target_os = "macos"))
+        || c == '\u{200B}'
 }
 
 /// Foundation's `CharacterSet.whitespacesAndNewlines`: `.whitespaces` (ZWSP included on
@@ -601,11 +601,13 @@ mod tests {
     /// `digup-builder:fixes3`): 19 scalars — tab, space, the Zs separators (NBSP,
     /// Ogham, U+2000–200A, narrow NBSP, medium mathematical, ideographic) and **ZWSP
     /// U+200B**; the line controls (LF/VT/FF/CR/NEL/LS/PS) and ZWJ are NOT in it.
-    /// Darwin (the macOS engine) answers the same set WITHOUT ZWSP (the ⑩a facts,
-    /// fixtures/search-expected f046/f047: NEL/LS/PS/CR survive `.whitespaces`).
+    /// Apple's Foundation answers the SAME 19 scalars — measured on a Mac with the pinned
+    /// Xcode (`wsprobe.swift`, 2026-11-15): ZWSP trims under `.whitespaces`, CR survives.
+    /// There is NO platform split for ZWSP; the earlier "Darwin WITHOUT ZWSP" note came from
+    /// a box with no macOS runner and made the port diverge from the Swift app on macOS.
     /// `str::trim` (Rust's White_Space) is the opposite at both edges: it TRIMS the
     /// controls and KEEPS ZWSP. The engine's trims (query names, snippet edges, the
-    /// `;` test, code summaries) ride the Foundation sets, so ZWSP splits by platform.
+    /// `;` test, code summaries) ride the Foundation sets, identically on all three OSes.
     #[test]
     fn the_whitespace_set_is_the_measured_foundation_set() {
         // In on every platform: tab, space, NBSP, thin, ideographic.
@@ -627,19 +629,13 @@ mod tests {
         for c in ['\u{200D}', '\u{FEFF}', '\0'] {
             assert!(!is_whitespace_set(c) && !is_whitespace_newline_set(c));
         }
-        // ZWSP: the platform split. swift-corelibs includes it (f9full); Darwin not.
-        if cfg!(target_os = "macos") {
-            assert!(!is_whitespace_set('\u{200B}'), "Darwin: ⑩a measured fact");
-        } else {
-            assert!(
-                is_whitespace_set('\u{200B}'),
-                "corelibs: f9full measured 200B IS in"
-            );
-            assert!(
-                is_whitespace_newline_set('\u{200B}'),
-                "wn = ws ∪ controls ⊇ 200B"
-            );
-        }
+        // ZWSP: in `.whitespaces` on every Foundation family (corelibs and Apple both,
+        // measured on a Mac), so it is in `.whitespacesAndNewlines` too. No platform split.
+        assert!(is_whitespace_set('\u{200B}'), "200B IS in, on every platform");
+        assert!(
+            is_whitespace_newline_set('\u{200B}'),
+            "wn = ws ∪ controls ⊇ 200B"
+        );
     }
 
     /// The trim shapes those sets produce, pinned from the same probes (the engine's
@@ -654,12 +650,8 @@ mod tests {
         assert_eq!(trim_whitespaces_newlines("a\u{2028}"), "a");
         // NBSP and thin trim on every platform (Zs).
         assert_eq!(trim_whitespaces("x \u{A0}"), "x");
-        // ZWSP trims on corelibs/Windows, survives on Darwin.
-        if cfg!(target_os = "macos") {
-            assert_eq!(trim_whitespaces("\u{200B}end"), "\u{200B}end");
-        } else {
-            assert_eq!(trim_whitespaces("\u{200B}end"), "end");
-            assert_eq!(trim_whitespaces("end\u{200B}"), "end");
-        }
+        // ZWSP trims on every platform (it is in `.whitespaces` on corelibs and Apple).
+        assert_eq!(trim_whitespaces("\u{200B}end"), "end");
+        assert_eq!(trim_whitespaces("end\u{200B}"), "end");
     }
 }
