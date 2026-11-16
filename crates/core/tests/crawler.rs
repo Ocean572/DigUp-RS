@@ -220,21 +220,15 @@ fn the_crawl_applies_the_rules_and_reports_what_it_leaves_out() {
     assert_eq!(kinds.get("notes.txt"), Some(&FileKind::Doc));
 
     // The reason counts, exactly as `skippedLine` will print them.
-    // `thing.xyz` classifies `.ignore`; the FOLDER symlink `linkdir` joins it on the
-    // portable platforms (F1): Foundation's Linux resource values are lstat-based —
-    // `isDirectory` false for a symlink (`crawlprobe.swift`, measured 2026-11-14 in
-    // `digup-builder:fixes3`) — so the link takes the file branch, its bare name
-    // classifies `.ignore`, and the engine counts it in "other type". The audit-base
-    // followed the link (std::fs::metadata), sent it to the folder branch, and
-    // reported NOTHING for it.
-    // `thing.xyz` classifies `.ignore`, the FOLDER symlink `linkdir` joins it on the
-    // portable platforms (F1: Foundation's Linux resource values are lstat-based,
-    // `isDirectory` false for a symlink — `crawlprobe.swift`, measured 2026-11-14 in
-    // `digup-builder:fixes3` — so the link takes the file branch, its bare name
-    // classifies `.ignore`), and the bundle-named FILE `Foo.XcodeProj` classifies
-    // `.ignore` too (classify lowercases, Rules.swift:78 — Rust matches). The audit-base
-    // followed the link (std::fs::metadata), sent linkdir to the folder branch, and
-    // reported NOTHING for it.
+    // `thing.xyz` classifies `.ignore`; the FOLDER symlink `linkdir` joins it, because
+    // Foundation reads URL resource values with `lstat` and a symlink is NOT a directory —
+    // measured on swift-corelibs (`crawlprobe.swift`, 2026-11-14, `digup-builder:fixes3`)
+    // AND Apple's Foundation on a Mac (`probe3.swift`, 2026-11-15: a symlink-to-a-folder
+    // answers `isDirectory = false`). So the link takes the file branch on Linux and macOS
+    // alike, its bare name classifies `.ignore`, and the engine counts it in "other type".
+    // `Foo.XcodeProj` classifies `.ignore` too (classify lowercases, Rules.swift:78). Count 3
+    // on every platform; the audit-base followed the link (`std::fs::metadata`), sent linkdir
+    // to the folder branch, and reported NOTHING for it.
     assert_eq!(
         count(&report, "skipped", "other type"),
         3,

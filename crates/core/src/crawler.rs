@@ -47,8 +47,9 @@ pub struct CrawlProgress {
     pub root: Option<String>,
 }
 
-/// `FileSystem.info` (Linux): the file's own facts, without following a link. There are no
-/// dataless placeholders here; they are the Apple/Windows rule.
+/// `FileSystem.info`: the file's own facts, without following a link. `dataless` (an offline
+/// cloud placeholder) is the Apple rule: macOS reads it from `st_flags`; on Linux there are no
+/// dataless placeholders, so it is always `false`.
 pub struct FileInfo {
     pub is_regular: bool,
     pub size: i64,
@@ -59,19 +60,59 @@ pub struct FileInfo {
 }
 
 pub fn file_info(path: &str) -> Option<FileInfo> {
-    use std::os::linux::fs::MetadataExt;
-    // lstat, not stat: the engine reports the link itself, and a link is "not regular".
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    const S_IFMT: u32 = 0o170_000;
-    const S_IFREG: u32 = 0o100_000;
-    Some(FileInfo {
-        is_regular: meta.st_mode() & S_IFMT == S_IFREG,
-        size: meta.st_size() as i64,
-        mtime: meta.st_mtime() as f64 + meta.st_mtime_nsec() as f64 / 1e9,
-        inode: meta.st_ino() as u64,
-        device: meta.st_dev() as u64,
-        dataless: false,
-    })
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        // lstat, not stat: Foundation reports the link itself, and a link is "not regular".
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        const S_IFMT: u32 = 0o170_000;
+        const S_IFREG: u32 = 0o100_000;
+        const UF_DATAVAULT: u32 = 0o10; // st_flags: an iCloud dataless (offline) placeholder
+        Some(FileInfo {
+            is_regular: meta.st_mode() & S_IFMT == S_IFREG,
+            size: meta.st_size() as i64,
+            mtime: meta.st_mtime() as f64 + meta.st_mtime_nsec() as f64 / 1e9,
+            inode: meta.st_ino() as u64,
+            device: meta.st_dev() as u64,
+            dataless: meta.st_flags() & UF_DATAVAULT != 0,
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::linux::fs::MetadataExt;
+        // lstat, not stat: the engine reports the link itself, and a link is "not regular".
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        const S_IFMT: u32 = 0o170_000;
+        const S_IFREG: u32 = 0o100_000;
+        Some(FileInfo {
+            is_regular: meta.st_mode() & S_IFMT == S_IFREG,
+            size: meta.st_size() as i64,
+            mtime: meta.st_mtime() as f64 + meta.st_mtime_nsec() as f64 / 1e9,
+            inode: meta.st_ino() as u64,
+            device: meta.st_dev() as u64,
+            dataless: false,
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        // Windows and others: the portable facts. There is no dataless rule to read here (the
+        // Apple rule is macOS-only), so `dataless` stays false, as on Linux.
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_secs_f64())
+            .unwrap_or(0.0);
+        Some(FileInfo {
+            is_regular: meta.is_file(),
+            size: meta.len() as i64,
+            mtime,
+            inode: 0,
+            device: 0,
+            dataless: false,
+        })
+    }
 }
 
 /// `FileSystem.canList` (opendir on Linux): opening is enough — listing a cloud folder's top
@@ -286,31 +327,28 @@ pub fn crawl(
                 }
                 continue;
             }
-            // `values?.isDirectory` (Crawler.swift:96). On Linux swift-corelibs reads URL
-            // resource values with `lstat` — a symlink is NOT a directory there, measured on
-            // this box (2026-11-14, Swift 6.4 probe `/tmp/opencode/crawlprobe.swift` in
-            // `digup-builder:fixes3`, the tree `/tmp/opencode/pbase/root`): `Linkdir` (a
-            // symlink to a real folder) lists as `hasDirPath=false isDir=Some(false)`, and
-            // the enumerator never descends into it (`/Linkdir/f.txt` is never listed). So
-            // the engine sends a folder-behind-a-symlink to the FILE branch: `Rules.classify`
-            // answers `.ignore` for its bare name → `leftOut("other type")`, and a link NAMED
-            // like a file (photo.jpg) classifies by its extension, then `FileSystem.info`
-            // (lstat, `Files+Portable.swift:108-110`) fails `isRegular` →
-            // `leftOut("link or special file")`. macOS's URL resource values DO follow the
-            // link, and Windows's DirectoryWalk reports the target's DIRECTORY attribute from
-            // WIN32_FIND_DATAW (`url.hasDirectoryPath`, Crawler.swift:93-95) — the engine's
-            // answers split by platform, so the port splits the same way (the established
-            // cfg shape: `paths::real_path`, `stb::c_path`). Following the link on Linux (the
-            // audit-base's `std::fs::metadata`) routed folder-symlinks into the folder branch:
-            // no `leftOut` row at all for them, and in a code crawl `repos.enter`/
-            // `is_project_root` marked the linked folder through the link — counts the engine
-            // never reports.
+            // `values?.isDirectory` (Crawler.swift:96). Foundation reads URL resource values
+            // with `lstat`, so a symlink is NOT a directory — measured on BOTH Foundation
+            // families: Linux swift-corelibs 6.4 (2026-11-14 probe `/tmp/opencode/crawlprobe.swift`
+            // in `digup-builder:fixes3`) AND Apple's Foundation on a Mac (`probe3.swift`,
+            // 2026-11-15: a symlink-to-a-folder answers `isDirectory = false`,
+            // `isSymbolicLink = true`). So a folder-behind-a-symlink goes to the FILE branch on
+            // Linux and macOS alike: `Rules.classify` answers `.ignore` for its bare name →
+            // `leftOut("other type")`; a link NAMED like a file (photo.jpg) classifies by its
+            // extension, then `FileSystem.info` (lstat, `Files+Portable.swift:108-110`) fails
+            // `isRegular` → `leftOut("link or special file")`. Windows is the one platform whose
+            // walk reports the target's DIRECTORY attribute (`url.hasDirectoryPath`,
+            // Crawler.swift:93-95, WIN32_FIND_DATAW) — unverified on this box, kept as its own
+            // branch. The earlier "macOS follows the link" note was an unmeasured guess; following
+            // it routed folder-symlinks into the folder branch (no `leftOut` row, and in a code
+            // crawl `repos.enter`/`is_project_root` marked a linked folder through the link —
+            // counts the engine never reports on Linux, and none on macOS either).
             let is_directory = if entry.file_type().is_symlink() {
-                #[cfg(any(target_os = "macos", windows))]
+                #[cfg(target_os = "windows")]
                 let follows = std::fs::metadata(entry.path())
                     .map(|meta| meta.is_dir())
                     .unwrap_or(false);
-                #[cfg(not(any(target_os = "macos", windows)))]
+                #[cfg(not(target_os = "windows"))]
                 let follows = false;
                 follows
             } else {
