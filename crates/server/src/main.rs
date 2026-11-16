@@ -2465,19 +2465,37 @@ fn static_file(root: &Path, url_path: &str, headers: &HeaderMap, head: bool) -> 
 /// tree), and the process ends BY THE SIGNAL: uvicorn re-raises it after
 /// the graceful part, so the shell/docker report 143 on `docker stop` (the
 /// measured graceful outcome with the compose 90 s grace) and 130 on Ctrl-C.
+/// Windows has no SIGTERM to deliver: the same drain runs on Ctrl+C
+/// (`ctrl_c`), and the re-raise stays a unix-family ending — on Windows the
+/// process ends by its own exit status after the graceful part.
 async fn shutdown_signal(signal: Arc<AtomicI32>) {
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("SIGTERM handler");
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-        .expect("SIGINT handler");
-    let sig = tokio::select! {
-        _ = terminate.recv() => libc::SIGTERM,
-        _ = interrupt.recv() => libc::SIGINT,
-    };
-    // axum's `with_graceful_shutdown` needs `Future<Output = ()>`: the signal
-    // number travels through the shared cell to main, which re-raises it there.
-    signal.store(sig, Ordering::SeqCst);
-    println!("INFO: Shutting down");
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        let mut interrupt =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("SIGINT handler");
+        let sig = tokio::select! {
+            _ = terminate.recv() => libc::SIGTERM,
+            _ = interrupt.recv() => libc::SIGINT,
+        };
+        // axum's `with_graceful_shutdown` needs `Future<Output = ()>`: the signal
+        // number travels through the shared cell to main, which re-raises it there.
+        signal.store(sig, Ordering::SeqCst);
+        println!("INFO: Shutting down");
+    }
+    #[cfg(windows)]
+    {
+        // CTRL_C_EVENT: `ctrl_c()` catches the console's stop request, and a
+        // caught event is consumed — the console does not kill us, so the
+        // graceful drain is the ending. The shared cell stays 0: 143/130 are
+        // unix shell statuses, and Windows has no signal to re-raise.
+        let _ = tokio::signal::ctrl_c().await;
+        signal.store(0, Ordering::SeqCst);
+        println!("INFO: Shutting down");
+    }
 }
 
 fn get_only<H, T>(handler: H) -> MethodRouter<Shared>
@@ -2590,6 +2608,9 @@ async fn main() -> ExitCode {
     // what makes 143/130 the exit statuses shells report.
     let sig = signal.load(Ordering::SeqCst);
     if sig != 0 {
+        // The re-raise is a unix-family mechanism; `shutdown_signal` stores a
+        // non-zero signal only on unix, so this cfg gate matches its producer.
+        #[cfg(unix)]
         unsafe {
             libc::signal(sig, libc::SIG_DFL);
             libc::raise(sig);

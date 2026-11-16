@@ -12,7 +12,8 @@
 #
 # Run it on the CPU architecture the package is for (AGENTS §11: native builds only,
 # never under emulation), after scripts/fetch-vendor.sh and scripts/build-llama.sh.
-# Needs the pinned Rust toolchain (rustup, the workspace's floor is 1.88 — sha2 0.11
+# Needs the pinned Rust toolchain (rustup, the workspace's floor is 1.89 — raised
+# 2026-11-16 by File::try_lock, the Windows writer lock; sha2 0.11
 # says so on a 1.85 cargo, measured 2026-11-13), patchelf, and what
 # scripts/build-ffmpeg.sh needs (it builds the small ffmpeg the payload carries).
 set -euo pipefail

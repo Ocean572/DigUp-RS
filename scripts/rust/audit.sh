@@ -7,7 +7,7 @@
 #   scripts/rust/audit.sh            everything, including the network checks
 #   scripts/rust/audit.sh --quick    compile-shape checks only (fmt, clippy, doc, build)
 #
-# Needs: the pinned Rust toolchain (rust-version 1.88 floor), cargo-machete + cargo-audit
+# Needs: the pinned Rust toolchain (rust-version 1.89 floor), cargo-machete + cargo-audit
 # (cargo install cargo-machete cargo-audit), shellcheck (`uv tool install shellcheck-py`),
 # ruff (`uv tool install ruff`). The `test` leg needs the engine's toolchain env the suites
 # measure with: models at ModelFiles::installed(), DIGUP_BACKENDS=Vendor/llama/lib,

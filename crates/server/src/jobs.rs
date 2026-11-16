@@ -23,6 +23,7 @@
 //!   `prewarm()`, the sequence the contract suite proved.
 
 use std::collections::{BTreeMap, VecDeque};
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,6 +88,38 @@ impl std::fmt::Display for IndexBusy {
 
 // ── the flock-guarded writer helper (engine/index.py) ───────────────────────
 
+/// Non-blocking exclusive lock on the lock file. Unix: `flock(LOCK_EX|LOCK_NB)`
+/// — the inode lock the flock design runs on. Windows: `File::try_lock`, std's
+/// cross-platform non-blocking exclusive lock — the LockFileEx
+/// fail-immediately shape, the same "busy now, not queued" as flock's
+/// EWOULDBLOCK. Both platforms report 0 = acquired, non-zero = busy, so the
+/// refusal path below is shared.
+#[cfg(unix)]
+fn try_lock_writer(file: &std::fs::File) -> i32 {
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }
+}
+
+#[cfg(windows)]
+fn try_lock_writer(file: &std::fs::File) -> i32 {
+    match file.try_lock() {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+/// Release the writer lock: flock's `LOCK_UN`; Windows `File::unlock` (the
+/// handle close releases the lock too — calling first keeps both platforms'
+/// release-then-close order identical).
+#[cfg(unix)]
+fn unlock_writer(file: &std::fs::File) {
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+}
+
+#[cfg(windows)]
+fn unlock_writer(file: &std::fs::File) {
+    let _ = file.unlock();
+}
+
 /// A supervised `digup index-service` — spawn, command lines, event stream,
 /// single writer. The OS flock rides the process: opened `a+` beside the
 /// index, held for exactly as long as the helper lives.
@@ -130,7 +163,7 @@ impl IndexService {
             Ok(file) => file,
             Err(error) => return Err(IndexBusy(format!("{}: {error}", lock_path.display()))),
         };
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        let rc = try_lock_writer(&file);
         if rc != 0 {
             // The refusal sentence is exactly index.py's: fcntl's OSError rides as
             // the `from exc` cause and never reaches the text.
@@ -167,7 +200,7 @@ impl IndexService {
             proc.close(Duration::from_secs(5));
         }
         if let Some(file) = self.lock_file.take() {
-            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+            unlock_writer(&file);
             drop(file);
         }
     }
