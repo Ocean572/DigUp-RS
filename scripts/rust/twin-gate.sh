@@ -63,7 +63,18 @@ norm() { # measured seconds out; everything else stays exact
   # and the search footer's measured milliseconds. Content stays exact: the hit lines, the
   # kinds, the vector counts, z, cosines, keyword ranks, excerpts and ids — a scoring
   # difference moves one of those, and only the stopwatch normalizes.
-  sed -E -e '/"ms" : \{/,/^  \}/d' -e 's/in [0-9]+ s\b/in T s/g' -e 's/[0-9]+(\.[0-9]+)? s\b/T s/g' -e 's/search [0-9]+ ms\b/search T ms/g'
+  # The end of the number+unit run is written as "the next character is not a letter or a
+  # digit" plus an end-of-line variant, in POSIX ERE both seds understand. The shorthand `\b`
+  # is GNU-sed-only and silently matches nothing on the BSD sed of macOS (and on the sed
+  # Windows ships), where a footer differing only in its measured seconds was then reported as
+  # a content FAIL; the shorthand `[[:>:]]` is the BSD-only mirror — GNU sed 4.8 refuses the
+  # whole expression ("Invalid character class name", measured on ubuntu:22.04). A spelled-out
+  # boundary is the shape that runs on all three.
+  sed -E \
+    -e '/"ms" : \{/,/^  \}/d' \
+    -e 's/(in [0-9]+ s)([^a-zA-Z0-9])/in T s\2/g' -e 's/(in [0-9]+ s)$/in T s/' \
+    -e 's/[0-9]+(\.[0-9]+)? s([^a-zA-Z0-9])/T s\2/g' -e 's/[0-9]+(\.[0-9]+)? s$/T s/' \
+    -e 's/(search [0-9]+ ms)([^a-zA-Z0-9])/search T ms\2/g' -e 's/(search [0-9]+ ms)$/search T ms/'
 }
 probe() { # probe <label> <args…> — both engines, same store layout, byte-diffed
   local label=$1; shift
