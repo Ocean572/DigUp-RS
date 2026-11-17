@@ -29,7 +29,11 @@ cd "$(dirname "$0")/../.." || exit 1
 scripts/build-ffmpeg.sh > /dev/null
 scripts/build-llama.sh > /dev/null
 targets=()
-for arch in arm64 x86_64; do
+# Rust's canonical triple is aarch64-apple-darwin — "arm64" is Apple's
+# marketing name, not a rustup target (rustup target list has no
+# arm64-apple-darwin; measured on the mac payload leg 2026-11-17:
+# "no arm64-apple-darwin toolchain" after a green ffmpeg + llama build).
+for arch in aarch64 x86_64; do
   target=$arch-apple-darwin
   rustup target list --installed | grep -q "^$target$" || { echo "no $target toolchain (rustup target add $target)"; exit 1; }
   cargo build --release --target "$target" -p digup-cli -p digup-server
