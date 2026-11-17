@@ -188,7 +188,6 @@ jobs:
   packages:
     name: Payload (${{ matrix.name }})
     needs: [gates, suite]
-    if: ${{ github.event_name == 'release' || github.event.inputs.ref != 'main' || github.ref_type == 'tag' }}
     strategy:
       fail-fast: false
       matrix:
