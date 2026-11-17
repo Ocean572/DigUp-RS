@@ -17,6 +17,11 @@ OUT=$PWD/Vendor/ffmpeg
 STAMP="ffmpeg $FFMPEG_VERSION dav1d $DAV1D_VERSION $(sha256sum "$0" | cut -c1-12)"
 if [[ "$(cat "$OUT/BUILD" 2>/dev/null)" == "$STAMP" ]]; then exit 0; fi
 
+# CPU count for the parallel build: nproc is GNU coreutils — macOS has no
+# nproc (measured 2026-11-17 on the mac payload leg: "nproc: command not
+# found", exit 2); macOS counts cores through sysctl hw.ncpu. 4 is the
+# honest floor when neither answers.
+cpus() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
 T=$PWD/Vendor/ffmpeg-tmp
 rm -rf "$T" "$OUT"
 mkdir -p "$T"
@@ -63,7 +68,7 @@ echo "ffmpeg $FFMPEG_VERSION"
     > "$T/configure.log" 2>&1 &&
   # configure only warns about a name that matches no component: a typo would leave a format out.
   ! grep "did not match anything" "$T/configure.log" &&
-  make -j"$(nproc)" > "$T/make.log" 2>&1 &&
+  make -j"$(cpus)" > "$T/make.log" 2>&1 &&
   make install > /dev/null)
 mkdir -p "$OUT/licenses"
 cp "$T/ffmpeg-$FFMPEG_VERSION/COPYING.LGPLv2.1" "$OUT/licenses/ffmpeg-COPYING.LGPLv2.1"

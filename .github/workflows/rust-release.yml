@@ -300,6 +300,11 @@ jobs:
           exe=$(find "$smoke" \( -name digup -o -name digup.exe \) -type f | head -1)
           "$exe" --help | sed -n '2p'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # The tarball upload is the linux/macos shape; windows builds a zip
+        # (the next step) — measured 2026-11-17: the ungated glob made the
+        # windows leg die at "No files were found with the provided path:
+        # dist/*.tar.gz" right AFTER its payload step passed.
+        if: ${{ matrix.name != 'windows-x86_64' }}
         with:
           name: payload-${{ matrix.name }}
           path: dist/*.tar.gz
