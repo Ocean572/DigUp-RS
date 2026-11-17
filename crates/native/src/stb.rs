@@ -10,8 +10,13 @@ use libc::{c_char, c_int, c_uchar, c_void};
 
 // edition 2021: plain `extern "C"` blocks (the workspace's `rust-version` predates the 2024
 // spelling), so each call is wrapped in `unsafe { … }` at the seam below.
+// The seven link names carry the `digup_` prefix `build.rs` compiles the pinned stb
+// under — the rename that keeps the macOS static link's stb winner deterministic
+// against llama's vendored mtmd-helper copy (the duplicate-symbol notes in `build.rs`).
 extern "C" {
+    #[link_name = "digup_stbi_info"]
     fn stbi_info(filename: *const c_char, x: *mut c_int, y: *mut c_int, comp: *mut c_int) -> c_int;
+    #[link_name = "digup_stbi_load"]
     fn stbi_load(
         filename: *const c_char,
         x: *mut c_int,
@@ -19,6 +24,7 @@ extern "C" {
         comp: *mut c_int,
         req_comp: c_int,
     ) -> *mut c_uchar;
+    #[link_name = "digup_stbi_load_from_memory"]
     fn stbi_load_from_memory(
         buffer: *const c_uchar,
         len: c_int,
@@ -27,7 +33,9 @@ extern "C" {
         comp: *mut c_int,
         req_comp: c_int,
     ) -> *mut c_uchar;
+    #[link_name = "digup_stbi_image_free"]
     fn stbi_image_free(retval: *mut c_void);
+    #[link_name = "digup_stbir_resize_uint8_srgb"]
     fn stbir_resize_uint8_srgb(
         input_pixels: *const c_uchar,
         input_w: c_int,
@@ -39,6 +47,7 @@ extern "C" {
         output_stride_in_bytes: c_int,
         num_channels: c_int,
     ) -> *mut c_uchar;
+    #[link_name = "digup_stbi_write_png"]
     fn stbi_write_png(
         filename: *const c_char,
         w: c_int,
@@ -47,6 +56,7 @@ extern "C" {
         data: *const c_void,
         stride_in_bytes: c_int,
     ) -> c_int;
+    #[link_name = "digup_stbi_write_jpg"]
     fn stbi_write_jpg(
         filename: *const c_char,
         x: c_int,

@@ -12,12 +12,29 @@ use std::path::Path;
 fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
 
-    cc::Build::new()
-        .warnings(false)
+    // The stb public symbols are RENAMED (`digup_`-prefixed) on every platform. The reason
+    // is measured on the macOS payload link (2026-11-17): llama's mtmd-helper embeds its
+    // OWN vendored stb (the load subset, `extern "C"`), and the static link mixes it with
+    // this crate's pinned stb — ld reported `duplicate symbol '_stbi_info' … '_stbi_load'
+    // … '_stbi_load_from_memory' … '_stbi_image_free'` and picked a winner by link order,
+    // so the engine's picture decoding on macOS answered to llama's stb copy, not the
+    // pinned one (Linux/Windows never see the clash: mtmd rides the shared lib/DLL there).
+    // Renaming pins the resolution by name: `crates/native` calls its pinned copy on every
+    // platform, mtmd keeps its own, and a name change is codegen-neutral where nothing
+    // collided. Keep these seven names in sync with `src/stb.rs`'s `#[link_name]`s.
+    let mut stb = cc::Build::new();
+    stb.warnings(false)
         .flag_if_supported("-w")
         .include(root.join("Vendor/stb/include"))
-        .file(root.join("Vendor/stb/stb.c"))
-        .compile("stb");
+        .define("stbi_info", "digup_stbi_info")
+        .define("stbi_load", "digup_stbi_load")
+        .define("stbi_load_from_memory", "digup_stbi_load_from_memory")
+        .define("stbi_image_free", "digup_stbi_image_free")
+        .define("stbir_resize_uint8_srgb", "digup_stbir_resize_uint8_srgb")
+        .define("stbi_write_png", "digup_stbi_write_png")
+        .define("stbi_write_jpg", "digup_stbi_write_jpg")
+        .file(root.join("Vendor/stb/stb.c"));
+    stb.compile("stb");
     println!("cargo:rerun-if-changed=../../Vendor/stb/stb.c");
     println!("cargo:rerun-if-changed=../../Vendor/stb/include");
 

@@ -104,17 +104,19 @@ pub fn run(
     let status = child.wait().map_err(RunError::Io)?;
     // Foundation's `terminationStatus` is the signal number when a signal ended the process;
     // `ExitStatus::code()` says nothing in that case, so the signal stands in for it.
-    let code = status.code().unwrap_or_else(|| {
-        #[cfg(unix)]
-        {
+    // The cfg arms are spelled as two definitions on purpose: compiled for Windows the
+    // closure body is the plain constant 1, and clippy refuses `unwrap_or_else` over a
+    // constant (`unnecessary_lazy_evaluations`, measured on the mingw cross-check
+    // 2026-11-17) — each platform names its own fallback.
+    #[cfg(unix)]
+    let code = status
+        .code()
+        .unwrap_or_else(|| {
             use std::os::unix::process::ExitStatusExt;
             ExitStatusExt::signal(&status).unwrap_or(1)
-        }
-        #[cfg(not(unix))]
-        {
-            1
-        }
-    });
+        });
+    #[cfg(not(unix))]
+    let code = status.code().unwrap_or(1);
     if code == 0 {
         return Ok(());
     }

@@ -88,11 +88,18 @@ done
 rm -rf Vendor/pdfium && mkdir -p Vendor/pdfium
 cp -R "$T/${PDFIUM%% *}/." Vendor/pdfium/     # headers, LICENSE, licenses/ from the first list entry
 if [[ $PDFIUM == *" "* ]]; then
-  # macOS: every slice into one fat dylib, then an ad-hoc signature — the merge writes
-  # new bytes, and the arm64 slice refuses to load a dylib whose signature no longer fits.
+  # macOS: every slice into one fat dylib. The vendored dylib carries the install-name
+  # `./libpdfium.dylib` (pdfium-binaries' relative id — measured byte-level on this box:
+  # LC_ID_DYLIB is that string in both mac slices), and ld copies it verbatim into the
+  # load command: dyld resolves it against the CWD and every rpath is ignored (measured
+  # on the payload gate 2026-11-17: "Library not loaded: ./libpdfium.dylib"). Rewrite
+  # it to the @rpath form so rpaths work, then ad-hoc sign — the merge and the edit
+  # write new bytes, and the arm64 slice refuses to load a dylib whose signature no
+  # longer fits. install_name_tool on a fat file edits the id in every slice.
   slices=()
   for name in $PDFIUM; do slices+=("$T/$name/lib/libpdfium.dylib"); done
   lipo -create "${slices[@]}" -output Vendor/pdfium/lib/libpdfium.dylib
+  install_name_tool -id @rpath/libpdfium.dylib Vendor/pdfium/lib/libpdfium.dylib
   codesign --force --sign - Vendor/pdfium/lib/libpdfium.dylib
 fi
 # Windows: the DLL is in bin/, its import library is lib/pdfium.dll.lib; the module map links "pdfium".
