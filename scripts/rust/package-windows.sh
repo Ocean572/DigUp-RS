@@ -22,8 +22,9 @@ cargo build --release -p digup-cli -p digup-server
 
 # Before the payload exists the DLLs come from Vendor/ (Windows loads the exe's own
 # folder first, then PATH — the payload gate needs nothing extra, that is where its
-# DLLs land).
-probe_env() { PATH="$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/lib:$PWD/Vendor/ffmpeg/bin:$PATH" "$@"; }
+# DLLs land). PDFium's runtime DLL is in bin/, its import library in lib/ (the
+# archive's own layout, as fetch-vendor.sh's comment records).
+probe_env() { PATH="$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/bin:$PWD/Vendor/ffmpeg/bin:$PATH" "$@"; }
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
 out=dist/digup-$version-win-x64
@@ -31,7 +32,7 @@ rm -rf "$out"
 mkdir -p "$out/payload"
 cp target/release/digup.exe target/release/digup-server.exe "$out/payload/"
 cp Vendor/llama/lib/*.dll "$out/payload/"
-cp Vendor/pdfium/lib/*.dll "$out/payload/"
+cp Vendor/pdfium/bin/pdfium.dll "$out/payload/"
 cp Vendor/ffmpeg/bin/ffmpeg.exe Vendor/ffmpeg/bin/ffprobe.exe "$out/payload/"
 python3 scripts/rust/notices-rust.py windows "$out/payload/THIRD-PARTY-NOTICES.txt"
 cp LICENSE "$out/payload/LICENSE"
