@@ -6,8 +6,9 @@
 # On Linux and Windows it builds shared libraries instead, with ggml's backends as modules loaded at run
 # time (GGML_BACKEND_DL): the CPU variants always, CUDA when nvcc is found (CUDACXX, or on PATH; CUDA_ARCHS picks the GPU
 # architectures, default native), else Vulkan when its SDK is. LLAMA_SOURCE / LLAMA_BUILD point at an existing clone and
-# build folder. On Windows it runs in Git for Windows' bash inside the MSVC environment (vcvars64) and
-# leaves DLLs with their import libraries.
+# build folder. On macOS, DIGUP_UNIVERSAL=1 (set by scripts/rust/package-macos.sh) asks CMake for the arm64 + x86_64
+# slices in one archive, which is what the universal Rust payload links. On Windows it runs in Git for Windows' bash inside the
+# MSVC environment (vcvars64) and leaves DLLs with their import libraries.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TAG=b11461   # the first tags with EmbeddingGemma 2 (text + vision + audio) are b11452+
@@ -30,6 +31,17 @@ else
   FLAVOR=cpu
 fi
 STAMP="$TAG $(shasum -a 256 "$PATCH" 2>/dev/null | cut -c1-12 || sha256sum "$PATCH" | cut -c1-12) $FLAVOR"
+# macOS universal payload (scripts/rust/package-macos.sh sets DIGUP_UNIVERSAL=1): CMake
+# compiles every slice into each static archive, so libllamacpp.a carries arm64 + x86_64
+# and the x86_64 rustc link finds its llama_* / mtmd_* / ggml_* symbols (measured
+# 2026-11-17: a host-arch archive made the payload's x86_64 half "ignore" every member).
+# The stamp records the slice list, so switching modes rebuilds instead of serving a
+# host-arch archive to the universal payload.
+ARCHS=""
+if [[ $OS == Darwin && ${DIGUP_UNIVERSAL:-0} == 1 ]]; then
+  ARCHS='arm64;x86_64'
+  STAMP="$STAMP $ARCHS"
+fi
 if [[ ( -f "$OUT/lib/libllamacpp.a" || -f "$OUT/lib/libllama.so" || -f "$OUT/lib/llama.dll" ) \
       && "$(cat "$OUT/BUILD" 2>/dev/null)" == "$STAMP" ]]; then
   exit 0
@@ -70,6 +82,7 @@ if [[ $OS == Darwin ]]; then
   GENERATOR=$(command -v ninja > /dev/null && echo Ninja || echo "Unix Makefiles")
   # Only the libraries: no tools, no server, nothing downloaded at build time.
   cmake -S "$SOURCE" -B "$BUILD" -G "$GENERATOR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+    ${ARCHS:+-DCMAKE_OSX_ARCHITECTURES=$ARCHS} \
     -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_MTMD=ON \
     -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
     -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_APP=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF > /dev/null

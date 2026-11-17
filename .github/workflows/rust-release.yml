@@ -264,6 +264,10 @@ jobs:
         shell: bash
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: true
+          # The macOS seeding must match the payload script's requests: a fat PDFium
+          # (fetch-vendor) and a fat libllamacpp.a (build-llama) — an arm64-only C set
+          # makes the x86_64 half of the universal payload fail to link (measured 2026-11-17).
+          DIGUP_UNIVERSAL: ${{ startsWith(matrix.name, 'macos') && '1' || '' }}
         run: |
           scripts/fetch-vendor.sh
           scripts/build-llama.sh

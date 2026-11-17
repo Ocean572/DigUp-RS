@@ -1,8 +1,10 @@
 #!/bin/bash
 # Linux and Windows: the C libraries the engine needs where Apple's frameworks aren't there, at pinned versions, laid out
 # in Vendor/ (out of git) as Package.swift expects: SQLite with FTS5 (storage), stb (images), miniz (docx/odt, xlsx/pptx/ods/odp), PDFium
-# (PDF text and page renders; prebuilt by bblanchon/pdfium-binaries). macOS needs none of this. Does nothing when the
-# pinned set is already there. Needs curl, tar and python3 (to unzip); on Windows, Git for Windows' bash.
+# (PDF text and page renders; prebuilt by bblanchon/pdfium-binaries; a fat arm64+x86_64 dylib on macOS). Swift's macOS payload
+# needs none of this; the Rust engine's portable readers (crates/native) call the same vendored libraries on every platform, so
+# the Rust macOS payload fetches them too. Does nothing when the pinned set is already there. Needs curl, tar and python3 (to unzip);
+# on Windows, Git for Windows' bash; on macOS, lipo and codesign (Xcode's) for the fat PDFium.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SQLITE_ZIP=2026/sqlite-amalgamation-3540000.zip       # SQLite 3.54.0
@@ -15,7 +17,12 @@ PDFIUM_TAG=chromium/8086
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) PDFIUM=pdfium-linux-x64 ;;
   Linux-aarch64) PDFIUM=pdfium-linux-arm64 ;;
-  Darwin-arm64) PDFIUM=pdfium-mac-arm64 ;;
+  # macOS: BOTH mac builds, lipo'd into one fat dylib below. The Rust payload is a
+  # universal binary (arm64 + x86_64) and links this dylib at launch; a host-arch
+  # PDFium makes the x86_64 half of the payload fail to link (measured 2026-11-17:
+  # "ignoring file … found architecture 'arm64', required architecture 'x86_64'"
+  # over every FPDF_* symbol).
+  Darwin-*) PDFIUM="pdfium-mac-arm64 pdfium-mac-x64" ;;
   MINGW*|MSYS*|CYGWIN*) PDFIUM=pdfium-win-x64 ;;
   *) echo "no PDFium build known for $(uname -s)-$(uname -m)"; exit 1 ;;
 esac
@@ -74,8 +81,20 @@ rm -rf Vendor/miniz && mkdir -p Vendor/miniz/include
 cp "$T"/miniz/miniz.c Vendor/miniz/ && cp "$T"/miniz/*.h Vendor/miniz/include/ && cp "$T"/miniz/LICENSE Vendor/miniz/
 
 echo "PDFium ($PDFIUM_TAG, $PDFIUM)"
-download "$PDFIUM.tgz" "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG/\//%2F}/$PDFIUM.tgz"
-rm -rf Vendor/pdfium && mkdir -p Vendor/pdfium && tar -xzf "$T/$PDFIUM.tgz" -C Vendor/pdfium
+for name in $PDFIUM; do
+  download "$name.tgz" "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG/\//%2F}/$name.tgz"
+  mkdir -p "$T/$name" && tar -xzf "$T/$name.tgz" -C "$T/$name"
+done
+rm -rf Vendor/pdfium && mkdir -p Vendor/pdfium
+cp -R "$T/${PDFIUM%% *}/." Vendor/pdfium/     # headers, LICENSE, licenses/ from the first list entry
+if [[ $PDFIUM == *" "* ]]; then
+  # macOS: every slice into one fat dylib, then an ad-hoc signature — the merge writes
+  # new bytes, and the arm64 slice refuses to load a dylib whose signature no longer fits.
+  slices=()
+  for name in $PDFIUM; do slices+=("$T/$name/lib/libpdfium.dylib"); done
+  lipo -create "${slices[@]}" -output Vendor/pdfium/lib/libpdfium.dylib
+  codesign --force --sign - Vendor/pdfium/lib/libpdfium.dylib
+fi
 # Windows: the DLL is in bin/, its import library is lib/pdfium.dll.lib; the module map links "pdfium".
 if [[ -f Vendor/pdfium/lib/pdfium.dll.lib ]]; then cp Vendor/pdfium/lib/pdfium.dll.lib Vendor/pdfium/lib/pdfium.lib; fi
 ls Vendor/pdfium/lib
