@@ -225,6 +225,15 @@ jobs:
             ca-certificates curl git gnupg xz-utils unzip python3 binutils build-essential cmake ninja-build \
             meson nasm pkg-config patchelf file zlib1g-dev libcurl4-openssl-dev libxml2-dev libedit2 \
             libsqlite3-0 libz3-dev libpython3-dev tzdata libgomp1 clang libclang-dev libssl-dev
+      - name: Build tools (macOS — the image carries make/ninja/nasm/pkg-config/zlib, not meson)
+        # Measured 2026-11-16: the first macOS payload run reached
+        # scripts/build-ffmpeg.sh and died at "meson: command not found"
+        # (exit 127). The script's asked-for list: a C compiler, make,
+        # meson, ninja, pkg-config, zlib headers, nasm — the macos-26
+        # image has all of them except meson, so only meson is installed.
+        if: startsWith(matrix.name, 'macos')
+        shell: bash
+        run: brew install meson
       - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         if: matrix.name == 'windows-x86_64'
         with:
