@@ -115,10 +115,20 @@ pub fn footprint() -> Option<u64> {
 
 /// `getpagesize()`, the page size the statm counts are in.
 fn page_size() -> u64 {
-    let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    if size > 0 {
-        size as u64
-    } else {
+    #[cfg(unix)]
+    {
+        let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if size > 0 {
+            size as u64
+        } else {
+            4096
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Unreachable by construction: `footprint` reads /proc/self/statm,
+        // which answers no file on windows, so the page count path ends at
+        // None before this runs. The number keeps the unix fallback's value.
         4096
     }
 }

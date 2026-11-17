@@ -10,6 +10,9 @@
 //! wouldn't open. Blocks come by offset with `pread`, one at a time.
 
 use std::fs::File;
+#[cfg(windows)]
+use std::io::{Read, Seek, SeekFrom};
+#[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -125,7 +128,28 @@ impl FileReader {
     /// Copies up to `count` bytes from `offset` into `buffer`; how many it copied (0 on any
     /// failure, the engine's `guard … else { return 0 }`).
     fn read(&self, offset: u64, buffer: &mut [u8]) -> usize {
-        self.handle.read_at(buffer, offset).unwrap_or_default()
+        #[cfg(unix)]
+        {
+            self.handle.read_at(buffer, offset).unwrap_or_default()
+        }
+        #[cfg(windows)]
+        {
+            // The positioned read's windows arm: FileExt::read_at is NOT
+            // implemented for the std the payload's rustc ships (measured on
+            // the CI msvc leg 2026-11-16) — the clone-cursor shape proven at
+            // zipfile.rs:48. `try_clone` yields a PRIVATE file position: a
+            // block read from `offset` never disturbs the shared cursor, which
+            // is exactly the callback safety the header promises. Any failure
+            // answers 0 — the engine's `guard … else { return 0 }`.
+            let mut cursor = match self.handle.try_clone() {
+                Ok(cursor) => cursor,
+                Err(_) => return 0,
+            };
+            cursor
+                .seek(SeekFrom::Start(offset))
+                .and_then(|_| cursor.read(buffer))
+                .unwrap_or_default()
+        }
     }
 }
 

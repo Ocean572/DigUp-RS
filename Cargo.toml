@@ -48,6 +48,17 @@ tempfile = "3"
 memmap2 = "0.9"
 libc = "0.2"
 walkdir = "2"
+# The windows-only NT probes the services need when libc has no answer: the
+# liveness question kill(pid,0) asks on unix (OpenProcess query-right) and the
+# parent the ParentWatch poll needs (NtQueryInformationProcess) — the gnu
+# cross-check measured that the libc crate gates OpenProcess/CloseHandle to
+# msvc only, and has no getppid, SIGBUS/SIGTRAP, or sysconf for windows.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Kernel",
+    "Win32_System_Threading",
+    "Wdk_System_Threading",
+] }
 # Phase 2 step 8b (the doc readers): the Office zips inflate with the same RFC 1951 stream miniz
 # feeds the engine (`flate2`'s pure-Rust backend), and the HTML strip needs a regex engine that
 # supports case-insensitive class-free patterns the way Foundation's `NSRegularExpression` does.

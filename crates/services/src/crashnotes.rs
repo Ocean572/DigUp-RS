@@ -61,14 +61,7 @@ pub fn install(folder: &Path) {
         NOTE_LEN = bytes.len();
         NOTE_PATH = path;
     }
-    for sig in [
-        libc::SIGABRT,
-        libc::SIGBUS,
-        libc::SIGFPE,
-        libc::SIGILL,
-        libc::SIGSEGV,
-        libc::SIGTRAP,
-    ] {
+    for sig in crash_signals() {
         unsafe {
             libc::signal(
                 sig,
@@ -76,6 +69,28 @@ pub fn install(folder: &Path) {
             )
         };
     }
+}
+
+/// The fatal-signal set the crash handler is installed for. unix: the engine's
+/// six (a bus error and a trap are real faults there). Windows: the CRT's fatal
+/// four — the windows libc defines no SIGBUS and no SIGTRAP at all (measured by
+/// the gnu cross-check 2026-11-16), and the access violation that stands in for
+/// a bus error arrives as a SIGSEGV through the CRT's own mapping.
+#[cfg(not(windows))]
+fn crash_signals() -> [libc::c_int; 6] {
+    [
+        libc::SIGABRT,
+        libc::SIGBUS,
+        libc::SIGFPE,
+        libc::SIGILL,
+        libc::SIGSEGV,
+        libc::SIGTRAP,
+    ]
+}
+
+#[cfg(windows)]
+fn crash_signals() -> [libc::c_int; 4] {
+    [libc::SIGABRT, libc::SIGFPE, libc::SIGILL, libc::SIGSEGV]
 }
 
 /// Runs on the crashing thread. Everything it touches was made at install; `open`
@@ -94,7 +109,9 @@ extern "C" fn crash_note_and_reraise(sig: c_int) {
                 0o644 as libc::c_uint,
             );
             if fd >= 0 {
-                let _ = libc::write(fd, bytes as *const libc::c_void, len);
+                // unix's write takes a size_t count, the windows CRT's a
+                // c_uint: `as _` lets each target's own parameter type win.
+                let _ = libc::write(fd, bytes as *const libc::c_void, len as _);
                 let _ = libc::close(fd);
             }
         }

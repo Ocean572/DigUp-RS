@@ -959,9 +959,33 @@ fn remove_stale_scratch_folders() {
 }
 
 /// `isGone(_:)`: no process has this id now (`kill(pid, 0)` fails with ESRCH).
-fn is_gone(pid: i32) -> bool {
+#[cfg(unix)]
+pub(crate) fn is_gone(pid: i32) -> bool {
     unsafe {
         libc::kill(pid, 0) != 0
             && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+}
+
+/// Windows has no `kill`: the libc crate maps `kill` to SIGNAL DELIVERY
+/// (TerminateProcess) there, so `kill(pid, 0)` would answer "gone" for
+/// every live pid and delete the live helpers' temp dirs. The liveness
+/// question, asked of the NT kernel directly: `OpenProcess` with the
+/// query-limited right — a live pid answers a handle (closed here), a
+/// dead one answers NULL. (The libc crate's own `OpenProcess` is gated to
+/// msvc only — measured by the gnu cross-check — so the probe rides
+/// windows-sys, which compiles on every windows target.)
+#[cfg(windows)]
+pub(crate) fn is_gone(pid: i32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+        if handle.is_null() {
+            true
+        } else {
+            CloseHandle(handle);
+            false
+        }
     }
 }
