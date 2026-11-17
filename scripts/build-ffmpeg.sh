@@ -53,7 +53,7 @@ case "$(uname -s)" in MINGW*|MSYS*) static=(--extra-ldflags=-static) ;; esac
 
 echo "ffmpeg $FFMPEG_VERSION"
 (cd "$T/ffmpeg-$FFMPEG_VERSION" &&
-  PKG_CONFIG_PATH="$T/deps/lib/pkgconfig" ./configure --prefix="$OUT" --pkg-config-flags=--static "${static[@]}" \
+  PKG_CONFIG_PATH="$T/deps/lib/pkgconfig" ./configure --prefix="$OUT" --pkg-config-flags=--static ${static[@]+"${static[@]}"} \
     --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay \
     --enable-static --disable-shared --enable-zlib --enable-libdav1d \
     --enable-protocol=file,pipe \
