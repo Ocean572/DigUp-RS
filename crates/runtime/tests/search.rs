@@ -627,8 +627,17 @@ fn search_answers_match_the_engine() {
     let corpus_dir = work.path().join("corpus");
     let index = work.path().join("index");
     std::fs::create_dir_all(&index).expect("the index folder");
+    // Self-skip without the pinned models — the model-free CI bar of ci.yml's engine
+    // job (P4, 2026-11-17): the suite's contract is that model-dependent tests skip
+    // themselves with a printed reason, and this ⑩c test's model-pinned home is
+    // rust-release.yml's gates job, which downloads the pins. Measured on run
+    // 44234229551: without the guard, locate()'s expect PANICS on the model-free bar
+    // (a panic is not a skip) and the suite dies with 101.
+    let Ok(models) = LlamaModels::locate() else {
+        eprintln!("skipped: the pinned model files (DIGUP_MODELS) are not installed");
+        return;
+    };
     build_corpus(&corpus_dir);
-    let models = LlamaModels::locate().expect("the pinned model files (DIGUP_MODELS)");
     build_index(&corpus_dir, &index, false, &models);
     build_index(&corpus_dir, &index, true, &models);
     // The store's rows, pinned to the vendoring machine's bytes before anything opens the store

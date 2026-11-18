@@ -32,6 +32,9 @@ jobs:
     runs-on: ubuntu-24.04
     container: ubuntu:22.04
     timeout-minutes: 90
+    env:
+      RUSTUP_HOME: /opt/rustup
+      CARGO_HOME: /opt/cargo
     steps:
       - name: Build tools
         run: |
@@ -43,10 +46,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust (pinned)
         run: |
+          # /opt toolchain homes, world-readable: the suite runs as an unprivileged
+          # user (the Test step, the gates job's recipe) and root's ~/.cargo is 700
+          # to it.
           curl --proto '=https' '--tlsv1.2' -fsSL https://sh.rustup.rs -o rustup.sh
-          sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1 --component rustfmt,clippy
+          CARGO_HOME=/opt/cargo RUSTUP_HOME=/opt/rustup sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1 --component rustfmt,clippy
           rm -f rustup.sh
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          chmod -R a+rX /opt/cargo /opt/rustup
+          echo "/opt/cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: Vendor/ffmpeg
@@ -70,13 +77,30 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: |
-          # The C libraries ride where the tests find them: llama through DIGUP_BACKENDS
-          # (the runtime's lookup), ffmpeg beside the binary (Media's find), matching
-          # the payload layout the Docker stages ship.
-          export DIGUP_BACKENDS="$PWD/Vendor/llama/lib"
-          export DIGUP_FFMPEG="$PWD/Vendor/ffmpeg/bin"
-          export LD_LIBRARY_PATH="$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/lib"
-          cargo test --workspace --all-targets
+          # The suite runs as an unprivileged user — the gates job's measured necessity
+          # (rust-release.yml 2026-11-16), applied here when the engine job joined as
+          # the suite's Linux home (2026-11-18, run 44234229551): a container's root
+          # overrides DAC, so the suite's write-failure pins are nullified for it —
+          # pdf.rs's chmod 0500 render folder takes the writes, and the pin that fires
+          # "before the fix" reports the writes SUCCEEDING ("3 pages with 3 pictures,
+          # 3 files on disk", measured on this chain as root). Every measured suite
+          # run — the Mac, the battery host, the gates job — answers as a normal user;
+          # so does this. Build stays root's (fmt + clippy above); the workspace goes
+          # to the suite user, the toolchain homes are the world-readable /opt
+          # installs, CARGO_HOME moves to the user's writable home. The C libraries
+          # ride where the tests find them: llama through DIGUP_BACKENDS (the
+          # runtime's lookup), ffmpeg beside the binary (Media's find), matching the
+          # payload layout the Docker stages ship.
+          useradd -m -d /home/ci ci
+          chown -R ci:ci "$GITHUB_WORKSPACE"
+          # shellcheck disable=SC2016
+          # The single quotes are the point: "$1" expands inside the su'd shell, the
+          # workspace path travels to it as the positional arg.
+          su ci -s /bin/bash -c 'cd "$1" && HOME=/home/ci RUSTUP_HOME=/opt/rustup CARGO_HOME=/home/ci/.cargo PATH=/opt/cargo/bin:/usr/bin:/bin \
+            LD_LIBRARY_PATH="$1/Vendor/llama/lib:$1/Vendor/pdfium/lib" \
+            DIGUP_BACKENDS="$1/Vendor/llama/lib" DIGUP_FFMPEG="$1/Vendor/ffmpeg/bin" \
+            DIGUP_DEVICE=cpu DIGUP_THREADS=8 CARGO_NET_GIT_FETCH_WITH_CLI=true \
+            cargo test --workspace --all-targets' _ "$GITHUB_WORKSPACE"
 
   shell:
     runs-on: ubuntu-24.04
