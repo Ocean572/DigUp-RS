@@ -153,7 +153,7 @@ fn install_pinned_vectors(index: &Path, tag: &str, root: &str) -> (usize, usize,
         // The store spells paths with the host's separators; the dump carries the vendoring
         // machine's. Both spellings are offered (they are the same string on Linux and macOS).
         let host = full.to_string_lossy().to_string();
-        let slashed = host.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+        let slashed = host.replace('/', std::path::MAIN_SEPARATOR_STR);
         let Ok(file_id) = db.query_row(
             "SELECT id FROM files WHERE path = ?1 OR path = ?2",
             rusqlite::params![host, slashed],
@@ -458,7 +458,7 @@ fn numbers_close(x: &serde_json::Number, y: &serde_json::Number) -> bool {
 ///
 /// The fixture carries 31 (query, store) vectors for 45 scenarios, so 27 scenarios are pinned and
 /// 18 are not (measured from the fixtures: s327-s330, s340, s342-s344, s347-s353, s355, s357, s358
-/// - the `name:` and identifier queries: `billing-sync`, `RATE_01`, `DEBUG`, `id_ed25519`,
+/// — the `name:` and identifier queries: `billing-sync`, `RATE_01`, `DEBUG`, `id_ed25519`,
 /// `group_1`, …). Those 18 embed their query with the model on THIS machine, so their cosines ride
 /// the model's cross-machine difference and `z` and `score` inherit it through the engine's own
 /// arithmetic. The bar is that chain, derived from the engine's code, not a number fitted to a run:
@@ -514,7 +514,7 @@ fn numbers_close(x: &serde_json::Number, y: &serde_json::Number) -> bool {
 const VECTOR_TRIO_BAR: f64 = 2e-3;
 
 /// `scoring::meaning`'s floor on the pool's deviation (`deviation = sqrt(squares / count).max(0.02)`)
-/// - the amplification a `cosine` drift suffers on the way to `z`, and so to `score`. Named as a
+/// — the amplification a `cosine` drift suffers on the way to `z`, and so to `score`. Named as a
 /// constant so the bar above reads as a derivation from the engine, not as an invented tolerance.
 const MEANING_DEVIATION_FLOOR: f64 = 0.02;
 
