@@ -2,6 +2,58 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-18 — Operation Swift-free: the test environment is Rust-only; Swift sources deleted from `main`
+
+Three phases pushed to `main` (measured on ai-ubuntu-computer, x86_64, driver 580.178.04):
+
+- **P1 `00c6c05` — packages: the shell's helper is the Rust engine.** `package-linux.sh` /
+  `package-windows.sh` build the helper with `cargo build -p digup-cli` (same file set as the Rust
+  payload; `$ORIGIN`; Windows keeps the MSVC CRT, drops the Swift runtime DLLs); `packages.yml`
+  Swift toolchain installs out, rustup pinned 1.99.1, clang + libclang-dev added (bindgen).
+  Gates: cargo exit 0; the helper staging replicated in an ubuntu:22.04 container — patchelf
+  `$ORIGIN`, PATH-only `digup --help` prints the version line with no environment; actionlint
+  findings = baseline (3).
+- **P2 `b43c572` — the macOS app is the Tauri shell.** `scripts/rust/package-macos.sh --shell`:
+  per-target tauri builds, lipo merge, helper in `Contents/MacOS/helper` (the `default_helper()`
+  path), LSMinimumSystemVersion 14.0, deep ad-hoc signature applied last, slice asserts, the
+  helper answers from inside the bundle, a `.dmg` with the Applications symlink; the updater
+  artifact is `DigUp_<version>_universal.app.tar.gz` (Tauri signer when the key is present).
+  `packages.yml` gains the macos job (macos-26, meson, 1.99.1 + both targets, `DIGUP_UNIVERSAL`
+  seeding). `notices.py` takes the macos platform (745 KB written); `update-feed.py` reads the
+  macOS `.app.tar.gz` — the universal package answers both slice feeds. Synthetic run wrote all
+  six feeds correctly.
+- **P4 `2d1afa0` + fixes `8fc3ad3`/`d714400` — the CI chain runs the Rust engine.** `ci.yml`:
+  Swift jobs out, the engine job is the Rust workspace in the ubuntu:22.04 container
+  (fmt + clippy `-D warnings` + `cargo test --workspace`; model tests self-skip by design).
+  `server.yml`: THE server job is the Rust chain (suite on the `server-test-rust` alias; headless
+  proof on `server-runtime-rust`, `--help` line 1; drift guards read
+  `crates/runtime/src/models.rs`; README §1–2 override note in the job header; the duplicate
+  `server-rust` job deleted). `rust-release.yml` guards read models.rs. The Dockerfile's Swift
+  stages are deleted (rust stages ahead of consumers; nine shipped targets pass
+  `docker build --check` with zero warnings); the compose SWIFT_TESTS block retires (the flagged
+  exception to the byte-identical rule). CI fixes measured live: rustup-init takes ONE
+  comma-separated `--component` value; clippy 0.1.99 lints on `tests/search.rs`
+  (MAIN_SEPARATOR_STR + doc_lazy_continuation) — `cargo clippy --workspace --all-targets
+  -D warnings` exit 0 on this box after.
+  Chain results at `2d1afa0` (measured on GitHub, attempt 1): Server run 44230798764 GREEN —
+  contract suite 0 failed / 0 skipped on the Rust payload, headless proofs, compose shapes,
+  runtime boot + clean stop (15 m 59 s); ghcr publish ran on the same chain. CI engine job
+  green to the clippy step on `8fc3ad3` (the lints fixed at `d714400`).
+  v0.8.0 assets verified byte-side: four release assets, download digests == GitHub's, each a
+  `payload/` with the full file set; the x86_64 payload runs PATH-only on this box (RUNPATH
+  `$ORIGIN`, `digup --help` prints the title line, `digup-server` answers the honest index-folder
+  refusal); the macOS payload carries arm64 + x86_64 slices (ffmpeg/ffprobe thin arm64 by design).
+
+**Swift sources deleted from `main`** (this commit): `Sources/**`, `Tests/**` (the reference-vector
+fixtures moved to `crates/runtime/tests/fixtures/reference/`, paths updated in
+`reference_vectors.rs`/`scoring.rs`/the two package-check scripts), `Package.swift`,
+`Package.resolved`, `build.sh`, `appcast.xml`, `Resources/`, the Swift-only scripts
+(`make-testbed.sh`, the five `.swift` testbed generators + their Xcode-only `.sh` drivers,
+`release.sh`, `appcast.py`, `dev-run.sh`, `twin-gate.sh`, `swift-LICENSE.txt`), and
+`swift-farewell.yml` (the dispatch-only twin record that gated this deletion — its numbers are
+filed in `docs/RUST_PORT_AUDIT.md`). The parity reference is branch `swift-reference` (`b1dff21`).
+`git grep -il swift` at the new tip names docs, historical comments, and vendor licenses only.
+
 ## 2026-11-15 — Release v0.8.0: tag published; the fork's Actions facts
 
 Tag `v0.8.0` (annotated) at `3917d8e` (README/CONTRIBUTING/binding-doc Rust rewrite,
@@ -45,8 +97,8 @@ work branch; the 11 merged local PR branches deleted. Repo renamed to
 
 ## 2026-11-13 — Rust port Stages 5–6: the CLI verbs + the eval twin, then the shipping image without Python
 
-The Rust workspace (`crates/`) is at its last CLI verbs and its first shipping shapes.
-Engine Swift tree untouched; the gates below are the contract suites, not a dev box's moods.
+The Rust workspace (`crates/`) carries the engine on `main`; the Swift tree rides branch
+`swift-reference` (parity reference). The gates below are the contract suites, not a dev box's moods.
 
 ```
 CLI verbs               search (+--json), eval, download-model — the JSON writer pinned by

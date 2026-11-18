@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Writes the third-party notices DigUp's Windows and Linux packages carry: the license of every library they ship, from
-the libraries' own license files (llama.cpp's and PDFium's from Vendor/, ffmpeg's, dav1d's and zlib's from the small
-ffmpeg scripts/build-ffmpeg.sh makes, Swift's from the toolchain or scripts/licenses), and of every Rust crate the app
+"""Writes the third-party notices DigUp's Windows, Linux and macOS packages carry: the license of every library they
+ship, from the libraries' own license files (llama.cpp's and PDFium's from Vendor/, ffmpeg's, dav1d's and zlib's from
+the small ffmpeg scripts/build-ffmpeg.sh makes), and of every Rust crate the app
 is built from (Cargo's own record of them, normal dependencies only: build tools and macros don't end up in the app).
 
     scripts/notices.py linux|windows <out.txt>
@@ -11,7 +11,6 @@ It stops if a license it needs is missing: the packages don't go out without the
 """
 import json
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -42,16 +41,6 @@ def build_ffmpeg_versions():
     ffmpeg = re.search(r"^FFMPEG_VERSION=(\S+)", script, re.M).group(1)
     dav1d = re.search(r"^DAV1D_VERSION=(\S+)", script, re.M).group(1)
     return ffmpeg, dav1d
-
-
-def swift_license():
-    """The toolchain's own LICENSE.txt (Linux), else the copy in scripts/licenses (Windows' toolchain ships none)."""
-    swift = shutil.which("swift")
-    if swift:
-        found = Path(swift).resolve().parent.parent / "share" / "swift" / "LICENSE.txt"
-        if found.is_file():
-            return read(found)
-    return need(ROOT / "scripts/licenses/swift-LICENSE.txt")
 
 
 def stb_license():
@@ -177,12 +166,7 @@ def main():
                 "and forgive others. May you share freely, never taking more than you give.\""),
         section("stb (https://github.com/nothings/stb), reads and writes pictures", stb_license()),
         section("miniz (https://github.com/richgel999/miniz), reads docx and odt files", miniz_license()),
-        # The Swift runtime section rides only where Swift ships (the Swift-era Linux and
-        # Windows packages; the Rust helper carries no Swift). The macOS app is Rust-built.
-        *([section("Swift's runtime, Foundation and libdispatch (https://swift.org), which DigUp's helper is written with",
-                   swift_license())] if platform != "macos" else []),
-        section(f"ICU (https://icu.unicode.org), in {'Swift’s Foundation and in ' if platform != 'macos' else ''}PDFium "
-                f"(the same license{'' if platform == 'macos' else ', printed with PDFium’s above'})",
+        section("ICU (https://icu.unicode.org), in PDFium (the same license, printed with PDFium's above)",
                 need(pdfium / "licenses/icu.txt")),
     ]
     if windows:

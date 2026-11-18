@@ -25,10 +25,9 @@
 # Updates: the Rust shell is the Tauri app, and Tauri's updater plugin reads the
 # per-platform feeds scripts/update-feed.py writes (updates/macos-aarch64.json …),
 # the mechanism the Windows and Linux shells already ship. Sparkle's appcast
-# (scripts/appcast.py, Sparkle's sign_update under .build/) belongs to the Swift
-# app in Sources/DigUpApp: .build/ is a SwiftPM artifact, so a Rust build has
-# nothing for appcast.py to sign. A Rust-built macOS app updates through Tauri's
-# feed; the Sparkle path is not ported by pretending to be one.
+# belonged to the Swift app (Sources/DigUpApp, branch swift-reference: a Sparkle
+# update needs an Info.plist SUFeedURL and a SwiftPM-built app — a Rust build has
+# neither); the Sparkle path is not ported by pretending to be one.
 set -euo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 # macOS 14 is the payload's floor — the same one the vendored llama.cpp builds with.

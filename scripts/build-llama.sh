@@ -13,9 +13,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 TAG=b11461   # the first tags with EmbeddingGemma 2 (text + vision + audio) are b11452+
 COMMIT=4d756bc72bf00a4aacf410ae15a2d315f3db400d   # TAG's commit: a tag can be moved, a commit can't
-# A new TAG ships only if `swift test` passes: ReferenceVectorTests checks it makes the same vectors, so every index is
-# kept. If it fails, keep this TAG, or bump LlamaEmbedder.vectorVersion and write the reference vectors again
-# (DIGUP_WRITE_REFERENCE=1 swift test --filter ReferenceVectorTests): every index then embeds again.
+# A new TAG ships only if the pinned vector tests pass: ReferenceVectorTests (crates/runtime/tests,
+# the twin of the Swift suite on branch swift-reference) checks a new build makes the same vectors,
+# so every index is kept. If it fails, keep this TAG, or bump the engine's vectorVersion and write
+# the reference vectors again (DIGUP_WRITE_REFERENCE=1 cargo test -p digup-runtime reference_vectors):
+# every index then embeds again.
 PATCH=scripts/llama.cpp-no-logits.patch
 SOURCE="${LLAMA_SOURCE:-Vendor/llama.cpp}"
 BUILD="${LLAMA_BUILD:-Vendor/llama-build}"
@@ -141,9 +143,8 @@ else
 fi
 cp "$SOURCE/include/llama.h" "$SOURCE"/ggml/include/*.h "$SOURCE/tools/mtmd/mtmd.h" "$SOURCE/tools/mtmd/mtmd-helper.h" \
   "$OUT/include/"
-# The build, for logs and `digup status` (indexes record LlamaEmbedder.vectorVersion, not this). SwiftPM doesn't see a
-# changed header, so the Swift file that reads it is touched.
+# The build, for logs and `digup status` (indexes record the engine's vectorVersion, not this).
+# crates/runtime/build.rs re-runs on these headers, so a changed tag rebuilds the binding.
 printf '// Written by scripts/build-llama.sh.\n#define LLAMA_BUILD_TAG "%s"\n' "$TAG" > "$OUT/include/llama-build.h"
-touch Sources/LlamaRuntime/LlamaEmbedder.swift
 echo "$STAMP" > "$OUT/BUILD"
 echo "Built llama.cpp $TAG (patched, $FLAVOR${CC:+, $CC}) into $OUT"

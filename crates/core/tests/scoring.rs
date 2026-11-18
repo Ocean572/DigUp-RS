@@ -251,7 +251,7 @@ fn swift_blobs_score_and_scale_on_a_real_index() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../Tests/LlamaRuntimeTests/Reference")
+                .join("../runtime/tests/fixtures/reference")
         });
     let vectors_file = reference_folder.join("vectors.json");
     if !vectors_file.is_file() {

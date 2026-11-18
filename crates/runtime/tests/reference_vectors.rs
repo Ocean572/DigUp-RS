@@ -34,7 +34,7 @@ fn reference_file() -> PathBuf {
     let folder = std::env::var_os("DIGUP_REFERENCE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Tests/LlamaRuntimeTests/Reference")
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reference")
         });
     folder.join("vectors.json")
 }

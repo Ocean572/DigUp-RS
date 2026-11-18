@@ -16,7 +16,8 @@ appearing here.
   sharing a volume) 404s media ids from another process's searches and lets two job runners
   race. Scale by giving the machine more cores, not by adding processes.
 * Every answer is the engine's. `hits`, `strong`, `meaning`, `ms`, `warning` pass through
-  verbatim; ranking, z-scores and timings are DigUp's, computed in the Swift engine, and the
+  verbatim; ranking, z-scores and timings are DigUp's, computed by the engine (`crates/` on `main`;
+  the Swift twin on branch `swift-reference`), and the
   server adds no cap, no re-ranking and no explanation of its own. Engine failures come back
   as 5xx bodies quoting the engine (with its stderr tail), never as a server-invented message.
 

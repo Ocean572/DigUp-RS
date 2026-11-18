@@ -109,7 +109,7 @@ RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
     # cache carries Vendor/llama-build/CMakeCache.txt with GGML_CUDA=ON, and a CPU run
     # reusing it dies at configure with "CUDA Toolkit not found" (measured 2026-11-05).
     rm -f Vendor/llama-build/CMakeCache.txt; \
-    # CUDA_ARCHS normalization (measured 2026-11-05, publish run #6, in the retired Swift builder):
+    # CUDA_ARCHS normalization:
     # CUDA_ARCHS reaches CMake as ONE -D value and CMake lists are SEMICOLON-separated, so
     # "61,70,…" is one invalid arch token and configure dies. Plain numbers, native and
     # semicolon lists pass through unchanged. scripts/build-llama.sh stays untouched.

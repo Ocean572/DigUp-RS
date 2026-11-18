@@ -32,11 +32,11 @@ The search engine is Rust: the `crates/` workspace — `core` (extraction, scori
 the search engine), `services` (the JSON-lines services), `cli` (the `digup` binary) and `server`
 (the `digup-server` binary). The Swift original — `Sources/DigUpKit` + `Sources/LlamaRuntime`, the
 Swift Mac app `Sources/DigUpApp`, and the Swift-era scripts — rides branch `swift-reference` as
-the parity reference the twin gate (`scripts/rust/twin-gate.sh`) measures against. The Windows and
+the parity reference (its twin gate `scripts/rust/twin-gate.sh` lives there). The Windows and
 Linux app is `shell/` (Tauri: Rust, with plain HTML and JavaScript for its windows), which runs
 the engine as a helper program. The self-hosted server is `server/` (the FastAPI wrapper, the Lit
 web UI, the contract suite) with the compose deployment in `deploy/`. `scripts/` builds llama.cpp,
-ffmpeg and the packages, `scripts/rust/` is the port's own tooling (audit battery, twin gate,
+ffmpeg and the packages, `scripts/rust/` is the port's own tooling (audit battery,
 package scripts), and `.github/workflows/rust-release.yml` shows every step of the release
 builds. "Build from source" in the README gets you started.
 

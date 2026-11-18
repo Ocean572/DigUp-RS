@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The Linux twin of scripts/make-testbed.sh (Stage 5's eval ground truth).
+"""The Linux twin of the Swift-era scripts/make-testbed.sh (Stage 5's eval ground truth,
+on branch swift-reference).
 
     python3 scripts/rust/make-testbed-linux.py <dir> [--img-cache DIR]
 
@@ -687,7 +688,7 @@ def build(tb, img_cache, espeak, make_code):
 
     write(os.path.join(tb, "README.md"), (
         "# DigUp testbed (Linux twin)\n\nA sandbox for testing DigUp: the same layout and known content as\n"
-        "scripts/make-testbed.sh, built with Linux tools (Wikimedia fixtures for the macOS system\n"
+        "scripts/make-testbed.sh on branch swift-reference, built with Linux tools (Wikimedia fixtures for the macOS system\n"
         "pictures, espeak-ng for `say`, ffmpeg, PIL, fpdf2). Delete it any time. Index it with\n"
         "`digup index <dir>` and `digup index <dir> --code`, then `digup eval evals/*.json\n"
         "--index <index folder>` with DIGUP_TESTBED=<dir>.\n"))

@@ -1,8 +1,8 @@
 #!/bin/bash
 # Linux and Windows: the C libraries the engine needs where Apple's frameworks aren't there, at pinned versions, laid out
-# in Vendor/ (out of git) as Package.swift expects: SQLite with FTS5 (storage), stb (images), miniz (docx/odt, xlsx/pptx/ods/odp), PDFium
-# (PDF text and page renders; prebuilt by bblanchon/pdfium-binaries; a fat arm64+x86_64 dylib on macOS). Swift's macOS payload
-# needs none of this; the Rust engine's portable readers (crates/native) call the same vendored libraries on every platform, so
+# in Vendor/ (out of git): SQLite with FTS5 (storage), stb (images), miniz (docx/odt, xlsx/pptx/ods/odp), PDFium
+# (PDF text and page renders; prebuilt by bblanchon/pdfium-binaries; a fat arm64+x86_64 dylib on macOS). The Rust engine's
+# portable readers (crates/native) call the same vendored libraries on every platform, so
 # the Rust macOS payload fetches them too. Does nothing when the pinned set is already there. Needs curl, tar and python3 (to unzip);
 # on Windows, Git for Windows' bash; on macOS, lipo and codesign (Xcode's) for the fat PDFium.
 set -euo pipefail

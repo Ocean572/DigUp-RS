@@ -4,6 +4,6 @@ Issue: #
 
 What changed and why:
 
-Tests run (`swift test`; `cargo test` in `shell/src-tauri` if the Windows/Linux app changed):
+Tests run (`cargo test --workspace` for the engine; `cargo test` in `shell/src-tauri` if the Windows/Linux/macOS app changed):
 
 If search results change: the evals before and after (see "Build from source" in the README):

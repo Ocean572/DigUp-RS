@@ -18,7 +18,7 @@ DigUp keeps everything on your computer, so changes that send data elsewhere, li
 Once an issue says go:
 
 - Keep it to one fix or one feature, with the reason in the description.
-- Make sure `swift test` passes, and `cargo test` in `shell/src-tauri` if you change the Windows and Linux app.
+- Make sure `cargo test --workspace` passes (the engine suite in `crates/`), and `cargo test` in `shell/src-tauri` if you change the Windows/Linux/macOS app.
 - If it changes what search returns, run the evals in `evals/` before and after, and include both results.
 - For speed or memory changes, measure before and after on the same computer.
 
@@ -27,26 +27,35 @@ Not every pull request will be merged, even good ones. The project has a directi
 ## Build from source
 
 :::: tabs
-::: tab Mac
-You'll need Xcode 26, git, and CMake (or `uv`) for llama.cpp. If `xcode-select -p` shows the Command Line Tools, switch to Xcode first (`sudo xcode-select -s /Applications/Xcode.app`): they lack the SwiftUI and Swift Testing macros the build needs.
+::: tab Any system
+The engine is Rust on every system. You'll need a Rust toolchain (the workspace floor is
+1.89; CI uses 1.99.1), git, and CMake — on Linux also clang with libclang (bindgen) and
+the usual build tools.
 
 ```sh
 git clone {{ site.github }} && cd DigUp
-scripts/build-llama.sh            # llama.cpp at a pinned tag, with a one-line patch
-swift build -c release && swift test
-./build.sh                        # builds build.noindex/DigUp.app
+scripts/fetch-vendor.sh             # SQLite/FTS5, stb, miniz, PDFium at pinned hashes
+scripts/build-llama.sh              # llama.cpp at a pinned tag, with a one-line patch
+scripts/build-ffmpeg.sh             # the small ffmpeg the packages carry
+cargo test --workspace              # the engine suite; model-pinned tests skip without the models
+cargo build --release -p digup-cli  # target/release/digup — the CLI and the shell's helper
 ```
 :::
 ::: tab Windows and Linux
-You'll need Swift 6.4, Rust and Node; on Windows also Visual Studio's C++ build tools, with the commands run in Git for Windows' bash. `scripts/fetch-vendor.sh` and `scripts/build-llama.sh` get the libraries, then `scripts/package-linux.sh` makes the .deb and the AppImage, and `scripts/package-windows.sh` the installer. [The packages workflow]({{ site.github }}/blob/main/.github/workflows/packages.yml) has every step, down to the packages each system needs.
+`scripts/package-linux.sh` makes the .deb and the AppImage, `scripts/package-windows.sh` the
+NSIS installer: each builds the Rust helper, stages the C libraries beside it, and bundles the
+Tauri shell. `scripts/rust/package-*.sh` ship the payload tarballs (the same file set the Docker
+payload stage ships). On Windows run them in Git for Windows' bash inside a Visual Studio
+developer environment. [The packages workflow]({{ site.github }}/blob/main/.github/workflows/packages.yml)
+has every step, down to the packages each system needs.
 :::
 ::::
 
-`scripts/fetch-vendor.sh` checks every download against pinned SHA-256 values before using it. There's also a command-line tool, `.build/release/digup`, that indexes, searches and runs the evals from a terminal (`digup --help`), and `scripts/make-testbed.sh` builds a folder of test files to try it on.
+`scripts/fetch-vendor.sh` checks every download against pinned SHA-256 values before using it. There's also a command-line tool, `target/release/digup`, that indexes, searches and runs the evals from a terminal (`digup --help`), and `scripts/rust/make-testbed-linux.py` builds a folder of test files with known content to try it on.
 
 ## Where things are
 
-The search engine, `Sources/DigUpKit`, is the same Swift code on every system; what differs by system lives in its `Platform/Apple` and `Platform/Portable` folders. The Mac app is `Sources/DigUpApp` (SwiftUI). The Windows and Linux app is `shell/` (Tauri: Rust, with plain HTML and JavaScript for its windows), which runs the engine as a helper program. `scripts/` builds llama.cpp, FFmpeg and the packages.
+The search engine is the Rust `crates/` workspace — extraction, scoring and vectors in `core`, the llama.cpp / ffmpeg / PDFium / stb seams in `native`, the embedders and the index/search loop in `runtime`, the JSON-lines services in `services`, the `digup` CLI in `cli` and the HTTP server in `server`. It is the same code on every system. The app is `shell/` (Tauri: Rust, with plain HTML and JavaScript for its windows) on Windows, Linux and macOS, which runs the engine as a helper program. The self-hosted server is `server/` (a FastAPI wrapper and a Lit web UI, plus the pure-Rust `digup-server`) with the compose deployment in `deploy/`. `scripts/` builds llama.cpp, FFmpeg and the packages, and `scripts/rust/` is the port's own tooling. The Swift original rides branch `swift-reference` as the parity reference.
 
 This website is in `website/`: Markdown pages in `website/content/`, built with `uv run website/build.py --serve`. A fix to the docs is as welcome as a fix to the code.
 

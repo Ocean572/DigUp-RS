@@ -1,8 +1,9 @@
-"""Writes the fixed inputs of Tests/LlamaRuntimeTests (ReferenceVectorTests): a screenshot-like PNG, a photo-like JPEG
-and a speech-like WAV, all synthetic (no personal or third-party media) and the same on every run. The files are
-committed; this only says how they were made.
+"""Writes the fixed inputs of the reference-vector fixtures (crates/runtime/tests/fixtures/reference,
+the twin of the Swift ReferenceVectorTests on branch swift-reference): a screenshot-like PNG, a
+photo-like JPEG and a speech-like WAV, all synthetic (no personal or third-party media) and the
+same on every run. The files are committed; this only says how they were made.
 
-usage: worker/.venv/bin/python -I scripts/testbed/make_reference_inputs.py Tests/LlamaRuntimeTests/Reference
+usage: worker/.venv/bin/python -I scripts/testbed/make_reference_inputs.py crates/runtime/tests/fixtures/reference
 """
 import struct
 import sys

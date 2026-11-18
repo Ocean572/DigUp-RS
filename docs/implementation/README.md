@@ -230,6 +230,11 @@ Server code stays separate from upstream engine code.
 
 ## 10. Built to be merged upstream (sustainability)
 
+> **2026-11-18 status (Rust core).** `Sources/**` and `Package.swift` left `main` with the Rust
+> port (they ride branch `swift-reference`); the additive rule now binds to the engine paths that
+> exist on `main` — `crates/**`, `scripts/package-*.sh`, `shell/`, `website/`. The upstream
+> relationship with `ARahim3/DigUp` is unchanged.
+
 This server is intended as a **pull request to `ARahim3/DigUp`**, and as the basis of a public
 page. Build it so a maintainer can adopt it, and so it survives the project's next 20 releases.
 

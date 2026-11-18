@@ -52,7 +52,7 @@ server/tests/gpu-handoff.sh --cpu-only
 The gates, in order, each a PASS/FAIL line in the log: build the corpus fixtures
 (`server/tests/corpus/build.sh`, `server/tests/corpus2/build.sh`); create
 `$HOME/digup-data/{index,models,config}` owned by uid/gid 990; fetch the two pinned model files —
-the URLs carry the pinned revision from `Sources/DigUpKit/ModelFiles.swift`, and the hashes must
+the URLs carry the pinned revision from `crates/runtime/src/models.rs`, and the hashes must
 equal the pins duplicated in `.github/workflows/server.yml`:
 
 ```sh

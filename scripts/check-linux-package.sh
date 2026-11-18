@@ -38,8 +38,8 @@ else
 fi
 
 mkdir -p "$work/files"
-cp Tests/LlamaRuntimeTests/Reference/photo.jpg Tests/LlamaRuntimeTests/Reference/screen.png \
-  Tests/LlamaRuntimeTests/Reference/speech.wav docs/logo.png "$work/files/"
+cp crates/runtime/tests/fixtures/reference/photo.jpg crates/runtime/tests/fixtures/reference/screen.png \
+  crates/runtime/tests/fixtures/reference/speech.wav docs/logo.png "$work/files/"
 cat > "$work/files/recipe.txt" <<'TEXT'
 Lemon cake
 
