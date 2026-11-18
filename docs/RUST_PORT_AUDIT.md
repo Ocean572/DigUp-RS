@@ -239,6 +239,27 @@ Measured and verified, the reviewers' claims that do NOT move the port (proof of
   carried a stray paren the engine never emits (pending run died on a fresh index's first
   sync; the fixed shape ships).
 
+## Farewell twin record (measured on the box, 2026-11-18 — the gate the Swift deletion rode)
+
+The twin record ran **on ai-ubuntu-computer in the pinned `ubuntu:22.04` container** (native
+x86_64, no emulation) at the user's direction — the `swift-farewell.yml` CI workflow was
+retired with the deletion commit, so the parity record is measured on the host, not on a
+runner. The tree is `d714400` (the last tip carrying `Sources/`): `swift build -c release`
+(Swift 6.4 RELEASE, GPG-verified download, 55.08 s) and `cargo build --release -p digup-cli`
+(rustup pinned 1.99.1), both against the same `Vendor/` (llama CPU + pdfium + the pinned
+ffmpeg), the 15-file suite corpus with the built clip, the pinned embeddinggemma-2 Q8_0 pair,
+`device=cpu`, 16 threads. The loader note: the `target-rust` binary DT_NEEDEDs
+`libllama/libggml` beside the staged payload folder — the gate sets
+`LD_LIBRARY_PATH` to the Vendor libs (the payload-staging shape; the retired workflow draft
+lacked it).
+
+`scripts/rust/twin-gate.sh`: **19 probes, 19 ok / 0 FAIL, exit 0** — 13:29:05Z → 13:41:01Z
+(11 min 56 s wall, toolchain installs included). Per-probe byte-identical line counts
+(human-line probes, then `--json`): 3, 3, 3, 2, 1, 3, 9, 3, 5, 2, 3 | 20, 18, 3, 65, 20, 38,
+3, 20. Strings, kinds, segments, ids, integers and hit order exact; only measured seconds
+normalized (the gate's own contract). The Swift sources are kept for parity on branch
+`swift-reference` (twin gate lives there); the deletion commit is `2dce85b`.
+
 ## Tree shape
 
 The repo-shape decision (stay additive here vs a Rust-only publish layout) is deferred to the
