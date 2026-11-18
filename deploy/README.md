@@ -99,7 +99,6 @@ docker compose -f docker-compose.all-in-one.yml --profile nvidia --profile dav u
 | `DIGUP_PUBLISH_PORT` | host port for the server (container binds 8787) |
 | `DIGUP_LAN_BIND` | the host's LAN address; adds the LAN port mapping (opt-in files) |
 | `DIGUP_IMAGE_TAG` / `DIGUP_REGISTRY` | registry image selection (`ghcr` overlay) |
-| `DIGUP_SWIFT_TESTS` | build-arg knob: `0` skips the engine-test stage on a builder whose env can't run them (CI keeps `1`) |
 | `CUDA_BASE` `CUDA_RUNTIME_IMAGE` `CUDA_ARCHS` | CUDA build flavor — base matched to the host driver, plain arch numbers (see the GPU section) |
 | `DIGUP_NVIDIA_GPU` | pin one card by UUID on multi-GPU hosts (`NVIDIA_VISIBLE_DEVICES` passthrough) |
 | `DIGUP_SERVER_ROOTS` | colon-separated roots the searcher answers for (default `/media/photos`; per-user list on the WebDAV shape: `/media/dav/<uid>:…`) |

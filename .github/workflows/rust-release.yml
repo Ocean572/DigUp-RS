@@ -41,7 +41,7 @@ jobs:
     # Ubuntu 22.04 CONTAINER — ci.yml's proven Linux pattern (apt, toolchain, tests all
     # inside the base image). The container is measured necessity, not style: the
     # byte-pinned media suites (engine_answers_match) pin the WAV output of the pinned
-    # 4.4.2 ffmpeg — "the same build the Swift container's /usr/bin/ffmpeg is", which is
+    # 4.4.2 ffmpeg — "the same build ubuntu:22.04's /usr/bin/ffmpeg is", which is
     # the 22.04 apt build; 24.04's apt is not, and build-ffmpeg.sh's shipping build
     # (9.0.2) writes the WAV bytes differently (the BWF metadata chunk names the build).
     # Vendor compiles natively here — the glibc floor of §11 comes free with the base.
@@ -85,7 +85,7 @@ jobs:
           tries=0; until ./scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
             echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done
         shell: bash
-      - name: Model files, pinned by Sources/DigUpKit/ModelFiles.swift (server.yml's recipe)
+      - name: Model files, pinned by crates/runtime/src/models.rs (server.yml's recipe)
         run: |
           mkdir -p "$RUNNER_TEMP/models"
           rev=bfcd298762cc34d0357ece5ebdd31791a3a374d8
@@ -102,8 +102,8 @@ jobs:
         run: |
           # The suite runs as an unprivileged user, measured necessity (2026-11-16):
           # the suite pins WRITE-FAILURE refusals (pdf.rs: the render folder goes
-          # chmod 0500, the seam must answer "can't write …png" — Swift's throw at
-          # PDF+Portable.swift:111), and a container's root overrides DAC: the
+          # chmod 0500, the seam must answer "can't write …png" — the Swift-era engine's
+          # throw at PDF+Portable.swift:111, which the Rust port reproduces), and a container's root overrides DAC: the
           # "unwritable" folder takes the writes, the premise is nullified, and the
           # test's terminal panic (the fails-before pin) fires with the writes
           # SUCCEEDING (measured on CI as root: "3 pages with 3 pictures, 3 files
@@ -143,11 +143,11 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
       - name: Model pins follow the engine (drift guard)
         run: |
-          engine=$(grep -oE 'sha256: "[0-9a-f]{64}"' Sources/DigUpKit/ModelFiles.swift | grep -oE '[0-9a-f]{64}' | sort)
+          engine=$(grep -oE 'sha256: "[0-9a-f]{64}"' crates/runtime/src/models.rs | grep -oE '[0-9a-f]{64}' | sort)
           ci=$(printf '%s\n%s\n' \
             2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135 \
             c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f | sort)
-          [ "$engine" = "$ci" ] || { echo "::error::model pins drift between ModelFiles.swift and CI"; exit 1; }
+          [ "$engine" = "$ci" ] || { echo "::error::model pins drift between models.rs and CI"; exit 1; }
       - name: Models (the pinned GGUF files, hash-checked)
         run: |
           mkdir -p "$RUNNER_TEMP/models"

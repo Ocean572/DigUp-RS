@@ -6,7 +6,7 @@
 #                  -f docker-compose.rust.yml -f docker-compose.rust.nvidia.yml \
 #                  --profile nvidia up -d --build
 #
-# Same rules as the Swift CUDA override, unchanged: the image carries the CUDA backend
+# Same rules as the base CUDA override, unchanged: the image carries the CUDA backend
 # only when built from a matching CUDA *devel* base, ships exactly the CUDA runtime
 # libraries the `cuda-libs` stage globs from the matching CUDA *runtime* base (never the
 # toolkit, never a second libggml*), and `libcuda.so.1` comes from the HOST driver
@@ -15,7 +15,7 @@
 # (`61` for Pascal sm_61, `89` for Ada sm_89 — the builder's apt cmake rejects dotted
 # values and `native` alike, measured 2026-11-04) or a fat list for many cards.
 #
-# The Rust engine loads the CUDA module exactly as the Swift one does — `$DIGUP_BACKENDS`,
+# The Rust engine loads the CUDA module through `$DIGUP_BACKENDS`,
 # then beside the executable (crates/runtime/src/backend.rs) — so the payload shape is
 # identical and `digup speed --model` measures it the same way. This file makes the device
 # AVAILABLE; the engine decides, and the proof of use is gpu-handoff.sh's utilization gate

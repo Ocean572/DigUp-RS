@@ -1,20 +1,17 @@
 # syntax=docker/dockerfile:1
 # DigUp engine, built from source for the container's own architecture.
 #
-# Mirrors the Linux job of .github/workflows/packages.yml and ci.yml, with the aarch64 Swift
-# toolchain added (swift.org publishes ubuntu22.04 x86_64 and ubuntu22.04-aarch64; there is no
-# arm64 Ubuntu 24.04 release). Ubuntu 22.04 is deliberate: the binaries then ask for glibc 2.35
-# at most, which is what the runtime stage ships. Never build here what is meant to run there:
-# a binary of the image's architecture only.
+# Ubuntu 22.04 is deliberate: the binaries then ask for glibc 2.35 at
+# most, which is what the runtime stages ship. Never build here what is meant to run
+# there: a binary of the container's own architecture only (§11, native builds).
 #
-# The engine is Swift (Sources/DigUpKit + Sources/LlamaRuntime → the `digup` executable), and
-# llama.cpp / PDFium / ffmpeg are the native libraries it calls. Swift is needed at build time
-# only; the runtime stage carries no compiler.
+# The engine is Rust (crates/ → the `digup` + `digup-server` binaries), and llama.cpp /
+# PDFium / ffmpeg are the native libraries it calls (the rust-engine-* stages). Rust is
+# needed at build time only; the runtime stages carry no compiler.
 #
-#   docker build --target engine-builder -t digup-engine-builder .
+#   docker build --target rust-engine-builder -t digup-rust-builder .
 #
 ARG BASE_IMAGE=ubuntu:22.04
-ARG SWIFT_VERSION=6.4.0
 # The CUDA *runtime* base whose libraries server-runtime-cuda ships (Stage 9). It must match
 # the CUDA BASE_IMAGE the payload was built with. BuildKit prunes unreferenced stages: a
 # CPU-only build (target server-runtime) never pulls this image.
@@ -23,7 +20,7 @@ ARG CUDA_RUNTIME_IMAGE=nvidia/cuda:11.8.0-runtime-ubuntu22.04
 # ── Toolchain, vendor libraries, llama.cpp, ffmpeg, the CLI, the tests ───────────────────────
 # ── The frontend build (user brief 2026-11-08, server/ui/AGENTS.md) ─────────────────────
 # Lit + Vite: Node exists HERE, at build time, and never at runtime — the stage compiles
-# the UI (npm ci, vitest, vite build) and the server stages COPY the static dist. A red
+# ── The Rust engine: toolchain, vendor libraries, llama.cpp, ffmpeg, the CLI, the payload — the rust-* stages below ──
 # unit test or a red build is a red image by construction. npm ci reads the committed
 # package-lock.json; the npm cache rides a BuildKit cache mount (the registry is
 # reachable from the builder, measured 2026-11-08).
@@ -34,146 +31,122 @@ RUN --mount=type=cache,target=/npm-cache npm ci --cache /npm-cache --no-audit --
 COPY server/ui ./
 RUN npm test && npm run build
 
-FROM ${BASE_IMAGE} AS engine-builder
+# ── Rust engine payload (the engine, user-directed override) ─────────────────────────────────
+# `digup` + `digup-server` and their native libraries beside
+# themselves ($ORIGIN) — the file set and layout the retired Swift payload shipped, built from
+# the Rust workspace (crates/).
+# The contract suite (`server/tests/`) runs UNCHANGED against this payload: the engine's
+# published interfaces (JSON-lines verbs, schema v6, the 768-f16 vector layout, one-shot
+# --json CLI) are reproduced byte-for-byte, so the suite is the port's gate. The suite
+# itself builds indexes with THIS binary (the /index mount starts empty), so unlike the
+# cross-check gates it measures the payload end-to-end, not a cached artifact.
+#
+#   docker build --target server-test-rust -f server/docker/Dockerfile -t digup-rust-test .
+#
+# Ubuntu 22.04, the same glibc rule the retired Swift builder kept: the binaries then ask for 2.35 at
+# most, and the runtime stages (Debian 13, glibc 2.41) run NEWER — forward, never back.
+# The Vendor cache mount carries its own `id` (the rust-vendor note below) and the same stamped
+# scripts: the C-library compiles are shared with everything else in the repo that builds them.
+FROM ${BASE_IMAGE} AS rust-engine-builder
 
-ARG SWIFT_VERSION
-# Stage 9: scripts/build-llama.sh picks CUDA when nvcc is on PATH and pins the architecture
-# with CUDA_ARCHS (default native). The builder container sees no GPU device, so the CUDA
-# build passes the card's architecture explicitly — plain numbers, e.g. 61 for the Pascal
-# GTX 1070 (the builder's apt cmake rejects dotted `6.1`; see the cuda-libs comment below).
-# Comma- or semicolon-separated fat lists (61;70;89…) are accepted; the RUN normalizes the
-# separators to CMake's semicolons. Harmless on the CPU baseline: with no nvcc, the value
-# is unused.
+# Stage 9's CUDA knobs: scripts/build-llama.sh picks the
+# CUDA flavor by finding nvcc on PATH (a CUDA *devel* base) and pins the card with CUDA_ARCHS.
+# Without this ARG/ENV pair the build-arg has no landing place and CMake gets
+# `-gencode=arch=compute_,code=sm_` — the empty arch number is what "Unsupported gpu
+# architecture 'compute_'" means (measured 2026-11-13, this stage's first CUDA run).
 ARG CUDA_ARCHS=native
 ENV CUDA_ARCHS=${CUDA_ARCHS}
 ENV DEBIAN_FRONTEND=noninteractive
-
-# The same list the Linux CI job installs, plus patchelf (the runtime stage re-points rpaths).
+# clang + libclang-dev: `digup-runtime`'s build script runs bindgen over the
+# vendored llama.cpp/PDFium headers, and bindgen IS libclang (measured 2026-11-13:
+# the build died "Unable to find libclang" without them).
 RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
     ca-certificates curl git gnupg xz-utils unzip python3 binutils build-essential cmake ninja-build \
     meson nasm pkg-config patchelf file zlib1g-dev libcurl4-openssl-dev libxml2-dev libedit2 \
-    libsqlite3-0 libz3-dev libpython3-dev tzdata libgomp1 \
+    libsqlite3-0 libz3-dev libpython3-dev tzdata libgomp1 clang libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# The official Swift toolchain, verified by its GPG signature (as the CI jobs do). Its runtime
-# dependencies are the apt packages above.
+# The pinned Rust toolchain, installed through rustup (the distro cargo lags it by
+# years): 1.99.1, the compiler this port is measured with on the dev box. The
+# workspace's floor is 1.88 (Cargo.toml — sha2 0.11 requires it; a 1.85 builder
+# died on exactly that, measured 2026-11-13). Profile minimal: rustc + cargo,
+# no clippy, no docs.
+ARG RUST_VERSION=1.99.1
 RUN set -eux; \
-    # swift.org publishes Ubuntu 22.04 for x86_64 and, under its own directory, for aarch64.
-    case "$(uname -m)" in \
-      aarch64|arm64) arch="-aarch64" ;; \
-      x86_64) arch="" ;; \
-      *) echo "no Swift release for $(uname -m)"; exit 1 ;; \
-    esac; \
-    base="swift-${SWIFT_VERSION}-RELEASE-ubuntu22.04${arch}"; \
-    url="https://download.swift.org/swift-${SWIFT_VERSION}-release/ubuntu2204${arch}/swift-${SWIFT_VERSION}-RELEASE/${base}.tar.gz"; \
-    curl -fsSL -o /tmp/swift.tar.gz "$url"; \
-    curl -fsSL -o /tmp/swift.tar.gz.sig "$url.sig"; \
-    curl -fsSL --compressed https://www.swift.org/keys/all-keys.asc | gpg --quiet --import; \
-    gpg --quiet --verify /tmp/swift.tar.gz.sig /tmp/swift.tar.gz; \
-    mkdir -p /opt/swift; \
-    tar -xzf /tmp/swift.tar.gz -C /opt/swift --strip-components 1; \
-    rm -f /tmp/swift.tar.gz /tmp/swift.tar.gz.sig
-ENV PATH=/opt/swift/usr/bin:$PATH
+    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
+    sh /tmp/rustup.sh -y --default-toolchain "${RUST_VERSION}" --profile minimal; \
+    rm -f /tmp/rustup.sh
+ENV PATH=/root/.cargo/bin:$PATH
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 WORKDIR /src
 COPY . .
-# CI vendor seeding: `.github/workflows/server.yml` caches Vendor/ host-side (the same
-# scripts ci.yml runs, the same hash keys) and passes the built result in the context as
-# `.ci-vendor/`. Copying it into the cache mount below lets fetch-vendor/build-ffmpeg/
-# build-llama land on their own stamps (Vendor/VENDOR, ffmpeg/BUILD, llama/BUILD) and
-# skip the rebuild — hosted runners start their BuildKit cache mounts cold every job,
-# and a 15-minute ffmpeg compile on every PR was overrunning the job's own ceiling.
-# A local build has an empty .ci-vendor/ (the tracked .gitkeep) and pays nothing here.
 COPY .ci-vendor /ci-vendor
 
-# Vendor libraries (SQLite with FTS5, stb, miniz, PDFium) and llama.cpp, pinned by the
-# repository's own scripts; then the small ffmpeg the packages carry (the image and video
-# readers use it, HEIC needs ffmpeg 8.1+). No CUDA and no Vulkan here: this is the CPU baseline,
-# and the GPU backends are a separate, opt-in build (see docs/implementation/README.md).
-#
-# scripts/build-llama.sh picks a compiler that understands armv9.2-a's SME on aarch64; when the
-# distribution has none, the build goes on with the distribution compiler and ggml leaves the SME
-# variant out. Setting CC/CXX is what keeps the script from refusing to start.
-#
-# SWIFT_TESTS gates the engine's Swift test suite inside THIS build (default 1 — CI builds
-# never pass the arg, so the gate runs exactly as before). It exists for dev hosts where a
-# builder-environment difference is measured and is NOT the server's business: on this box
-# (measured 2026-11-08, builder cache pruned, from-scratch rebuild) `swift test` dies in the
-# engine's own CodeTests `gitListingNeverRunsRepositoryFsmonitor` (the fsmonitor hook never
-# runs in this box's builder; the same Dockerfile builds green on CI's runners). The server's
-# own gate is the contract suite (`--target server-test` + pytest); `swift test` belongs to
-# the engine's CI jobs (ci.yml, packages.yml) on their supported environments.
-ARG SWIFT_TESTS=1
-RUN --mount=type=cache,target=/src/Vendor \
-    --mount=type=cache,target=/src/.build \
-    set -eux; \
+# Vendor seeding through the build context: CI caches Vendor/ host-side and passes the built
+# result as `.ci-vendor/`, the scripts land on their stamps (Vendor/VENDOR, ffmpeg/BUILD,
+# llama/BUILD) and skip the rebuild.
+# bash for pipefail (Ubuntu's /bin/sh is dash, which has no `set -o pipefail`).
+# The Vendor cache mount carries `key=rust-vendor` for a measured reason: BuildKit runs
+# stages in parallel, and the retired Swift builder shared `/src/Vendor` with this one — two
+# `scripts/build-llama.sh` runs in one tree race (measured 2026-11-13 on the
+# server-test-rust chain: `ninja: error: unknown target 'cmTC_…'` / `loading 'build.ninja':
+# No such file or directory` from cmake's compiler-id test, the Swift stage failing on the
+# Rust stage's half-written build tree). A distinct `id` = a distinct volume (BuildKit
+# v0.34.2 rejects `key=` outright — "unexpected key 'key'"; the attribute is `id`, the name
+# the cache records print: "cached mount /src/Vendor … with id //src/Vendor"). The id stays
+# so the cache volume every measured CUDA run sits on is unchanged; the scripts stay untouched.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
+    --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/root/.cargo/registry \
+    set -euxo pipefail; \
     if [ -f /ci-vendor/llama/BUILD ]; then cp -a /ci-vendor/. /src/Vendor/; fi; \
     export CC="${CC:-cc}" CXX="${CXX:-c++}"; \
-    if [ "$(uname -m)" = aarch64 ]; then \
-      found=""; \
-      for pair in cc:c++ gcc-14:g++-14 gcc-15:g++-15 clang:clang++ clang-15:clang++-15; do \
-        c=${pair%%:*}; cxx=${pair##*:}; \
-        command -v "$c" > /dev/null && command -v "$cxx" > /dev/null \
-          && echo 'int main(void) { return 0; }' | "$c" -x c -march=armv9.2-a+sme -c -o /dev/null - 2>/dev/null \
-          && { found="$c:$cxx"; break; }; \
-      done; \
-      if [ -z "$found" ]; then \
-        echo "no SME-capable compiler: using $(cc --version | head -1) and leaving ggml's SME variant out"; \
-      else \
-        export CC=${found%%:*} CXX=${found##*:}; \
-      fi; \
-    fi; \
     scripts/fetch-vendor.sh; \
-    # Flavor-switch hygiene (measured 2026-11-04): a CUDA-flavor build leaves Vendor/llama-build/
-    # CMakeCache.txt with GGML_CUDA=ON; the next CPU-flavor run reuses that cache with cmake -S -B,
-    # ggml then asks for the CUDA language and configure dies with "CUDA Toolkit not found"
-    # (the CUDA invocation always passes -DGGML_CUDA=ON, so it never sees this). Dropping just
-    # the cache file forces a fresh configure and keeps every compiled object in place.
+    # The flavor guard (measured 2026-11-04, in the retired Swift builder; this stage keeps it):
+    # a CUDA-flavored Vendor
+    # cache carries Vendor/llama-build/CMakeCache.txt with GGML_CUDA=ON, and a CPU run
+    # reusing it dies at configure with "CUDA Toolkit not found" (measured 2026-11-05).
     rm -f Vendor/llama-build/CMakeCache.txt; \
-    # CUDA_ARCHS reaches CMake as ONE -D value, and CMake lists are SEMICOLON-separated:
-    # "61,70,…" is one invalid arch token and configure dies immediately (measured 2026-11-05,
-    # publish run #6: three fast configure fails, 164 s). Normalize commas to semicolons here,
-    # at the server's own boundary — scripts/build-llama.sh stays untouched. Plain numbers,
-    # native, and semicolon lists pass through unchanged.
+    # CUDA_ARCHS normalization (measured 2026-11-05, publish run #6, in the retired Swift builder):
+    # CUDA_ARCHS reaches CMake as ONE -D value and CMake lists are SEMICOLON-separated, so
+    # "61,70,…" is one invalid arch token and configure dies. Plain numbers, native and
+    # semicolon lists pass through unchanged. scripts/build-llama.sh stays untouched.
     export CUDA_ARCHS="$(printf %s "${CUDA_ARCHS:-native}" | tr ',' ';')"; \
-    # The fetches inside scripts/build-ffmpeg.sh / build-llama.sh are single-attempt curls.
-    # Build hosts behind a flaky resolver (timeouts, SERVFAIL cascades on AAAA) can stall one
-    # query for seconds and fail the whole build; these scripts are stamped and idempotent,
-    # so a bounded retry (3 attempts, 30 s apart) costs nothing on healthy networks and
-    # survives a resolver hiccup. CI's first attempt lands on its stamp the same way.
+    # The resolver-retry wrapper (the builder's standing rule, measured on resolver hiccups):
+    # these scripts are stamped and idempotent, so one flaky DNS query must not kill a 20-minute build.
     tries=0; until scripts/build-ffmpeg.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
       echo "build-ffmpeg: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
     tries=0; until scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
       echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
-    export PATH="/src/Vendor/ffmpeg/bin:$PATH"; \
-    swift build -c release; \
-    if [ "${SWIFT_TESTS}" = 1 ]; then swift test; else echo "SWIFT_TESTS=${SWIFT_TESTS}: engine swift test skipped (the contract suite is the server's gate)"; fi
+    cargo build --release -p digup-cli -p digup-server; \
+    # The engine answers with the C libraries beside Vendor/ (the payload's own $ORIGIN
+    # shape is gated in rust-engine-payload below). PIPEFAIL is the point: the usage is
+    # CAPTURED and checked non-empty, because `./digup --help | sed -n '2p'` reports SED's
+    # exit status — a binary that dies "error while loading shared libraries" prints nothing
+    # and the RUN passes (measured 2026-11-13 on this stage's CPU run: a green image with an
+    # empty probe). Line 1 is the CLI's own title, line 3 its first verb (line 2 is blank).
+    usage="$(LD_LIBRARY_PATH="/src/Vendor/llama/lib:/src/Vendor/pdfium/lib" \
+      PATH="/src/Vendor/ffmpeg/bin:$PATH" ./target/release/digup --help)"; \
+    test -n "$(printf '%s\n' "$usage" | sed -n '1p')"; \
+    printf '%s\n' "$usage" | sed -n '1p;3p'
 
-# The CLI, verified in the build stage. Vendor is mounted here too: the binary's rpath points
-# at Vendor/pdfium/lib and Vendor/llama/lib, so a check without them would say nothing.
-RUN --mount=type=cache,target=/src/.build --mount=type=cache,target=/src/Vendor \
-    export PATH="/src/Vendor/ffmpeg/bin:$PATH"; \
-    .build/release/digup --help > /dev/null; \
-    .build/release/digup --help | sed -n '2p;3p'
-
-# The launch-ready payload: the CLI linked with the Swift standard library (the shape
-# scripts/package-linux.sh ships, so no Swift libraries go into the runtime image) plus the
-# native libraries it asks for, all finding each other beside themselves ($ORIGIN).
-FROM engine-builder AS engine-payload
-# bash, not /bin/sh: the link line uses a bash array, exactly as scripts/package-linux.sh does.
+# The payload: the CLI + the native libraries it asks for (PDFium, llama.cpp, ffmpeg),
+# rpath'd $ORIGIN — the same file set and layout the retired Swift payload shipped. The Rust
+# engine loads the llama/pdfium libraries at run time (dlopen), so the payload carries them
+# exactly where the Swift payload put them; ffmpeg/ffprobe ride beside the binary,
+# which is how `FFmpeg.find` reaches them (beside the executable, then PATH).
+FROM rust-engine-builder AS rust-engine-payload
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN --mount=type=cache,target=/src/Vendor \
-    --mount=type=cache,target=/src/.build/static \
+RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
+    --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/root/.cargo/registry \
     set -euxo pipefail; \
-    late=(); \
-    for library in _CFURLSessionInterface curl CoreFoundation _FoundationICU FoundationEssentials \
-        FoundationInternationalization _FoundationCShims _FoundationCollections swiftSynchronization \
-        swift_Concurrency swift_StringProcessing swift_RegexParser swiftDispatch dispatch \
-        BlocksRuntime swiftCore; do late+=(-Xlinker "-l$library"); done; \
-    swift build -c release --product digup --static-swift-stdlib --scratch-path /src/.build/static \
-      "${late[@]}"; \
+    cargo build --release -p digup-cli -p digup-server; \
     mkdir -p /out; \
-    cp /src/.build/static/release/digup /src/Vendor/pdfium/lib/libpdfium.so \
+    cp /src/target/release/digup /src/target/release/digup-server \
+       /src/Vendor/pdfium/lib/libpdfium.so \
        /src/Vendor/ffmpeg/bin/ffmpeg /src/Vendor/ffmpeg/bin/ffprobe /out/; \
     for file in /src/Vendor/llama/lib/*.so*; do \
       name=${file##*/}; \
@@ -183,7 +156,11 @@ RUN --mount=type=cache,target=/src/Vendor \
       esac; \
     done; \
     for file in /out/digup /out/*.so*; do patchelf --set-rpath '$ORIGIN' "$file"; done; \
-    PATH="/out:$PATH" /out/digup --help | sed -n '2p'
+    # The gate is the payload answering from its own folder (the $ORIGIN rpath above): line 1
+    # of --help, printed (line 2 is blank, so asking sed for '2p' proves nothing by itself),
+    # and PIPEFAIL so a loader failure fails the RUN. digup-server rides with digup.
+    test -x /out/digup-server; \
+    PATH="/out:$PATH" /out/digup --help | sed -n '1p'
 
 # ── Runtime: the server image's base. No Swift, no compiler, no desktop stack. ───────────────
 FROM ${BASE_IMAGE} AS engine-runtime
@@ -192,7 +169,7 @@ RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --
     ca-certificates libcurl4 libgomp1 libstdc++6 tzdata \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=engine-payload /out/ /opt/digup/
+COPY --from=rust-engine-payload /out/ /opt/digup/
 # ffmpeg and ffprobe are in /opt/digup and on PATH: that is how the engine finds them
 # (`executable("ffmpeg")` looks on PATH, nothing else).
 ENV PATH=/opt/digup:$PATH
@@ -223,7 +200,7 @@ RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 
-COPY --from=engine-payload /out/ /opt/digup/
+COPY --from=rust-engine-payload /out/ /opt/digup/
 COPY server /srv/server
 # The built UI (the mount serves server/ui/dist; api.py): a dist that exists is what makes
 # the suite's page fetches real bytes, not skips.
@@ -264,7 +241,7 @@ RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 
-COPY --from=engine-payload /out/ /opt/digup/
+COPY --from=rust-engine-payload /out/ /opt/digup/
 ENV PATH=/opt/digup:$PATH
 COPY server /srv/server
 COPY server/docker/healthcheck.py /opt/digup/healthcheck.py
@@ -326,7 +303,7 @@ CMD ["uvicorn", "--factory", "digup_server.api:app_factory", "--host", "0.0.0.0"
 #     --build-arg CUDA_ARCHS=61 …        # plain number, or a fat list `61,70,…`: the builder's
 #                                        # apt cmake 3.22.1 rejects dotted 6.1 and native alike
 #                                        # (measured 2026-11-04); commas are normalized to
-#                                        # CMake's semicolons in the engine-builder RUN
+#                                        # CMake's semicolons in the rust-engine-builder RUN
 #                                        # (measured 2026-11-05, publish run #6)
 #
 # The `cuda-libs` stage is pulled only by this target: CPU builds (target server-runtime)
@@ -366,153 +343,17 @@ COPY --from=cuda-libs /out/ /opt/digup/
 RUN ldd /opt/digup/libggml-cuda.so \
     && ! ldd /opt/digup/libggml-cuda.so | grep 'not found' | grep -v 'libcuda.so.1'
 
-# ── Rust port payload (stage 4f, user-directed override) ─────────────────────────────────────
-# The same payload shape the Swift stages ship — `digup` + its native libraries beside
-# themselves ($ORIGIN) — built from the Rust workspace (crates/) instead of Sources/.
-# The contract suite (`server/tests/`) runs UNCHANGED against this payload: the engine's
-# published interfaces (JSON-lines verbs, schema v6, the 768-f16 vector layout, one-shot
-# --json CLI) are reproduced byte-for-byte, so the suite is the port's gate. The suite
-# itself builds indexes with THIS binary (the /index mount starts empty), so unlike the
-# cross-check gates it measures the payload end-to-end, not a cached artifact.
-#
-#   docker build --target server-test-rust -f server/docker/Dockerfile -t digup-rust-test .
-#
-# Ubuntu 22.04, same rule as the Swift builder: the binaries then ask for glibc 2.35 at
-# most, and the runtime stages (Debian 13, glibc 2.41) run NEWER — forward, never back.
-# The Vendor tree is shared with the Swift builder (the same cache mount, the same stamped
-# scripts): a build that runs both builders pays the C-library compiles once.
-FROM ${BASE_IMAGE} AS rust-engine-builder
 
-# Stage 9's CUDA knobs, the same as engine-builder's above: scripts/build-llama.sh picks the
-# CUDA flavor by finding nvcc on PATH (a CUDA *devel* base) and pins the card with CUDA_ARCHS.
-# Without this ARG/ENV pair the build-arg has no landing place and CMake gets
-# `-gencode=arch=compute_,code=sm_` — the empty arch number is what "Unsupported gpu
-# architecture 'compute_'" means (measured 2026-11-13, this stage's first CUDA run).
-ARG CUDA_ARCHS=native
-ENV CUDA_ARCHS=${CUDA_ARCHS}
-ENV DEBIAN_FRONTEND=noninteractive
-# clang + libclang-dev: `digup-runtime`'s build script runs bindgen over the
-# vendored llama.cpp/PDFium headers, and bindgen IS libclang (measured 2026-11-13:
-# the build died "Unable to find libclang" without them).
-RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-    ca-certificates curl git gnupg xz-utils unzip python3 binutils build-essential cmake ninja-build \
-    meson nasm pkg-config patchelf file zlib1g-dev libcurl4-openssl-dev libxml2-dev libedit2 \
-    libsqlite3-0 libz3-dev libpython3-dev tzdata libgomp1 clang libclang-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# The pinned Rust toolchain, installed through rustup (the distro cargo lags it by
-# years): 1.99.1, the compiler this port is measured with on the dev box. The
-# workspace's floor is 1.88 (Cargo.toml — sha2 0.11 requires it; a 1.85 builder
-# died on exactly that, measured 2026-11-13). Profile minimal: rustc + cargo,
-# no clippy, no docs.
-ARG RUST_VERSION=1.99.1
-RUN set -eux; \
-    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
-    sh /tmp/rustup.sh -y --default-toolchain "${RUST_VERSION}" --profile minimal; \
-    rm -f /tmp/rustup.sh
-ENV PATH=/root/.cargo/bin:$PATH
-ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-
-WORKDIR /src
-COPY . .
-COPY .ci-vendor /ci-vendor
-
-# Same vendor seeding as engine-builder: CI passes a prebuilt Vendor through the context,
-# the scripts land on their stamps (Vendor/VENDOR, ffmpeg/BUILD, llama/BUILD) and skip.
-# bash for pipefail (Ubuntu's /bin/sh is dash, which has no `set -o pipefail`).
-# The Vendor cache mount carries `key=rust-vendor` for a measured reason: BuildKit runs
-# stages in parallel, and the Swift builder shares `/src/Vendor` with this one — two
-# `scripts/build-llama.sh` runs in one tree race (measured 2026-11-13 on the
-# server-test-rust chain: `ninja: error: unknown target 'cmTC_…'` / `loading 'build.ninja':
-# No such file or directory` from cmake's compiler-id test, the Swift stage failing on the
-# Rust stage's half-written build tree). A distinct `id` = a distinct volume (BuildKit
-# v0.34.2 rejects `key=` outright — "unexpected key 'key'"; the attribute is `id`, the name
-# the cache records print: "cached mount /src/Vendor … with id //src/Vendor"). The scripts
-# stay untouched.
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
-    --mount=type=cache,target=/src/target \
-    --mount=type=cache,target=/root/.cargo/registry \
-    set -euxo pipefail; \
-    if [ -f /ci-vendor/llama/BUILD ]; then cp -a /ci-vendor/. /src/Vendor/; fi; \
-    export CC="${CC:-cc}" CXX="${CXX:-c++}"; \
-    scripts/fetch-vendor.sh; \
-    # The same flavor guard as engine-builder (line 128's note): a CUDA-flavored Vendor
-    # cache carries Vendor/llama-build/CMakeCache.txt with GGML_CUDA=ON, and a CPU run
-    # reusing it dies at configure with "CUDA Toolkit not found" (measured 2026-11-05).
-    rm -f Vendor/llama-build/CMakeCache.txt; \
-    # The same normalization as engine-builder (measured 2026-11-05, publish run #6):
-    # CUDA_ARCHS reaches CMake as ONE -D value and CMake lists are SEMICOLON-separated, so
-    # "61,70,…" is one invalid arch token and configure dies. Plain numbers, native and
-    # semicolon lists pass through unchanged. scripts/build-llama.sh stays untouched.
-    export CUDA_ARCHS="$(printf %s "${CUDA_ARCHS:-native}" | tr ',' ';')"; \
-    # The resolver-retry wrapper mirrors engine-builder: these scripts are stamped and
-    # idempotent, so one flaky DNS query must not kill a 20-minute build.
-    tries=0; until scripts/build-ffmpeg.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
-      echo "build-ffmpeg: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
-    tries=0; until scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
-      echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
-    cargo build --release -p digup-cli -p digup-server; \
-    # The engine answers with the C libraries beside Vendor/ (the payload's own $ORIGIN
-    # shape is gated in rust-engine-payload below). PIPEFAIL is the point: the usage is
-    # CAPTURED and checked non-empty, because `./digup --help | sed -n '2p'` reports SED's
-    # exit status — a binary that dies "error while loading shared libraries" prints nothing
-    # and the RUN passes (measured 2026-11-13 on this stage's CPU run: a green image with an
-    # empty probe). Line 1 is the CLI's own title, line 3 its first verb (line 2 is blank).
-    usage="$(LD_LIBRARY_PATH="/src/Vendor/llama/lib:/src/Vendor/pdfium/lib" \
-      PATH="/src/Vendor/ffmpeg/bin:$PATH" ./target/release/digup --help)"; \
-    test -n "$(printf '%s\n' "$usage" | sed -n '1p')"; \
-    printf '%s\n' "$usage" | sed -n '1p;3p'
-
-# The payload: the CLI + the native libraries it asks for (PDFium, llama.cpp, ffmpeg),
-# rpath'd $ORIGIN — the same file set and layout engine-payload ships. The Rust engine
-# loads the llama/pdfium libraries at run time (dlopen), so the payload carries them
-# exactly where the Swift payload puts them; ffmpeg/ffprobe ride beside the binary,
-# which is how `FFmpeg.find` reaches them (beside the executable, then PATH).
-FROM rust-engine-builder AS rust-engine-payload
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
-    --mount=type=cache,target=/src/target \
-    --mount=type=cache,target=/root/.cargo/registry \
-    set -euxo pipefail; \
-    cargo build --release -p digup-cli -p digup-server; \
-    mkdir -p /out; \
-    cp /src/target/release/digup /src/target/release/digup-server \
-       /src/Vendor/pdfium/lib/libpdfium.so \
-       /src/Vendor/ffmpeg/bin/ffmpeg /src/Vendor/ffmpeg/bin/ffprobe /out/; \
-    for file in /src/Vendor/llama/lib/*.so*; do \
-      name=${file##*/}; \
-      case "$name" in \
-        *.so.[0-9]*) [ -L "$file" ] && cp -L "$file" "/out/$name" ;; \
-        *.so) [ ! -L "$file" ] && cp "$file" "/out/" ;; \
-      esac; \
-    done; \
-    for file in /out/digup /out/*.so*; do patchelf --set-rpath '$ORIGIN' "$file"; done; \
-    # The gate is the payload answering from its own folder (the $ORIGIN rpath above): line 1
-    # of --help, printed (line 2 is blank, so asking sed for '2p' proves nothing by itself),
-    # and PIPEFAIL so a loader failure fails the RUN. digup-server rides with digup.
-    test -x /out/digup-server; \
-    PATH="/out:$PATH" /out/digup --help | sed -n '1p'
-
-# The contract suite over the Rust payload: the server-test stage with the Swift payload
-# replaced (the directory is emptied first — the Swift-only libraries must NOT ride along
-# into a run that measures the Rust engine). The suite is unchanged: same tests, same
-# mounts, same zero-skip bar. This is stage 4f's gate.
+# The contract suite's Rust-payload name: server-test now CARRIES the Rust payload (the
+# engine-builder/engine-payload Swift stages are retired), so this stage is the name the
+# CI jobs and the agent notes use for the suite image — a FROM alias, zero added layers.
+# The suite is unchanged: same tests, same mounts, same zero-skip bar. This is stage 4f's gate.
 FROM server-test AS server-test-rust
-RUN rm -rf /opt/digup
-COPY --from=rust-engine-payload /out/ /opt/digup/
 
-# The shipping image with the Rust engine (the deploy compose can target it unchanged).
+# The shipping image with the Rust engine (the deploy compose can target it unchanged):
+# same alias shape — server-runtime's payload COPY is the Rust one, so the name stays for
+# the CI steps and the compose override that target it, with no layers of its own.
 FROM server-runtime AS server-runtime-rust
-# server-runtime ENDS as `USER digup` (line 299) and /opt/digup is ROOT-owned (the Swift
-# payload COPY landed as root), so `rm -rf` runs as root here and the stage hands the
-# image back to digup — the swap's exact shape: empty the dir, land the Rust payload,
-# re-copy the healthcheck (server-runtime keeps it INSIDE /opt/digup), drop back to 990.
-USER 0
-RUN rm -rf /opt/digup
-COPY --from=rust-engine-payload /out/ /opt/digup/
-COPY server/docker/healthcheck.py /opt/digup/healthcheck.py
-USER digup
 
 # ── Stage 6: the shipping image with the Rust server (no Python, no uvicorn) ──────────────────
 # The pure-Rust shape: `digup-server` (crates/server, the axum port of the FastAPI wrapper) +
@@ -529,7 +370,7 @@ USER digup
 #
 #   docker build --target server-rust-runtime -f server/docker/Dockerfile -t digup-rust:local .
 #
-# The supervision chain is the Swift stage's, unchanged: tini (PID 1) → digup-server → the
+# The supervision chain, unchanged from the measured Swift-era runtime image: tini (PID 1) → digup-server → the
 # engine's helpers (search-service/index-service are spawned by digup-server; ParentWatch
 # ends a helper whose parent's parent is PID 1 — so a stopped API takes its whole tree with
 # it, by design). SIGTERM (docker stop): digup-server drains, runs the lifespan's shutdown
@@ -582,7 +423,7 @@ USER digup
 WORKDIR /data
 EXPOSE 8787
 
-# The healthcheck is the Swift stage's rule with curl instead of Python (no interpreter in
+# The healthcheck is the runtime stages' rule with curl instead of Python (no interpreter in
 # this image): ask the API's own /api/v1/health (server/docker/healthcheck.py asks the same
 # path), and count 503 as ALIVE — /health answers 503 while the searcher warms or respawns
 # (the engine honestly saying "not right now"), and docker must not restart a live server
@@ -595,8 +436,8 @@ ENTRYPOINT ["tini", "--"]
 CMD ["digup-server"]
 
 # ── Stage 6: the same image with the CUDA backend (built and measured on the box that has the
-# card, same two build-args as the Swift CUDA stage — see server-runtime-cuda above) ──────────
-# The Rust engine loads ggml's CUDA module the same way the Swift one does (backend.rs:
+# card, same two build-args as server-runtime-cuda above) ──────────────────────────────────────
+# The Rust engine loads ggml's CUDA module the way its backend.rs defines it (backend.rs:
 # `$DIGUP_BACKENDS`, then beside the executable), so the CUDA payload is the same file set:
 # libggml-cuda.so from the Vendor build (rust-engine-payload copies every Vendor .so, the
 # CUDA flavor among them when the builder ran on a CUDA devel base) plus exactly the CUDA

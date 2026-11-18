@@ -109,12 +109,10 @@ pub fn run(
     // constant (`unnecessary_lazy_evaluations`, measured on the mingw cross-check
     // 2026-11-17) — each platform names its own fallback.
     #[cfg(unix)]
-    let code = status
-        .code()
-        .unwrap_or_else(|| {
-            use std::os::unix::process::ExitStatusExt;
-            ExitStatusExt::signal(&status).unwrap_or(1)
-        });
+    let code = status.code().unwrap_or_else(|| {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatusExt::signal(&status).unwrap_or(1)
+    });
     #[cfg(not(unix))]
     let code = status.code().unwrap_or(1);
     if code == 0 {

@@ -12,9 +12,9 @@
 # engine's helpers, so a stopped API takes its whole tree with it: ParentWatch's design).
 #
 # The differences the file carries:
-#   * `SWIFT_TESTS` is not passed: this target builds no Swift, so the engine-test gate
-#     of the Swift builder stage is not in the path. The Rust gates are `cargo test` and
-#     the contract suite (server-test-rust) — CI runs them (.github/workflows/rust.yml).
+#   * The engine gates are `cargo test` and the contract suite (server-test-rust) — CI runs
+#     them. The base compose's builder-stage engine gate retired with the Swift stages;
+#     this target builds no Swift at all.
 #   * The UI mount: the image bakes the Lit bundle into the payload folder beside
 #     (the same frontend the FastAPI server serves).
 #   * The API host: the image binds 0.0.0.0 (the container's own face); a bare-metal run
