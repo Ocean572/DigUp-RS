@@ -130,14 +130,20 @@ impl Options {
 }
 
 /// The helper in the `helper` folder beside this program (Windows: "DigUp.exe" and "digup.exe" can't share a folder),
-/// or where the Linux packages put it (lib/DigUp/helper beside their bin folder), else beside this program.
+/// or where the Linux packages put it (lib/DigUp/helper beside their bin folder), or inside an AppImage's
+/// mounted root (Tauri v2 runs the binary at the AppDir root, resources under usr/lib/<name>/ — v1 ran the
+/// binary from usr/bin, where the bin-folder probe reached it), else beside this program.
 fn default_helper() -> PathBuf {
     let name = if cfg!(windows) { "digup.exe" } else { "digup" };
     let Some(folder) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) else {
         return PathBuf::from(name);
     };
-    [folder.join("helper").join(name), folder.join("../lib/DigUp/helper").join(name)]
-        .into_iter()
-        .find(|helper| helper.is_file())
-        .unwrap_or_else(|| folder.join(name))
+    [
+        folder.join("helper").join(name),
+        folder.join("../lib/DigUp/helper").join(name),
+        folder.join("usr/lib/DigUp/helper").join(name),
+    ]
+    .into_iter()
+    .find(|helper| helper.is_file())
+    .unwrap_or_else(|| folder.join(name))
 }

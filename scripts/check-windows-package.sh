@@ -62,6 +62,13 @@ fi
 echo "panel: $report"
 if [[ $report != *'"recipe.txt"'* ]]; then
   echo "the panel didn't find recipe.txt"
+  # The facts the gate owes a red run: the shell's index events (its stdout carries the
+  # helper's "index:" lines) and the store's counters — which files made vectors, which
+  # failed, and what the setup flow saw. (Measured 2026-11-18: a 0-hit report at 54 s
+  # with no evidence behind it.)
+  echo "--- shell stdout (index events)"; tail -40 "$work/out.txt"
+  echo "--- shell stderr"; tail -40 "$work/err.txt"
+  echo "--- helper status"; "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | tail -12 || true
   exit 1
 fi
 
