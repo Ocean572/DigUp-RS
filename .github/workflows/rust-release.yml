@@ -326,6 +326,14 @@ jobs:
     needs: packages
     if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-24.04
+    # Release-asset uploads need contents:write — the top-level permissions block is the
+    # workspace's tight contents:read default, and the token it hands this job answers
+    # HTTP 403 "Resource not accessible by integration" at uploads.github.com (measured
+    # on the v0.8.0 publish 2026-11-18: gates, suite, and all four payload tiles green,
+    # gh release upload refused). The job-level grant is the whole fix: only this job
+    # writes the release.
+    permissions:
+      contents: write
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
