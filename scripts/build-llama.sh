@@ -101,6 +101,13 @@ else
   COMPILERS=()
   if [[ $OS == MINGW* || $OS == MSYS* ]]; then
     export CC=cl CXX=cl   # MSVC, not whatever else bash finds first
+    # MSVC finds OpenMP (unlike this repo's clang builds, where detection fails and
+    # the build lands OpenMP-free); the runtime it links, vcomp140.dll, rides no
+    # payload — the backend DLL imports then fail to load, llama never opens the
+    # model, and index rows pile up `pending` with 0 vectors (measured on the
+    # Windows installer gate, 2026-11-18). OFF is also the shape the pinned parity
+    # suites measure: sequential reductions, no OpenMP reordering.
+    COMPILERS=(-DGGML_OPENMP=OFF)
   elif [[ $(uname -m) == aarch64 && -z "${CC:-}" ]]; then
     # The arm64 CPU variants go up to armv9.2 with SME (-march=...+sme), which GCC before 14 doesn't know (Ubuntu
     # 24.04's is 13): the first C compiler here that takes it, with its C++ one. Named to CMake, so a build folder

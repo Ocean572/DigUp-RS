@@ -136,9 +136,13 @@ jobs:
         run: |
           asound=libasound2
           apt-cache show libasound2t64 > /dev/null 2>&1 && asound=libasound2t64
+          # libgomp1: the payload's libggml-base carries an OpenMP dependency (the Linux
+          # build keeps OpenMP ON; the .deb declares it in Depends — the AppImage leaves
+          # it to the system, as every desktop has it; a bare container must install it
+          # too, or the payload's embedder never loads and the gate times out with 0 vectors).
           DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends libx11-6 libx11-xcb1 libxcb1 \
             libfontconfig1 libfreetype6 libharfbuzz0b libfribidi0 libwayland-client0 libgbm1 libdrm2 libgl1 libegl1 \
-            libgles2 libexpat1 $asound
+            libgles2 libexpat1 libgomp1 $asound
           chmod +x packages/appimage/*.AppImage
           MODELS="$PWD/models" scripts/check-linux-package.sh packages/appimage/*.AppImage
       - name: The .deb
