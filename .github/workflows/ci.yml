@@ -44,7 +44,7 @@ jobs:
       - name: Rust (pinned)
         run: |
           curl --proto '=https' '--tlsv1.2' -fsSL https://sh.rustup.rs -o rustup.sh
-          sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1 --component rustfmt clippy
+          sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1 --component rustfmt,clippy
           rm -f rustup.sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
