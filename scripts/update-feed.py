@@ -24,10 +24,20 @@ import sys
 from pathlib import Path
 
 # Platform keys the updater looks up: `{os}-{arch}` (a .deb install finds the AppImage's entry, reads only its version).
+# The macOS app is a .app.tar.gz the updater un-tars; a universal build answers both slices' keys.
 PLATFORMS = {
     "windows-x86_64": re.compile(r"^DigUp_(?P<version>[^_]+)_x64-setup\.exe$"),
     "linux-x86_64": re.compile(r"^DigUp_(?P<version>[^_]+)_amd64\.AppImage$"),
+    "macos-aarch64": re.compile(r"^DigUp_(?P<version>[^_]+)_aarch64\.app\.tar\.gz$"),
+    "macos-x86_64": re.compile(r"^DigUp_(?P<version>[^_]+)_x86_64\.app\.tar\.gz$"),
+    "macos-universal": re.compile(r"^DigUp_(?P<version>[^_]+)_universal\.app\.tar\.gz$"),
 }
+# A universal macOS build is one artifact read by both slices' keys: the updater asks
+# {os}-{arch} with the runtime slice, so the universal package writes both feeds.
+MACOS_SLICES = {"macos-universal": ("macos-aarch64", "macos-x86_64")}
+# latest.json serves the copies from before the per-platform feeds: Windows and Linux,
+# the platforms that existed then (macOS feeds ride the per-platform keys only).
+LATEST_PLATFORMS = ("windows-x86_64", "linux-x86_64")
 
 
 def main():
@@ -54,6 +64,12 @@ def main():
             sys.exit(f"update-feed: {package.name} has no {signature.name}: build the packages with the signing key")
         versions.add(pattern.match(package.name)["version"])
         platforms[key] = {"package": package.name, "signature": signature.read_text().strip()}
+    # The universal macOS package answers both slices' feed keys (the updater asks with
+    # its runtime slice: macos-aarch64 on Apple Silicon, macos-x86_64 on Intel).
+    for key, slice_keys in MACOS_SLICES.items():
+        if key in platforms:
+            for feed_key in slice_keys:
+                platforms[feed_key] = platforms[key]
     if not platforms:
         sys.exit(f"update-feed: no package in {folder} (an installer or an AppImage, with its .sig)")
     if len(versions) != 1:
@@ -73,8 +89,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     written = {key: out / f"{key}.json" for key in platforms}
     if args.also_latest:
-        if len(platforms) < len(PLATFORMS):
-            sys.exit("update-feed: latest.json needs every platform's package (it's one feed for both)")
+        if not set(LATEST_PLATFORMS) <= set(platforms):
+            sys.exit("update-feed: latest.json needs the Windows and Linux packages (it's the feed for old copies)")
         written["latest"] = out / "latest.json"
     for name, path in written.items():
         keys = list(platforms) if name == "latest" else [name]

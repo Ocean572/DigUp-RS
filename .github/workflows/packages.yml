@@ -1,6 +1,7 @@
-# Builds DigUp for Windows and Linux on x64: the shell's Windows installer, and its .deb and AppImage, kept as the run's
-# artifacts (nothing is published). By hand: `gh workflow run packages.yml`, or `-f ref=<branch or tag>`. The Mac app is
-# built and released on a Mac (scripts/release.sh). llama.cpp gets its Vulkan backend beside the CPU ones (the Vulkan
+# Builds DigUp for Windows, Linux and Apple Silicon on x64/arm64: the shell's Windows installer, its .deb and AppImage,
+# and its macOS .app + .dmg (universal, built on the runner's own Apple Silicon), kept as the run's
+# artifacts (nothing is published). By hand: `gh workflow run packages.yml`, or `-f ref=<branch or tag>`. llama.cpp gets
+# its Vulkan backend beside the CPU ones (the Vulkan
 # SDK's shader compiler is what makes scripts/build-llama.sh build it): a computer whose GPU runs the model faster than
 # its processor uses it (`digup speed --model` decides), any other the processor. Each package is then installed and
 # launched, hidden (scripts/check-*-package.sh): the AppImage and the .deb on Ubuntu 22.04 and 24.04 and Debian 12, the
@@ -214,3 +215,49 @@ jobs:
       - name: The installer
         shell: bash
         run: MODELS="$PWD/models" scripts/check-windows-package.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+
+  macos:
+    # The macOS .app and .dmg, universal, built on the runner's own Apple Silicon (§11 native builds):
+    # scripts/rust/package-macos.sh --shell builds the fat toolchain (DIGUP_UNIVERSAL: fat llama archive +
+    # fat PDFium dylib — the vendor seeding must carry the same env, the fat seeds depend on it), both cargo
+    # targets, the merged .app, the deep ad-hoc signature, and its own gates: the payload's PATH-only answer,
+    # the slice asserts, codesign --verify, the helper answering from inside the bundle. The install-and-launch
+    # dance of the Linux/Windows jobs is GUI automation the mac runners don't do: the script's gates stand in,
+    # and the app's first launch on a real Mac is accepted by hand (the release page says so).
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Build tools (the image carries make/ninja/nasm/pkg-config/zlib, not meson)
+        shell: bash
+        run: brew install meson
+      - name: Rust (pinned, the payload chain's recipe)
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o rustup.sh
+          sh rustup.sh -y -q --profile minimal --default-toolchain 1.99.1
+          rm -f rustup.sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: "Vendor — fat seeds: the seeding must ask for what the payload script asks"
+        shell: bash
+        env:
+          DIGUP_UNIVERSAL: 1
+        run: scripts/fetch-vendor.sh
+      - name: The app
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: scripts/rust/package-macos.sh --shell
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: DigUp-macos-universal
+          path: |
+            shell/src-tauri/target/release/bundle/macos/DigUp_*_universal.app.tar.gz
+            shell/src-tauri/target/release/bundle/macos/DigUp_*_universal.app.tar.gz.sig
+            shell/src-tauri/target/release/bundle/dmg/*.dmg
+            dist/*.tar.gz
+          if-no-files-found: error

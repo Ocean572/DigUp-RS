@@ -72,7 +72,8 @@ def miniz_license():
 def rust_crates(platform):
     """The crates in the app's binary for the platform: Cargo's resolve graph from the app, through normal
     dependencies, without proc-macro crates (they run while compiling)."""
-    target = {"linux": "x86_64-unknown-linux-gnu", "windows": "x86_64-pc-windows-msvc"}[platform]
+    target = {"linux": "x86_64-unknown-linux-gnu", "windows": "x86_64-pc-windows-msvc",
+              "macos": "aarch64-apple-darwin"}[platform]
     metadata = json.loads(subprocess.run(
         ["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", target],
         cwd=ROOT / "shell/src-tauri", check=True, capture_output=True, encoding="utf-8").stdout)
@@ -110,7 +111,7 @@ def rust_section(platform):
             text = read(path)
             by_text.setdefault(" ".join(text.split()), (text, []))[1].append(label)
     parts = [RULE, f"Rust crates in the app ({len(crates)}), each under its own license", RULE, "",
-             "The app around DigUp's search on Windows and Linux is written in Rust with Tauri (https://tauri.app). "
+             "The app around DigUp's search on Windows, Linux and macOS is written in Rust with Tauri (https://tauri.app). "
              "These are the crates it is built from, with the license files they ship; a text several crates share "
              "is printed once, after their names.", ""]
     for text, labels in sorted(by_text.values(), key=lambda item: item[1][0]):
@@ -127,7 +128,7 @@ def rust_section(platform):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ("linux", "windows"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("linux", "windows", "macos"):
         sys.exit(__doc__)
     platform, out = sys.argv[1], Path(sys.argv[2])
     ffmpeg, dav1d = build_ffmpeg_versions()
@@ -137,7 +138,7 @@ def main():
     windows = platform == "windows"
 
     parts = [
-        "DigUp for Windows and Linux includes code from these projects, under their own licenses. Thank you.",
+        "DigUp for Windows, Linux and macOS includes code from these projects, under their own licenses. Thank you.",
         "",
         "DigUp (https://github.com/ARahim3/DigUp) is MIT licensed; its license is the first one below. The model it uses, "
         "Google DeepMind's EmbeddingGemma 2 (Apache 2.0), isn't part of this download: DigUp downloads it from Hugging "
@@ -176,16 +177,25 @@ def main():
                 "and forgive others. May you share freely, never taking more than you give.\""),
         section("stb (https://github.com/nothings/stb), reads and writes pictures", stb_license()),
         section("miniz (https://github.com/richgel999/miniz), reads docx and odt files", miniz_license()),
-        section("Swift's runtime, Foundation and libdispatch (https://swift.org), which DigUp's helper is written with",
-                swift_license()),
-        section("ICU (https://icu.unicode.org), in Swift's Foundation and in PDFium (the same license, printed with "
-                "PDFium's above)", need(pdfium / "licenses/icu.txt")),
+        # The Swift runtime section rides only where Swift ships (the Swift-era Linux and
+        # Windows packages; the Rust helper carries no Swift). The macOS app is Rust-built.
+        *([section("Swift's runtime, Foundation and libdispatch (https://swift.org), which DigUp's helper is written with",
+                   swift_license())] if platform != "macos" else []),
+        section(f"ICU (https://icu.unicode.org), in {'Swift’s Foundation and in ' if platform != 'macos' else ''}PDFium "
+                f"(the same license{'' if platform == 'macos' else ', printed with PDFium’s above'})",
+                need(pdfium / "licenses/icu.txt")),
     ]
     if windows:
         parts += [section("Microsoft Visual C++ runtime and WebView2",
                           "DigUp's helper ships Microsoft's Visual C++ runtime libraries, which their license allows "
                           "redistributing, and the app's window uses the Microsoft Edge WebView2 runtime that Windows "
                           "provides (its loader is linked into the app under the WebView2 SDK's license).")]
+    elif platform == "macos":
+        parts += [section("The macOS app",
+                          "The app carries DigUp's helper, its C libraries and the small ffmpeg beside the app binary, "
+                          "in Contents/MacOS/helper. The window is the system's WKWebView (WebKit), part of macOS. "
+                          "ffmpeg and ffprobe are built for Apple Silicon: on an Intel Mac the media pipeline answers "
+                          "the engine's own refusal; text, pictures and PDFs are unaffected.")]
     else:
         parts += [section("The AppImage's libraries",
                           "The AppImage also carries the libraries the app's window uses (GTK, WebKitGTK, GStreamer and "

@@ -95,11 +95,81 @@ tar -C "$out" -czf "dist/$(basename "$out").tar.gz" payload
 echo "payload: dist/$(basename "$out").tar.gz"
 
 if [ "${1:-}" = "--shell" ]; then
+  # The Tauri shell as a macOS .app (and a .dmg): the payload folder rides in the app's
+  # Contents/MacOS/helper — the path options.rs' default_helper looks in ("beside this
+  # program", the installers' layout; Tauri's own resource staging lands in
+  # Contents/Resources, so the helper is copied into Contents/MacOS after the build) and
+  # Tauri's resources carry the notices beside the app. The app is universal when both
+  # toolchains built: tauri builds each target's .app, the merge lipos the shell binary
+  # and keeps the (already fat) helper folder — resources are target-independent. Every
+  # byte change (lipo, the helper copy) precedes the deep ad-hoc signature, which is
+  # applied last and covers the nested binaries and dylibs — the same lipo/codesign
+  # order as the payload above. LSMinimumSystemVersion matches the payload's macOS 14
+  # floor. The .app.tar.gz the updater installs is signed with the release key when the
+  # environment carries it (the Linux/Windows shells' rule: TAURI_SIGNING_PRIVATE_KEY,
+  # plugins.updater.pubkey; a build without it offers no in-app updates).
   helper=shell/src-tauri/helper
   rm -rf "$helper"; mkdir -p "$helper"
   cp "$out"/payload/* "$helper/"
+  python3 scripts/notices.py macos shell/src-tauri/THIRD-PARTY-NOTICES.txt
+  signing=
+  if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    if grep -q '"pubkey": ""' shell/src-tauri/tauri.conf.json; then
+      echo "the signing key is set, but plugins.updater.pubkey in shell/src-tauri/tauri.conf.json is empty" >&2
+      exit 1
+    fi
+    signing=',"createUpdaterArtifacts":true'
+  fi
   tauri=(npx --yes @tauri-apps/cli@2.12.2)
   if cargo tauri --version > /dev/null 2>&1; then tauri=(cargo tauri); fi
-  "${tauri[@]}" build
-  echo "shell bundles: shell/src-tauri/target/release/bundle/"
+  rm -rf shell/src-tauri/target/release/bundle/macos shell/src-tauri/target/release/bundle/dmg
+  resources='"resources":{"helper/":"helper/","THIRD-PARTY-NOTICES.txt":"THIRD-PARTY-NOTICES.txt"}'
+  plist='"info":{"LSMinimumSystemVersion":"14.0"}'
+  appdirs=()
+  for target in "${targets[@]}"; do
+    (cd shell/src-tauri && "${tauri[@]}" build --target "$target" --bundles app \
+      --config "{\"bundle\":{$resources$signing,\"macOS\":{$plist}}}")
+    appdirs+=("shell/src-tauri/target/$target/release/bundle/macos/DigUp.app")
+  done
+  app=shell/src-tauri/target/release/bundle/macos/DigUp.app
+  rm -rf "$app"; mkdir -p "$(dirname "$app")"
+  cp -R "${appdirs[0]}" "$app"
+  if [ "${#targets[@]}" = 2 ]; then
+    lipo -create "${appdirs[0]}/Contents/MacOS/DigUp" "${appdirs[1]}/Contents/MacOS/DigUp" \
+      -output "$app/Contents/MacOS/DigUp"
+  fi
+  # The helper beside the binary — where default_helper looks; Tauri's copy sits in
+  # Contents/Resources too (the resources entry), so an installed app finds it either way.
+  cp -R "$helper" "$app/Contents/MacOS/helper"
+  codesign --force --deep --sign - "$app"
+  codesign --verify --deep --strict "$app"
+  "$app/Contents/MacOS/helper/digup" --help | sed -n '1p'   # the helper answers from the bundle
+  if [ "${#targets[@]}" = 2 ]; then
+    for f in "$app/Contents/MacOS/DigUp" "$app/Contents/MacOS/helper/digup" "$app/Contents/MacOS/helper/libpdfium.dylib"; do
+      archs=$(lipo -archs "$f")
+      # Two independent checks: lipo lists slices in its own order, the membership is
+      # what matters (the payload's assert above uses the same pair).
+      case " $archs " in *" arm64 "*) ;; *) echo "bundle $f: no arm64 slice ($archs)"; exit 1 ;; esac
+      case " $archs " in *" x86_64 "*) ;; *) echo "bundle $f: no x86_64 slice ($archs)"; exit 1 ;; esac
+    done
+  fi
+  # The updater artifact: the merged app's tarball, named the way update-feed.py reads
+  # (DigUp_<version>_<arch>.app.tar.gz + .sig). The per-target .app.tar.gz files tauri
+  # built are single-slice — the merged tarball is what ships.
+  case "${#targets[@]}" in 2) shellarch=universal;; *) shellarch=$(uname -m);; esac
+  [ "$shellarch" = arm64 ] && shellarch=aarch64
+  tarball=shell/src-tauri/target/release/bundle/macos/DigUp_${version}_${shellarch}.app.tar.gz
+  tar -czf "$tarball" -C "$(dirname "$app")" "$(basename "$app")"
+  if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    (cd shell/src-tauri && "${tauri[@]}" signer sign "$tarball" \
+      -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+  fi
+  # The .dmg a person drags to Applications: the app plus the Applications symlink.
+  staging=$(mktemp -d)
+  cp -R "$app" "$staging/"
+  ln -sf /Applications "$staging/Applications"
+  hdiutil create -volname DigUp -srcfolder "$staging" -ov -format UDZO \
+    "shell/src-tauri/target/release/bundle/dmg/DigUp_${version}_${shellarch}.dmg" > /dev/null
+  rm -rf "$staging"
+  echo "shell bundles: shell/src-tauri/target/release/bundle/macos/ + dmg/"
 fi
