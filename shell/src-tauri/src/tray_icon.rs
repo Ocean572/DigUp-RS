@@ -1,4 +1,5 @@
-//! The tray icon: DigUp's logo (Resources/AppIcon/tray.svg and its tray*.png, as the Mac app's menubar shows it). While
+//! The tray icon: DigUp's logo (assets/tray.svg and its tray*.png — the shell's own copy
+//! since the Swift-era Resources/AppIcon folder retired, as the Mac app's menubar shows it). While
 //! the model downloads or files index, the tiles are dimmed and get their color back in a sweep from the top, clockwise,
 //! as far as it has come; while indexing is paused, two bars take the D's place. An update waiting puts a red dot at the
 //! top right, as on the Mac.
@@ -6,9 +7,9 @@
 use std::f64::consts::TAU;
 use tauri::image::Image;
 
-const LOGO: &[u8] = include_bytes!("../../../Resources/AppIcon/tray.png");
-const DIMMED: &[u8] = include_bytes!("../../../Resources/AppIcon/tray-dim.png");
-const PAUSED: &[u8] = include_bytes!("../../../Resources/AppIcon/tray-paused.png");
+const LOGO: &[u8] = include_bytes!("../assets/tray.png");
+const DIMMED: &[u8] = include_bytes!("../assets/tray-dim.png");
+const PAUSED: &[u8] = include_bytes!("../assets/tray-paused.png");
 
 /// What the icon shows: progress (0…1) or none, whether indexing is paused, and whether an update waits.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -28,12 +28,28 @@ struct LogState {
     level: u32,
 }
 
+// bindgen's C-enum constant width follows the C compiler's enum-type choice: gcc/clang
+// give the non-negative ggml_log_level `unsigned int` on Linux (u32), while MSVC's ABI
+// makes every C enum `int` (i32) — the same source line compiled the Linux gate green
+// and died on Windows with E0308 (Packages run, 2026-11-18). The port's LOG API is
+// u32 everywhere, so the constants normalize to u32 on every platform; on Linux the
+// cast is a no-op, which is what the allow below silences (clippy's -D warnings bar).
+#[allow(clippy::unnecessary_cast)]
+mod log_levels {
+    use crate::ffi;
+    pub const WARN: u32 = ffi::ggml_log_level_GGML_LOG_LEVEL_WARN as u32;
+    // ERROR is the poison test's pin (mod tests): a normal build never writes one.
+    #[allow(dead_code)]
+    pub const ERROR: u32 = ffi::ggml_log_level_GGML_LOG_LEVEL_ERROR as u32;
+    pub const CONT: u32 = ffi::ggml_log_level_GGML_LOG_LEVEL_CONT as u32;
+}
+
 impl LlamaLog {
     const fn new() -> Self {
         Self {
             state: Mutex::new(LogState {
                 file: None,
-                level: ffi::ggml_log_level_GGML_LOG_LEVEL_WARN,
+                level: log_levels::WARN,
             }),
         }
     }
@@ -79,10 +95,10 @@ impl LlamaLog {
     /// A line from llama.cpp itself: only WARN and above, with `CONT` continuing at its level.
     fn write(&self, level: u32, text: &str) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if level != ffi::ggml_log_level_GGML_LOG_LEVEL_CONT {
+        if level != log_levels::CONT {
             state.level = level;
         }
-        if state.level < ffi::ggml_log_level_GGML_LOG_LEVEL_WARN {
+        if state.level < log_levels::WARN {
             return;
         }
         match state.file.as_mut() {
@@ -99,11 +115,17 @@ impl LlamaLog {
 
 static LOG: LlamaLog = LlamaLog::new();
 
+// `level as u32` normalizes the callback's enum width (c_uint on Linux, c_int on MSVC);
+// the same width note as the log_levels module above.
+#[allow(clippy::unnecessary_cast)]
 unsafe extern "C" fn log_sink(level: ffi::ggml_log_level, text: *const c_char, _user: *mut c_void) {
     if text.is_null() {
         return;
     }
-    LOG.write(level, &unsafe { CStr::from_ptr(text) }.to_string_lossy());
+    LOG.write(
+        level as u32,
+        &unsafe { CStr::from_ptr(text) }.to_string_lossy(),
+    );
 }
 
 /// Where the log goes (`LlamaEmbedder`'s `log:` argument; each helper passes `worker.log`).
@@ -286,10 +308,7 @@ mod tests {
         // The callback path (what llama.cpp calls) and our own line: both must log,
         // not panic.
         LOG.send(None);
-        LOG.write(
-            crate::ffi::ggml_log_level_GGML_LOG_LEVEL_ERROR,
-            "logged after the poison\n",
-        );
+        LOG.write(super::log_levels::ERROR, "logged after the poison\n");
         LlamaLog::new(); // shape check: the type is still constructible
     }
 }
