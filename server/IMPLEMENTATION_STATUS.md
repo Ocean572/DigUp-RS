@@ -2,6 +2,15 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-18 — plan filed: Python-free product (flip to the Rust server), gated on the Packages chain
+
+`docs/implementation/python-free-plan.md`: the deploy flip (stage-6 Rust-server image, P0
+packages green → P1 measured stop/health/bench/pilot gates on this box → P2 compose default
+with FastAPI as a one-release parity override → P3 FastAPI retirement + `linguist-vendored`
+tests/scripts → P4 records the Python kept on purpose: the pytest contract suite and the
+fixture generators). `crates/server` (axum, suite-green as `server-test-rust`) is the port;
+this is a flip, not a conversion. Nothing in the plan merges while a packages gate is red.
+
 ## 2026-11-18 — Operation Swift-free: the test environment is Rust-only; Swift sources deleted from `main`
 
 Three phases pushed to `main` (measured on ai-ubuntu-computer, x86_64, driver 580.178.04):
