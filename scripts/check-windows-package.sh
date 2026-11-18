@@ -68,6 +68,8 @@ if [[ $report != *'"recipe.txt"'* ]]; then
   # with no evidence behind it.)
   echo "--- shell stdout (index events)"; tail -40 "$work/out.txt"
   echo "--- shell stderr"; tail -40 "$work/err.txt"
+  echo "--- index folder"; ls -la "$work/index" 2>/dev/null | head -12
+  echo "--- worker.log"; tail -40 "$work/index/worker.log" 2>/dev/null || true
   echo "--- helper status"; "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | tail -12 || true
   exit 1
 fi

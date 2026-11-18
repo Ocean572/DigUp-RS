@@ -60,6 +60,19 @@ launch() {
   if [[ $status != 0 || -z $report ]]; then
     echo "--- stdout"; tail -20 "$work/$name.out"
     echo "--- stderr"; tail -40 "$work/$name.err"
+    # The facts the daemon keeps for exactly this moment: its log rides beside the
+    # index (worker.log — the engine's own lines, embedder included) and the store's
+    # rows. For an AppImage: the extraction roots the shell's helper probes see.
+    echo "--- index folder"; ls -la "$work/index" 2>/dev/null | head -12
+    echo "--- worker.log"; tail -40 "$work/index/worker.log" 2>/dev/null
+    case "$app" in
+      *.AppImage)
+        echo "--- appimage roots"
+        ls -d /tmp/.mount_*/ 2>/dev/null | head -3
+        find /tmp/.mount_*/ -maxdepth 4 -path '*helper*' -name digup 2>/dev/null | head -3
+        ls -la "$(dirname "$app")" | head -8
+        ;;
+    esac
     echo "no report from the panel"
     exit 1
   fi
