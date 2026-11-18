@@ -33,25 +33,16 @@ jobs:
             xz-utils unzip python3 binutils build-essential cmake ninja-build meson nasm pkg-config patchelf file \
             zlib1g-dev libcurl4-openssl-dev libxml2-dev libedit2 libsqlite3-0 libz3-dev libpython3-dev tzdata \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libvulkan1 \
+            clang libclang-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-gl gstreamer1.0-alsa
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
-      - name: Swift
-        run: |
-          version=6.4.0
-          url=https://download.swift.org/swift-$version-release/ubuntu2204/swift-$version-RELEASE/swift-$version-RELEASE-ubuntu22.04.tar.gz
-          curl -fsSL -o swift.tar.gz "$url"
-          curl -fsSL -o swift.tar.gz.sig "$url.sig"
-          curl -fsSL --compressed https://www.swift.org/keys/all-keys.asc | gpg --quiet --import
-          gpg --verify swift.tar.gz.sig swift.tar.gz
-          mkdir -p "$RUNNER_TEMP/swift"
-          tar -xzf swift.tar.gz -C "$RUNNER_TEMP/swift" --strip-components 1
-          rm swift.tar.gz swift.tar.gz.sig
-          echo "$RUNNER_TEMP/swift/usr/bin" >> "$GITHUB_PATH"
       - name: Rust and Node
         run: |
-          curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal
+          # The pinned Rust toolchain, the payload chain's recipe (rust-release.yml): the distro cargo lags,
+          # and bindgen needs libclang (installed with the build tools above).
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain 1.99.1
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           # Node runs Tauri's CLI (Ubuntu 22.04's own Node is too old for it).
           node=node-v24.20.0-linux-x64
@@ -187,10 +178,6 @@ jobs:
         if: steps.ffmpeg.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: scripts/build-ffmpeg.sh
-      - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057 # v0.5.0
-        with:
-          swift-version: swift-6.4.0-release
-          swift-build: 6.4.0-RELEASE
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - name: Vulkan SDK
         shell: bash
