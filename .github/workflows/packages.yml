@@ -55,8 +55,16 @@ jobs:
         # Its shader compiler and headers (Ubuntu 22.04 has no glslc); the backend loads the system's Vulkan at run time.
         run: |
           version=1.4.363.0
-          curl -fsSL -o "$RUNNER_TEMP/vulkansdk.tar.xz" \
-            "https://sdk.lunarg.com/sdk/download/$version/linux/vulkansdk-linux-x86_64-$version.tar.xz"
+          # lunarg's CDN resets connections at random (measured 2026-11-18: curl 56
+          # "Connection reset by peer" mid-download) — the builders' bounded-retry shape.
+          tries=0
+          url="https://sdk.lunarg.com/sdk/download/$version/linux/vulkansdk-linux-x86_64-$version.tar.xz"
+          until curl -fsSL -o "$RUNNER_TEMP/vulkansdk.tar.xz" "$url"; do
+            tries=$((tries+1))
+            [ "$tries" -ge 4 ] && exit 1
+            echo "vulkan download: attempt $tries failed, retrying in 30 s"
+            sleep 30
+          done
           echo "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43  $RUNNER_TEMP/vulkansdk.tar.xz" | sha256sum -c -
           tar -xJf "$RUNNER_TEMP/vulkansdk.tar.xz" -C "$RUNNER_TEMP"
           rm "$RUNNER_TEMP/vulkansdk.tar.xz"
@@ -185,8 +193,16 @@ jobs:
         run: |
           version=1.4.363.0
           temp=$(cygpath -u "$RUNNER_TEMP")
-          curl -fsSL -o "$temp/vulkansdk.exe" \
-            "https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe"
+          # lunarg's CDN resets connections at random (measured 2026-11-18, linux side):
+          # the builders' bounded-retry shape.
+          tries=0
+          url="https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe"
+          until curl -fsSL -o "$temp/vulkansdk.exe" "$url"; do
+            tries=$((tries+1))
+            [ "$tries" -ge 4 ] && exit 1
+            echo "vulkan download: attempt $tries failed, retrying in 30 s"
+            sleep 30
+          done
           echo "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141  $temp/vulkansdk.exe" | sha256sum -c -
           "$temp/vulkansdk.exe" --root "C:\\VulkanSDK\\$version" --accept-licenses --default-answer --confirm-command install
           echo "VULKAN_SDK=C:\\VulkanSDK\\$version" >> "$GITHUB_ENV"
