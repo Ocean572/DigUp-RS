@@ -193,7 +193,15 @@ jobs:
             libfontconfig1 libfreetype6 libharfbuzz0b libfribidi0 libwayland-client0 libgbm1 libdrm2 libgl1 libegl1 \
             libgles2 libexpat1 libgomp1 $asound
           chmod +x packages/appimage/*.AppImage
-          MODELS="$PWD/models" scripts/check-linux-package.sh packages/appimage/*.AppImage
+          # GST_AUTO_AUDIO_SINK=fakesink: the second launch starts WebKit's media
+          # player on the AppImage's bundled GStreamer, and a container has no audio
+          # device and no PulseAudio — the sink probe (alsasink/pulsesink) can stall
+          # the playbin priming so the panel never reports (measured 2026-11-19:
+          # debian:12 timed out 300 s with 5/5 vectors and the query worker loaded,
+          # the identical run green 2 h earlier — flaky, not broken). playbin honors
+          # this env at the autoaudio step; the panel test checks the preview renders
+          # its audio tag, which needs priming to complete, not a sound card.
+          MODELS="$PWD/models" GST_AUTO_AUDIO_SINK=fakesink scripts/check-linux-package.sh packages/appimage/*.AppImage
       - name: The .deb
         run: |
           # --no-install-recommends: the full-recommends install pulls xdg-desktop-portal
@@ -205,7 +213,7 @@ jobs:
           # host kernel has fuse, so its full install passed. Real desktops keep the
           # recommends; the headless gate runs strict Depends, like the AppImage.
           DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ./packages/deb/*.deb
-          MODELS="$PWD/models" scripts/check-linux-package.sh /usr/bin/digup-shell
+          MODELS="$PWD/models" GST_AUTO_AUDIO_SINK=fakesink scripts/check-linux-package.sh /usr/bin/digup-shell
       - name: The update signature
         # Signed with the repository's key (once its secrets are set), the AppImage's signature must match the public key
         # installed copies check updates with (tauri.conf.json), or no update could ever be installed.
