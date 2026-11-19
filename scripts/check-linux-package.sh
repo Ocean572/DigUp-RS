@@ -16,9 +16,30 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 if [[ $app == *.AppImage ]]; then
-  # A container has no FUSE to mount it: the AppImage unpacks itself instead.
+  # A container has no FUSE to mount an AppImage, and the auto-extraction cleans its
+  # /tmp/.mount_* root away when the app exits — the red-path facts must not depend on
+  # it (measured 2026-11-18: the roots dump printed nothing for exactly that reason).
+  # Unpack here, launch the AppRun the AppImage itself would run, probe the payload
+  # from a stable path — and run the .deb's missing-libraries check over it (the
+  # AppImage gate never had one).
   export APPIMAGE_EXTRACT_AND_RUN=1
-  helper=
+  (cd "$work" && "$app" --appimage-extract > "$work/extract.log" 2>&1) ||
+    { echo "appimage --appimage-extract failed"; tail -20 "$work/extract.log"; exit 1; }
+  extract=$work/squashfs-root
+  [[ -x $extract/AppRun ]] || { echo "no AppRun in the extracted root"; find "$extract" -maxdepth 2 | head -20; exit 1; }
+  app=$extract/AppRun
+  helper=$extract/usr/lib/DigUp/helper/digup
+  [[ -f $helper ]] || helper=
+  missing=$(for file in $(find "$extract/usr/lib" -type f ! -L \( -name '*.so*' -o -name 'digup*' \) 2>/dev/null | head -60); do
+    # ffmpeg and ffprobe are static: ldd has nothing to say about them. The Vulkan backend is loaded only where
+    # Vulkan is (the package recommends it).
+    ldd "$file" 2>&1 | grep "not found" | grep -v "libvulkan.so.1" | sed "s|^|$file: |"
+  done || true)
+  if [[ -n $missing ]]; then
+    echo "missing libraries in the AppImage payload:"
+    echo "$missing"
+    exit 1
+  fi
 else
   helper=$(dirname "$app")/../lib/DigUp/helper/digup
   missing=$(for file in "$app" "$(dirname "$helper")"/*; do
@@ -48,13 +69,28 @@ Bake for forty minutes at 180 degrees and pour the lemon syrup over it while it 
 TEXT
 
 # Launches the app hidden with these arguments until the panel reports what it showed ($report), for at most $2 s.
+# While it is still running at 120 s with no report, prints the facts of the moment — the store rows, the daemon's
+# own log, its counters — with the daemon alive; a dump after the app exits is a dump after the embed pipeline died
+# with it (measured 2026-11-18).
 launch() {
-  local name=$1 seconds=$2 started status=0
+  local name=$1 seconds=$2 started status=0 pid probed=0
   shift 2
   started=$(date +%s)
   timeout "$seconds" xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- "$app" --index "$work/index" \
-    --models "$models" --settings "$work/settings.json" "$@" --debug-quit > "$work/$name.out" 2> "$work/$name.err" ||
-    status=$?
+    --models "$models" --settings "$work/settings.json" "$@" --debug-quit > "$work/$name.out" 2> "$work/$name.err" &
+  pid=$!
+  while kill -0 "$pid" 2> /dev/null; do
+    local now=$(( $(date +%s) - started ))
+    if [[ $probed -eq 0 && $now -ge 120 && -n ${helper:-} ]]; then
+      probed=1
+      echo "--- live at $now s (no report yet)"
+      echo "--- live index folder"; ls -la "$work/index" 2>/dev/null | head -12
+      echo "--- live worker.log"; tail -30 "$work/index/worker.log" 2>/dev/null
+      echo "--- live helper status"; timeout 60 "$helper" status --index "$work/index" 2>&1 | head -12
+    fi
+    sleep 5
+  done
+  wait "$pid" || status=$?
   echo "exit $status after $(( $(date +%s) - started )) s"
   report=$(grep '^{' "$work/$name.out" | tail -1 || true)
   if [[ $status != 0 || -z $report ]]; then
@@ -62,17 +98,25 @@ launch() {
     echo "--- stderr"; tail -40 "$work/$name.err"
     # The facts the daemon keeps for exactly this moment: its log rides beside the
     # index (worker.log — the engine's own lines, embedder included) and the store's
-    # rows. For an AppImage: the extraction roots the shell's helper probes see.
+    # rows. The engine opens worker.log only when its embedder opens: a missing file
+    # is an embedder that never opened, and the one-shot below is where it must say why.
     echo "--- index folder"; ls -la "$work/index" 2>/dev/null | head -12
     echo "--- worker.log"; tail -40 "$work/index/worker.log" 2>/dev/null
-    case "$app" in
-      *.AppImage)
-        echo "--- appimage roots"
-        ls -d /tmp/.mount_*/ 2>/dev/null | head -3
-        find /tmp/.mount_*/ -maxdepth 4 -path '*helper*' -name digup 2>/dev/null | head -3
-        ls -la "$(dirname "$app")" | head -8
-        ;;
-    esac
+    if [[ -n ${helper:-} ]]; then
+      # The panel fires its report at the crawl queue's drain and races the embeds;
+      # the helper's one-shot index embeds every file before it answers, in the
+      # foreground, with no shell and no panel in the way. Slow embeds finish here;
+      # a refused embedder speaks here.
+      echo "--- one-shot index (helper embeds inline, no shell, no panel)"
+      DIGUP_MODELS="$models" timeout 900 "$helper" index --index "$work/index" "$work/files" \
+        > "$work/oneshot.out" 2>&1 || echo "one-shot exit $?"
+      tail -40 "$work/oneshot.out"
+      echo "--- worker.log after the one-shot"; tail -40 "$work/index/worker.log" 2>/dev/null
+      echo "--- status after the one-shot"; "$helper" status --index "$work/index" 2>&1 | head -12
+      echo "--- payload files (helper folder, then its parent)"
+      ls -la "$(dirname "$(dirname "$helper")")" 2>/dev/null | head -30
+      ls -la "$(dirname "$helper")" | head -30
+    fi
     echo "no report from the panel"
     exit 1
   fi

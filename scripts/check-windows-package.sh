@@ -39,9 +39,18 @@ started=$(date +%s)
   --debug-quit > "$work/out.txt" 2> "$work/err.txt" &
 app=$!
 report=
+probe=$(( $(date +%s) + 30 ))
 while kill -0 "$app" 2> /dev/null && (( $(date +%s) - started < 1800 )); do
   report=$(grep '^{' "$work/out.txt" 2> /dev/null | tail -1 || true)
   [[ -n $report ]] && break
+  # The store's counters while embeds run, every 30 s: their growth separates an embed
+  # that is slow on this machine's cores from one that is stuck (measured 2026-11-18:
+  # a 0-vector report at 52 s with no growth curve behind it).
+  if (( $(date +%s) >= probe )); then
+    probe=$(( $(date +%s) + 30 ))
+    echo "t=$(( $(date +%s) - started )) s:"
+    "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | grep -E '^vectors:|^  [a-z]' | head -8
+  fi
   sleep 2
 done
 # The report comes just before DigUp quits; a DigUp still there a minute later is ended (a session without a desktop,
@@ -71,6 +80,20 @@ if [[ $report != *'"recipe.txt"'* ]]; then
   echo "--- index folder"; ls -la "$work/index" 2>/dev/null | head -12
   echo "--- worker.log"; tail -40 "$work/index/worker.log" 2>/dev/null || true
   echo "--- helper status"; "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | tail -12 || true
+  # The panel fires its report at the crawl queue's drain and races the embeds; the
+  # helper's one-shot index embeds every file before it answers, in the foreground,
+  # with no shell and no panel in the way. Slow embeds finish here; a refused embedder
+  # speaks in worker.log here. The payload listing shows the DLLs the worker imports
+  # (measured 2026-11-18: worker ready in 1.84 s with 0 vectors — the embed step is
+  # the open question, not the load).
+  echo "--- one-shot index (helper embeds inline, no shell, no panel)"
+  PATH="$installed/helper:/c/Windows/System32:/c/Windows" DIGUP_MODELS="$models" \
+    "$installed/helper/digup.exe" index --index "$(win "$work/index")" "$(win "$work/files")" \
+    > "$work/oneshot.txt" 2>&1 || echo "one-shot exit $?"
+  tail -40 "$work/oneshot.txt"
+  echo "--- worker.log after the one-shot"; tail -40 "$work/index/worker.log" 2>/dev/null || true
+  echo "--- helper status after the one-shot"; "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | tail -12 || true
+  echo "--- payload files"; ls "$installed/helper" | head -40
   exit 1
 fi
 
