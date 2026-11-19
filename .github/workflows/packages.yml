@@ -36,7 +36,8 @@ jobs:
           # the rest. 22.04 images keep their sources in .sources files too. This job
           # runs as root INSIDE the ubuntu:22.04 container, which carries no sudo
           # binary (measured 2026-11-19: 'sudo: not found', exit 127) — root touches
-          # the sources directly, the host runner (linux-check) keeps sudo.
+          # the sources directly; the linux-check distro containers are root too
+          # (measured same day: all three arms died 13 s for want of sudo).
           as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
           as_root sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
           as_root find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
@@ -134,9 +135,14 @@ jobs:
     steps:
       - name: Tools
         run: |
-          # Same apt hardening as the Build job above: Azure mirrors + apt retries.
-          sudo sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
-          sudo find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
+          # Same apt hardening as the Build job above — and the same fact: this job runs
+          # as root inside distro containers (ubuntu:22.04/24.04, debian:12) that carry
+          # no sudo binary (measured 2026-11-19: exit 127, all three arms, 13 s). The
+          # mirror sed is Ubuntu-only; on Debian it matches nothing (its archive is
+          # deb.debian.org) and the retries carry the arm.
+          as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
+          as_root sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
+          as_root find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
           apt-get -o Acquire::Retries=5 update -q
           DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ca-certificates xvfb xauth dbus
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
