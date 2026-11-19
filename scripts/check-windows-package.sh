@@ -95,16 +95,18 @@ if [[ $report != *'"recipe.txt"'* ]]; then
   echo "--- helper status after the one-shot"; "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | tail -12 || true
   echo "--- payload files"; ls "$installed/helper" | head -40
   # The daemon's own words on a fresh index: index-service speaks one JSON event per
-  # line on stdout (crawl, model, embed progress) and stops at stdin EOF. The one-shot
-  # proved the embed pipeline healthy (10 vectors in 20 s); the shell's daemon produced
-  # none — the events around where the daemon's embeds stop are the remaining fact.
-  echo "--- daemon probe (index-service standalone, fresh index)"
-  PATH="$installed/helper:/c/Windows/System32:/c/Windows" DIGUP_MODELS="$models" \
+  # line on stdout (crawl, model, embed progress). stdin stays OPEN for 240 s: EOF
+  # means stop, and the /dev/null version stopped the daemon before its embed step
+  # (measured 2026-11-19: sync — exit, no embed events). DIGUP_WORKER_DIR mirrors
+  # what the shell's own daemon run sees.
+  echo "--- daemon probe (index-service standalone, fresh index, live stdin 240 s)"
+  PATH="$installed/helper:/c/Windows/System32:/c/Windows" DIGUP_MODELS="$models" DIGUP_WORKER_DIR="$installed/helper" \
     "$installed/helper/digup.exe" index-service --index "$(win "$work/index2")" "$(win "$work/files")" \
-    --linger 150 < /dev/null > "$work/daemon.txt" 2> "$work/daemonerr.txt" || echo "daemon exit $?"
+    --linger 150 < <(echo sync; sleep 240) > "$work/daemon.txt" 2> "$work/daemonerr.txt" || echo "daemon exit $?"
   head -40 "$work/daemon.txt" 2>/dev/null
   echo "--- daemon stderr"; tail -20 "$work/daemonerr.txt" 2>/dev/null || true
   echo "--- daemon worker.log"; tail -20 "$(win "$work/index2")/worker.log" 2>/dev/null || true
+  echo "--- daemon index folder"; ls -la "$(win "$work/index2")" 2>/dev/null | head -12 || true
   exit 1
 fi
 

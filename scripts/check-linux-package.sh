@@ -117,14 +117,16 @@ launch() {
       ls -la "$(dirname "$(dirname "$helper")")" 2>/dev/null | head -30
       ls -la "$(dirname "$helper")" | head -30
       # The daemon's own words on a fresh index: index-service speaks one JSON event
-      # per line on stdout (crawl, model, embed progress) and stops at stdin EOF —
-      # the events around where it stops are the fact the one-shot cannot show.
-      echo "--- daemon probe (index-service standalone, fresh index)"
-      timeout 180 "$helper" index-service --index "$work/index2" "$work/files" --linger 150 \
-        < /dev/null > "$work/daemon.out" 2> "$work/daemon.err" || echo "daemon exit $?"
+      # per line on stdout (crawl, model, embed progress). stdin stays OPEN for 240 s
+      # (EOF means stop, and an /dev/null stdin stopped this probe before the embed
+      # step ran — measured 2026-11-19: sync, then exit, no embed events).
+      echo "--- daemon probe (index-service standalone, fresh index, live stdin 240 s)"
+      DIGUP_MODELS="$models" timeout 300 "$helper" index-service --index "$work/index2" "$work/files" --linger 150 \
+        < <(echo sync; sleep 240) > "$work/daemon.out" 2> "$work/daemon.err" || echo "daemon exit $?"
       head -40 "$work/daemon.out" 2>/dev/null
       echo "--- daemon stderr"; tail -20 "$work/daemon.err" 2>/dev/null
       echo "--- daemon worker.log"; tail -20 "$work/index2/worker.log" 2>/dev/null || true
+      echo "--- daemon index folder"; ls -la "$work/index2" 2>/dev/null | head -12
     fi
     echo "no report from the panel"
     exit 1

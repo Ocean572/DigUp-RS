@@ -130,6 +130,23 @@ jobs:
         with:
           path: models
           key: embeddinggemma-2-q8_0-bfcd298
+      - name: Model files, pinned by crates/runtime/src/models.rs
+        # The gate needs the model beside $PWD/models before the app's first launch:
+        # the setup download works, but it eats the embed window (measured 2026-11-19:
+        # linux-check ran the AppImage gate with models/ EMPTY — "worker not found: no
+        # embeddinggemma-2-Q8_0.gguf" — and on Windows the first launch spent ~45 s of
+        # the panel's window downloading 472 MB, embedding zero before the report fired).
+        # The same pins as the Server chain; its drift guard keeps them equal models.rs.
+        run: |
+          mkdir -p models
+          rev=bfcd298762cc34d0357ece5ebdd31791a3a374d8
+          base=https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/$rev
+          for f in embeddinggemma-2-Q8_0.gguf mmproj-embeddinggemma-2-Q8_0.gguf; do
+            [ -f "models/$f" ] || curl -fsSL --retry 3 -o "models/$f" "$base/$f"
+          done
+          echo "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135  models/embeddinggemma-2-Q8_0.gguf" > pins.txt
+          echo "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f  models/mmproj-embeddinggemma-2-Q8_0.gguf" >> pins.txt
+          sha256sum -c pins.txt
       - name: The AppImage
         # Before the .deb installs the system's WebKit and GStreamer: the AppImage must bring its own. Installed first are
         # the libraries AppImages leave to the system, which any desktop has (ALSA's is libasound2t64 on Ubuntu 24.04).
@@ -232,6 +249,22 @@ jobs:
         with:
           path: models
           key: embeddinggemma-2-q8_0-bfcd298-windows
+      - name: Model files, pinned by crates/runtime/src/models.rs
+        # The first launch downloads 472 MB through the shell's setup flow (measured
+        # 2026-11-19: it finishes at the very end of the panel's report window, the
+        # daemon's embedder turns ready only to be killed with the shell — zero
+        # vectors in every run so far). Pre-staged, the embed starts at second two.
+        shell: bash
+        run: |
+          mkdir -p models
+          rev=bfcd298762cc34d0357ece5ebdd31791a3a374d8
+          base=https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/$rev
+          for f in embeddinggemma-2-Q8_0.gguf mmproj-embeddinggemma-2-Q8_0.gguf; do
+            [ -f "models/$f" ] || curl -fsSL --retry 3 -o "models/$f" "$base/$f"
+          done
+          echo "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135  models/embeddinggemma-2-Q8_0.gguf" > pins.txt
+          echo "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f  models/mmproj-embeddinggemma-2-Q8_0.gguf" >> pins.txt
+          sha256sum -c pins.txt
       - name: The installer
         shell: bash
         run: MODELS="$PWD/models" scripts/check-windows-package.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe

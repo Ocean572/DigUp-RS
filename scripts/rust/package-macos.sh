@@ -138,9 +138,14 @@ if [ "${1:-}" = "--shell" ]; then
   app=shell/src-tauri/target/release/bundle/macos/DigUp.app
   rm -rf "$app"; mkdir -p "$(dirname "$app")"
   cp -R "${appdirs[0]}" "$app"
+  # The bundle's executable is the BINARY's name — digup-shell. The Swift-era app
+  # binary was named DigUp and the lipo paths were written to it; the Rust shell
+  # bundle puts digup-shell in Contents/MacOS (measured 2026-11-19: lipo "can't
+  # open input file: .../Contents/MacOS/DigUp" after both .app bundles built fine).
+  exe=$(ls "${appdirs[0]}/Contents/MacOS/" | head -1)
   if [ "${#targets[@]}" = 2 ]; then
-    lipo -create "${appdirs[0]}/Contents/MacOS/DigUp" "${appdirs[1]}/Contents/MacOS/DigUp" \
-      -output "$app/Contents/MacOS/DigUp"
+    lipo -create "${appdirs[0]}/Contents/MacOS/$exe" "${appdirs[1]}/Contents/MacOS/$exe" \
+      -output "$app/Contents/MacOS/$exe"
   fi
   # The helper beside the binary — where default_helper looks; Tauri's copy sits in
   # Contents/Resources too (the resources entry), so an installed app finds it either way.
@@ -149,7 +154,7 @@ if [ "${1:-}" = "--shell" ]; then
   codesign --verify --deep --strict "$app"
   "$app/Contents/MacOS/helper/digup" --help | sed -n '1p'   # the helper answers from the bundle
   if [ "${#targets[@]}" = 2 ]; then
-    for f in "$app/Contents/MacOS/DigUp" "$app/Contents/MacOS/helper/digup" "$app/Contents/MacOS/helper/libpdfium.dylib"; do
+    for f in "$app/Contents/MacOS/$exe" "$app/Contents/MacOS/helper/digup" "$app/Contents/MacOS/helper/libpdfium.dylib"; do
       archs=$(lipo -archs "$f")
       # Two independent checks: lipo lists slices in its own order, the membership is
       # what matters (the payload's assert above uses the same pair).
