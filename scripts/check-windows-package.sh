@@ -11,7 +11,13 @@ setup=${1:?the installer}
 models=${MODELS:?set MODELS to a folder for the model files (they are downloaded there when missing)}
 mkdir -p "$models"
 models=$(cygpath -m "$models")
-work=$(mktemp -d)
+work=$(mktemp -d /d/a/_temp/digup-gate.XXXXXX)
+# A LONG path on purpose: MSYS mktemp lands under /tmp, which maps to C:\Users\RUNNER~1 —
+# the 8.3 short form. The store's rows keep the root's short form while its scope lookups
+# canonicalize to the long one: the daemon's second sync of the same files then sees them
+# as new ('UNIQUE constraint failed: files.path') and the counters' scope condition
+# matches nothing (pending:0 on a fresh index with five rows added — measured 2026-11-19,
+# daemon-probe events), so the daemon embeds nothing while the one-shot embeds fine.
 trap 'rm -rf "$work"' EXIT
 win() { cygpath -m "$1"; }
 

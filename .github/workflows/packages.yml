@@ -29,8 +29,15 @@ jobs:
       - name: Build tools
         # GStreamer's plugins are the ones the AppImage carries for WebKit's media player (scripts/package-linux.sh).
         run: |
-          apt-get update -q
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ca-certificates curl git gnupg \
+          # The runner's apt died on archive.ubuntu.com timeouts (measured 2026-11-19:
+          # 'connection timed out' on every Jammy index, fifteen packages with no
+          # candidate). The hosted runners live in Azure; Canonical's Azure mirrors
+          # serve the same archive from that same cloud, and apt's own retries cover
+          # the rest. 22.04 images keep their sources in .sources files too.
+          sudo sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
+          sudo find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
+          apt-get -o Acquire::Retries=5 update -q
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ca-certificates curl git gnupg \
             xz-utils unzip python3 binutils build-essential cmake ninja-build meson nasm pkg-config patchelf file \
             zlib1g-dev libcurl4-openssl-dev libxml2-dev libedit2 libsqlite3-0 libz3-dev libpython3-dev tzdata \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libvulkan1 \
@@ -51,23 +58,29 @@ jobs:
           echo "2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -
           tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/$node/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vulkan-sdk
+          key: vulkansdk-1.4.363.0-linux
       - name: Vulkan SDK
         # Its shader compiler and headers (Ubuntu 22.04 has no glslc); the backend loads the system's Vulkan at run time.
         run: |
           version=1.4.363.0
           # lunarg's CDN resets connections at random (measured 2026-11-18: curl 56
-          # "Connection reset by peer" mid-download) — the builders' bounded-retry shape.
-          tries=0
+          # "Connection reset by peer" mid-download) — the installer rides the cache,
+          # and a resume-capable download with longer bounds covers a cold one.
+          sdk_file=$RUNNER_TEMP/vulkan-sdk/vulkansdk-linux-x86_64-$version.tar.xz
+          mkdir -p "$RUNNER_TEMP/vulkan-sdk"
           url="https://sdk.lunarg.com/sdk/download/$version/linux/vulkansdk-linux-x86_64-$version.tar.xz"
-          until curl -fsSL -o "$RUNNER_TEMP/vulkansdk.tar.xz" "$url"; do
+          tries=0
+          until [ -f "$sdk_file" ] || curl -fsSL -C - --connect-timeout 30 -o "$sdk_file" "$url"; do
             tries=$((tries+1))
-            [ "$tries" -ge 4 ] && exit 1
+            [ "$tries" -ge 6 ] && exit 1
             echo "vulkan download: attempt $tries failed, retrying in 30 s"
             sleep 30
           done
-          echo "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43  $RUNNER_TEMP/vulkansdk.tar.xz" | sha256sum -c -
-          tar -xJf "$RUNNER_TEMP/vulkansdk.tar.xz" -C "$RUNNER_TEMP"
-          rm "$RUNNER_TEMP/vulkansdk.tar.xz"
+          echo "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43  $sdk_file" | sha256sum -c -
+          tar -xJf "$sdk_file" -C "$RUNNER_TEMP"
           sdk=$RUNNER_TEMP/$version/x86_64
           echo "VULKAN_SDK=$sdk" >> "$GITHUB_ENV"
           echo "CMAKE_PREFIX_PATH=$sdk:$sdk/lib/VulkanLoader" >> "$GITHUB_ENV"
@@ -117,8 +130,11 @@ jobs:
     steps:
       - name: Tools
         run: |
-          apt-get update -q
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ca-certificates xvfb xauth dbus
+          # Same apt hardening as the Build job above: Azure mirrors + apt retries.
+          sudo sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
+          sudo find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
+          apt-get -o Acquire::Retries=5 update -q
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ca-certificates xvfb xauth dbus
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
@@ -157,14 +173,14 @@ jobs:
           # build keeps OpenMP ON; the .deb declares it in Depends — the AppImage leaves
           # it to the system, as every desktop has it; a bare container must install it
           # too, or the payload's embedder never loads and the gate times out with 0 vectors).
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends libx11-6 libx11-xcb1 libxcb1 \
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends libx11-6 libx11-xcb1 libxcb1 \
             libfontconfig1 libfreetype6 libharfbuzz0b libfribidi0 libwayland-client0 libgbm1 libdrm2 libgl1 libegl1 \
             libgles2 libexpat1 libgomp1 $asound
           chmod +x packages/appimage/*.AppImage
           MODELS="$PWD/models" scripts/check-linux-package.sh packages/appimage/*.AppImage
       - name: The .deb
         run: |
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -q ./packages/deb/*.deb
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q ./packages/deb/*.deb
           MODELS="$PWD/models" scripts/check-linux-package.sh /usr/bin/digup-shell
       - name: The update signature
         # Signed with the repository's key (once its secrets are set), the AppImage's signature must match the public key
@@ -176,7 +192,7 @@ jobs:
             echo "not signed: the update signing key isn't in the repository's secrets"
             exit 0
           fi
-          DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends minisign
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends minisign
           sed -n 's/.*"pubkey": "\([^"]*\)".*/\1/p' shell/src-tauri/tauri.conf.json | base64 -d > "$RUNNER_TEMP/update.pub"
           base64 -d "$signature" > "$RUNNER_TEMP/update.minisig"
           minisign -V -p "$RUNNER_TEMP/update.pub" -m "${signature%.sig}" -x "$RUNNER_TEMP/update.minisig"
@@ -209,23 +225,31 @@ jobs:
         shell: msys2 {0}
         run: scripts/build-ffmpeg.sh
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vulkan-sdk
+          key: vulkansdk-1.4.363.0-windows
       - name: Vulkan SDK
         shell: bash
         run: |
           version=1.4.363.0
           temp=$(cygpath -u "$RUNNER_TEMP")
-          # lunarg's CDN resets connections at random (measured 2026-11-18, linux side):
-          # the builders' bounded-retry shape.
-          tries=0
+          # lunarg's CDN resets connections at random (measured 2026-11-18, linux side;
+          # 2026-11-19 windows: all four bounded tries failed — 15 min burned). The
+          # installer rides the cache; a resume-capable download with longer bounds
+          # covers a cold one.
+          sdk_file="$temp/vulkan-sdk/vulkansdk-windows-X64-$version.exe"
+          mkdir -p "$temp/vulkan-sdk"
           url="https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe"
-          until curl -fsSL -o "$temp/vulkansdk.exe" "$url"; do
+          tries=0
+          until [ -f "$sdk_file" ] || curl -fsSL -C - --connect-timeout 30 -o "$sdk_file" "$url"; do
             tries=$((tries+1))
-            [ "$tries" -ge 4 ] && exit 1
+            [ "$tries" -ge 6 ] && exit 1
             echo "vulkan download: attempt $tries failed, retrying in 30 s"
             sleep 30
           done
-          echo "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141  $temp/vulkansdk.exe" | sha256sum -c -
-          "$temp/vulkansdk.exe" --root "C:\\VulkanSDK\\$version" --accept-licenses --default-answer --confirm-command install
+          echo "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141  $sdk_file" | sha256sum -c -
+          "$sdk_file" --root "C:\\VulkanSDK\\$version" --accept-licenses --default-answer --confirm-command install
           echo "VULKAN_SDK=C:\\VulkanSDK\\$version" >> "$GITHUB_ENV"
           echo "C:\\VulkanSDK\\$version\\Bin" >> "$GITHUB_PATH"
       - name: Build

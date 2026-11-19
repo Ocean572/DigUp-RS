@@ -177,6 +177,10 @@ if [ "${1:-}" = "--shell" ]; then
   staging=$(mktemp -d)
   cp -R "$app" "$staging/"
   ln -sf /Applications "$staging/Applications"
+  # The output folder: the rm -rf at the top of --shell cleared bundle/, and --bundles app
+  # (deliberately — the dmg merge is ours) creates only macos/. hdiutil's "create failed -
+  # No such file or directory" is its output path missing the dmg/ folder (measured 2026-11-19).
+  mkdir -p shell/src-tauri/target/release/bundle/dmg
   hdiutil create -volname DigUp -srcfolder "$staging" -ov -format UDZO \
     "shell/src-tauri/target/release/bundle/dmg/DigUp_${version}_${shellarch}.dmg" > /dev/null
   rm -rf "$staging"
