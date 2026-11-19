@@ -6,6 +6,24 @@
 
 use std::path::{Path, PathBuf};
 
+/// Windows spells every path the engine touches in ONE form: slashes. Foundation
+/// (`URL(fileURLWithPath:)`, `standardizedFileURL`) normalizes `\` to `/` there, so the
+/// Swift-era rows, scope bounds, and range comparisons were all slash-form, byte-wise.
+/// Rust's `PathBuf::push` and `std::fs::canonicalize` answer backslashes, and a mixed
+/// spelling splits the byte-wise comparisons the scope rides on: rows stored
+/// `D:/root/files\x.png` (walkdir joining a slash root with `\`) fall out of a scope
+/// whose bound ends `/` (0x2F < 0x5C) — measured 2026-11-19 on the packages gate: sync
+/// added 5 rows, scoped counters reported `files:0 pending:0`, the second sync called the
+/// same files new, and the re-INSERT died `UNIQUE constraint failed: files.path`.
+/// On unix this is the identity (a backslash is a filename character there).
+pub fn to_slashes(path: &str) -> String {
+    if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    }
+}
+
 /// `URL.standardizedFileURL.path` (`Crawler.swift:60, 65` — the roots the walk runs on;
 /// `FolderSelection` standardizes the same way): lexical cleanup of ".", ".." and duplicate
 /// slashes, RFC 3986's remove-dot-segments. A ".." at the root is dropped (Foundation: `/..`
@@ -13,8 +31,15 @@ use std::path::{Path, PathBuf};
 /// standardizes its roots, so every string the walk reports — the progress lines' `root:`,
 /// the `leftOut` keys, every candidate path, and the dataset roots exclusion — is canonical:
 /// `/data/photos/.`, `/data//photos`, `/data/photos/` all answer `/data/photos`
-/// (DIGUP_SERVER_APP_TARGETS carries the operator's colon-listed root strings).
+/// (DIGUP_SERVER_APP_TARGETS carries the operator's colon-listed root strings). On Windows
+/// `\` is a separator (Foundation normalizes it, `to_slashes` above), so `C:\a\b` and
+/// `C:/a/b` standardize alike; verbatim and UNC roots (`\\?\`, `\\server`) return in slash
+/// form untouched — they carry no dot-segments to clean.
 pub fn standardize(path: &str) -> String {
+    let path = to_slashes(path);
+    if cfg!(windows) && path.starts_with("//") {
+        return path;
+    }
     let absolute = path.starts_with('/');
     let mut parts: Vec<&str> = Vec::new();
     for part in path.split('/') {
@@ -103,10 +128,14 @@ pub fn real_path(path: &str) -> String {
     {
         let resolved = std::fs::canonicalize(Path::new(path)).ok().map(|real| {
             let text = real.to_string_lossy().into_owned();
-            match text.strip_prefix(r"\\?\") {
+            let text = match text.strip_prefix(r"\\?\") {
                 Some(stripped) => stripped.to_string(),
                 None => text,
-            }
+            };
+            // canonicalize answers backslashes; the comparison these values feed is
+            // bytewise against the slash-form roots the engine stores — Foundation's
+            // resolvingSymlinksInPath spells Windows with slashes (to_slashes above).
+            to_slashes(&text)
         });
         resolved.unwrap_or_else(|| path.to_string())
     }
@@ -256,14 +285,18 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 }
 
 pub fn home() -> PathBuf {
-    std::env::var("HOME")
+    let home = std::env::var("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/root"))
+        .unwrap_or_else(|_| PathBuf::from("/root"));
+    // The home folder feeds the crawl's dataset exclusions and the folder tables —
+    // comparisons bytewise against the crawl's paths, so the engine's ONE form (slashes
+    // on Windows, `to_slashes`; the identity on unix).
+    PathBuf::from(to_slashes(&home.to_string_lossy()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_inside, real_path};
+    use super::{is_inside, real_path, standardize, to_slashes};
 
     /// The engine's fallback (`guard let real = realpath(path, nil) else { return path }`,
     /// FolderSelection.swift:120): a path the system cannot resolve keeps its own spelling,
@@ -274,6 +307,31 @@ mod tests {
             real_path("/definitely-not-here/x"),
             "/definitely-not-here/x"
         );
+    }
+
+    /// The ONE form the engine stores and compares (see `to_slashes`): a no-op on unix —
+    /// a backslash there is a filename character, and the byte contract must not move —
+    /// and the slash spelling on Windows, where Foundation spelled everything that way
+    /// and the packages gate measured the split 2026-11-19.
+    #[test]
+    fn one_path_form_on_both_platforms() {
+        if cfg!(windows) {
+            assert_eq!(to_slashes(r"C:\Users\a\b.txt"), "C:/Users/a/b.txt");
+            assert_eq!(standardize(r"C:\Users\a\.\b.txt"), "C:/Users/a/b.txt");
+            assert_eq!(standardize("C:\\a\\b//c/./d/../e"), "C:/a/b/d/e");
+            // Verbatim and UNC roots carry no dot-segments to clean: slash form, untouched.
+            assert_eq!(standardize(r"\\?\C:\a\b"), "//?/C:/a/b");
+            assert_eq!(standardize(r"\\server\share\x"), "//server/share/x");
+            let real = real_path(&std::env::temp_dir().to_string_lossy());
+            assert!(
+                !real.contains('\\'),
+                "real_path answers the slash form: {real}"
+            );
+            assert!(!real.starts_with("//?/"), "and no verbatim prefix: {real}");
+        } else {
+            assert_eq!(to_slashes("/a\\b"), "/a\\b");
+            assert_eq!(standardize("/a\\b/."), "/a\\b");
+        }
     }
 
     /// The resolved spelling, not the one typed: the crawl reports `/private/var/folders/…`

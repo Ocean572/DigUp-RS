@@ -292,6 +292,10 @@ PRAGMA user_version = 5;"
             }
             Some(f) => f,
         };
+        let folders: Vec<String> = f
+            .into_iter()
+            .map(|folder| crate::paths::standardize(&crate::paths::to_slashes(&folder)))
+            .collect();
         let ranges = merged_ranges(folders.iter().flat_map(|f| path_ranges(f)).collect());
         let bucket = merged_ranges(folders.iter().flat_map(|f| bucket_ranges(f)).collect());
         self.db.transaction(|| {
@@ -382,6 +386,13 @@ PRAGMA user_version = 5;"
     /// Every file under one of `roots` (IndexStore.swift:603). A folder inside another listed is
     /// already covered; each file once, also where two spellings of a folder meet.
     pub fn files_under(&self, roots: &[String]) -> Result<Vec<FileRecord>> {
+        // Root strings arrive from callers in any spelling; the byte-wise ranges below
+        // only see the engine's ONE form (slashes + standardize) — see `set_scope`.
+        let normalized: Vec<String> = roots
+            .iter()
+            .map(|root| crate::paths::standardize(&crate::paths::to_slashes(root)))
+            .collect();
+        let roots: &[String] = &normalized;
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for root in roots {
@@ -831,7 +842,10 @@ PRAGMA user_version = 5;"
     pub fn prune_keeping_under(&self, roots: &[String]) -> Result<i64> {
         let prefixes: Vec<String> = roots
             .iter()
-            .flat_map(|root| path_ranges(root))
+            // The engine's ONE path form (see `set_scope`): the byte-wise prefix test
+            // below compares against rows stored in slash form.
+            .map(|root| crate::paths::standardize(&crate::paths::to_slashes(root)))
+            .flat_map(|root| path_ranges(&root))
             .map(|range| range.0)
             .collect();
         let mut gone: Vec<i64> = Vec::new();

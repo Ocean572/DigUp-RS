@@ -33,9 +33,13 @@ jobs:
           # 'connection timed out' on every Jammy index, fifteen packages with no
           # candidate). The hosted runners live in Azure; Canonical's Azure mirrors
           # serve the same archive from that same cloud, and apt's own retries cover
-          # the rest. 22.04 images keep their sources in .sources files too.
-          sudo sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
-          sudo find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
+          # the rest. 22.04 images keep their sources in .sources files too. This job
+          # runs as root INSIDE the ubuntu:22.04 container, which carries no sudo
+          # binary (measured 2026-11-19: 'sudo: not found', exit 127) — root touches
+          # the sources directly, the host runner (linux-check) keeps sudo.
+          as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
+          as_root sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
+          as_root find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
           apt-get -o Acquire::Retries=5 update -q
           DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ca-certificates curl git gnupg \
             xz-utils unzip python3 binutils build-essential cmake ninja-build meson nasm pkg-config patchelf file \

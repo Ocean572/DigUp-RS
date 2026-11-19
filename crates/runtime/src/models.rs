@@ -189,7 +189,13 @@ fn env_dir(name: &str) -> Option<PathBuf> {
 }
 
 fn home() -> PathBuf {
-    env_dir("HOME").unwrap_or_else(|| PathBuf::from("."))
+    // Slashes on Windows (identity on unix): folder paths built on this feed fs calls
+    // (which accept slashes) and JSON event fields compared engine-side.
+    PathBuf::from(digup_core::paths::to_slashes(
+        &env_dir("HOME")
+            .unwrap_or_else(|| PathBuf::from("."))
+            .to_string_lossy(),
+    ))
 }
 
 /// `AppPaths.applicationSupport` (Portable.swift:44-63): macOS `~/Library/Application Support/DigUp`,

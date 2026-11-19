@@ -317,7 +317,10 @@ pub fn crawl(
                 });
                 last_update = Instant::now();
             }
-            let path = entry.path().to_string_lossy().into_owned();
+            // Windows: walkdir joins a slash-form root with `\` (PathBuf::push) — the
+            // engine's ONE form is slashes (`to_slashes`; the identity on unix), the form
+            // the scope ranges, counters, and Swift-era rows compare byte-wise.
+            let path = paths::to_slashes(&entry.path().to_string_lossy());
             let name = paths::last_component(&path).to_string();
             if name.starts_with('.') {
                 // Foundation's .skipsHiddenFiles: hidden entries are not enumerated, and

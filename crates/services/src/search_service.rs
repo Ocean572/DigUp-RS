@@ -71,7 +71,9 @@ pub fn folder_url(path: &str) -> String {
 }
 
 fn home() -> String {
-    std::env::var("HOME").unwrap_or_default()
+    // The engine's ONE path form: slashes on Windows (identity on unix) — this value
+    // feeds bytewise comparisons with crawl paths.
+    digup_core::paths::to_slashes(&std::env::var("HOME").unwrap_or_default())
 }
 
 /// The daemon's whole state, behind one lock — the class's `@unchecked

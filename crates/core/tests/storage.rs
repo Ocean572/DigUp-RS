@@ -277,6 +277,59 @@ fn scoped_counts_match_the_full_form_under_a_folder_scope() {
 }
 
 #[test]
+#[cfg(windows)]
+fn a_backslash_scope_sees_slash_form_rows() {
+    // The 2026-11-19 packages gate in three rows: the crawl wrote slash-form rows from a
+    // slash root (walkdir joins with `\` — `to_slashes` normalizes it at the walk), the
+    // daemon's scope arrives with backslashes from a Windows caller, and the byte-wise
+    // range splits them — `files:0 pending:0` with five rows inserted, the re-sync calls
+    // them new, and the INSERT dies `UNIQUE constraint failed: files.path`. The store
+    // normalizes every incoming path to the engine's ONE form (slashes).
+    let tmp = tempfile::tempdir().unwrap();
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store
+        .insert(&cand("C:/fake/root/files/a.jpg", FileKind::Image))
+        .unwrap();
+    store
+        .insert(&cand("C:/fake/root/files/b.jpg", FileKind::Image))
+        .unwrap();
+    store
+        .insert(&cand("C:/fake/other/c.jpg", FileKind::Image))
+        .unwrap();
+
+    store
+        .set_scope(Some(vec!["C:\\fake\\root\\files".to_string()]))
+        .unwrap();
+    assert_eq!(
+        store.pending_count().unwrap(),
+        2,
+        "a backslash scope reaches slash-form rows"
+    );
+    assert_eq!(
+        store
+            .files_under(&["C:/fake/root/files".to_string()])
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .files_under(&["C:\\fake\\root\\files".to_string()])
+            .unwrap()
+            .len(),
+        2,
+        "files_under normalizes alike"
+    );
+    let kept = store
+        .prune_keeping_under(&["C:\\fake\\root\\files".to_string()])
+        .unwrap();
+    assert_eq!(
+        kept, 1,
+        "the backslash form prunes only the out-of-scope row"
+    );
+}
+
+#[test]
 fn rebuild_recovers_countertamper_and_reopen_is_idempotent() {
     let tmp = tempfile::tempdir().unwrap();
     let store = open(tmp.path(), digup_core::MAIN_FILE);
