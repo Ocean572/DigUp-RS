@@ -132,6 +132,13 @@ jobs:
       # WebKit's web processes sandbox themselves with bubblewrap, whose namespaces Docker's default seccomp profile
       # refuses inside a container; on a desktop they're sandboxed as usual.
       WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: 1
+      # xvfb has no DRI3 (software GL): WebKitGTK's GL compositing renderer races its
+      # llvmpipe init there and can deadlock — the audio-preview card never paints and
+      # the panel never reports (measured 2026-11-19, ubuntu:24.04: 'libEGL warning:
+      # DRI3 error: Could not get DRI3 device' in the failing second launch, 301 s
+      # silent, the same step green on the same image twice before). Software
+      # rendering is what WebKitGTK's own headless CI uses; desktops keep GL.
+      WEBKIT_DISABLE_COMPOSITING_MODE: 1
     steps:
       - name: Tools
         run: |
