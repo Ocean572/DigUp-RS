@@ -49,7 +49,7 @@ while kill -0 "$app" 2> /dev/null && (( $(date +%s) - started < 1800 )); do
   if (( $(date +%s) >= probe )); then
     probe=$(( $(date +%s) + 30 ))
     echo "t=$(( $(date +%s) - started )) s:"
-    "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | grep -E '^vectors:|^  [a-z]' | head -8
+    "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | grep -E '^vectors:|^  [a-z]' | head -8 || true
   fi
   sleep 2
 done

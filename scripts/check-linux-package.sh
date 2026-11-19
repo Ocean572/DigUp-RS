@@ -85,8 +85,8 @@ launch() {
       probed=1
       echo "--- live at $now s (no report yet)"
       echo "--- live index folder"; ls -la "$work/index" 2>/dev/null | head -12
-      echo "--- live worker.log"; tail -30 "$work/index/worker.log" 2>/dev/null
-      echo "--- live helper status"; timeout 60 "$helper" status --index "$work/index" 2>&1 | head -12
+      echo "--- live worker.log"; tail -30 "$work/index/worker.log" 2>/dev/null || true
+      echo "--- live helper status"; timeout 60 "$helper" status --index "$work/index" 2>&1 | head -12 || true
     fi
     sleep 5
   done
@@ -101,7 +101,7 @@ launch() {
     # rows. The engine opens worker.log only when its embedder opens: a missing file
     # is an embedder that never opened, and the one-shot below is where it must say why.
     echo "--- index folder"; ls -la "$work/index" 2>/dev/null | head -12
-    echo "--- worker.log"; tail -40 "$work/index/worker.log" 2>/dev/null
+    echo "--- worker.log"; tail -40 "$work/index/worker.log" 2>/dev/null || true
     if [[ -n ${helper:-} ]]; then
       # The panel fires its report at the crawl queue's drain and races the embeds;
       # the helper's one-shot index embeds every file before it answers, in the
@@ -111,8 +111,8 @@ launch() {
       DIGUP_MODELS="$models" timeout 900 "$helper" index --index "$work/index" "$work/files" \
         > "$work/oneshot.out" 2>&1 || echo "one-shot exit $?"
       tail -40 "$work/oneshot.out"
-      echo "--- worker.log after the one-shot"; tail -40 "$work/index/worker.log" 2>/dev/null
-      echo "--- status after the one-shot"; "$helper" status --index "$work/index" 2>&1 | head -12
+      echo "--- worker.log after the one-shot"; tail -40 "$work/index/worker.log" 2>/dev/null || true
+      echo "--- status after the one-shot"; "$helper" status --index "$work/index" 2>&1 | head -12 || true
       echo "--- payload files (helper folder, then its parent)"
       ls -la "$(dirname "$(dirname "$helper")")" 2>/dev/null | head -30
       ls -la "$(dirname "$helper")" | head -30
