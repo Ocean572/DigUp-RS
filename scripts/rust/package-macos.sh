@@ -123,7 +123,12 @@ if [ "${1:-}" = "--shell" ]; then
   if cargo tauri --version > /dev/null 2>&1; then tauri=(cargo tauri); fi
   rm -rf shell/src-tauri/target/release/bundle/macos shell/src-tauri/target/release/bundle/dmg
   resources='"resources":{"helper/":"helper/","THIRD-PARTY-NOTICES.txt":"THIRD-PARTY-NOTICES.txt"}'
-  plist='"infoPlist":{"LSMinimumSystemVersion":"14.0"}'
+  # Tauri v2.12's schema types bundle.macOS.infoPlist as null|string — a PATH to a plist
+  # whose entries Tauri merges into the generated Info.plist (v1's object map is gone;
+  # a90e574 renamed the key but kept v1's shape, and the CLI refused it: `"infoPlist":
+  # {...} is not of types "null", "string"`). The entries live in Info.plist, beside
+  # tauri.conf.json.
+  plist='"infoPlist":"Info.plist"'
   appdirs=()
   for target in "${targets[@]}"; do
     (cd shell/src-tauri && "${tauri[@]}" build --target "$target" --bundles app \
