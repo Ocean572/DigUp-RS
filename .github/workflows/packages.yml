@@ -196,7 +196,15 @@ jobs:
           MODELS="$PWD/models" scripts/check-linux-package.sh packages/appimage/*.AppImage
       - name: The .deb
         run: |
-          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q ./packages/deb/*.deb
+          # --no-install-recommends: the full-recommends install pulls xdg-desktop-portal
+          # + pipewire + fuse3 (measured 2026-11-19, ubuntu:22.04: the deb's second launch
+          # activated the document portal, 'fusermount3: fuse device not found' — the
+          # runner host has no /dev/fuse — and the shell blocked on the portal call,
+          # 'no report from the panel' at 300 s; the AppImage arm passed the same
+          # second launch precisely because portal packages were absent; ubuntu:24.04's
+          # host kernel has fuse, so its full install passed. Real desktops keep the
+          # recommends; the headless gate runs strict Depends, like the AppImage.
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ./packages/deb/*.deb
           MODELS="$PWD/models" scripts/check-linux-package.sh /usr/bin/digup-shell
       - name: The update signature
         # Signed with the repository's key (once its secrets are set), the AppImage's signature must match the public key
