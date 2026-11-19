@@ -94,6 +94,17 @@ if [[ $report != *'"recipe.txt"'* ]]; then
   echo "--- worker.log after the one-shot"; tail -40 "$work/index/worker.log" 2>/dev/null || true
   echo "--- helper status after the one-shot"; "$installed/helper/digup.exe" status --index "$(win "$work/index")" 2>&1 | tail -12 || true
   echo "--- payload files"; ls "$installed/helper" | head -40
+  # The daemon's own words on a fresh index: index-service speaks one JSON event per
+  # line on stdout (crawl, model, embed progress) and stops at stdin EOF. The one-shot
+  # proved the embed pipeline healthy (10 vectors in 20 s); the shell's daemon produced
+  # none — the events around where the daemon's embeds stop are the remaining fact.
+  echo "--- daemon probe (index-service standalone, fresh index)"
+  PATH="$installed/helper:/c/Windows/System32:/c/Windows" DIGUP_MODELS="$models" \
+    "$installed/helper/digup.exe" index-service --index "$(win "$work/index2")" "$(win "$work/files")" \
+    --linger 150 < /dev/null > "$work/daemon.txt" 2> "$work/daemonerr.txt" || echo "daemon exit $?"
+  head -40 "$work/daemon.txt" 2>/dev/null
+  echo "--- daemon stderr"; tail -20 "$work/daemonerr.txt" 2>/dev/null || true
+  echo "--- daemon worker.log"; tail -20 "$(win "$work/index2")/worker.log" 2>/dev/null || true
   exit 1
 fi
 

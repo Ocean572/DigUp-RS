@@ -116,6 +116,15 @@ launch() {
       echo "--- payload files (helper folder, then its parent)"
       ls -la "$(dirname "$(dirname "$helper")")" 2>/dev/null | head -30
       ls -la "$(dirname "$helper")" | head -30
+      # The daemon's own words on a fresh index: index-service speaks one JSON event
+      # per line on stdout (crawl, model, embed progress) and stops at stdin EOF —
+      # the events around where it stops are the fact the one-shot cannot show.
+      echo "--- daemon probe (index-service standalone, fresh index)"
+      timeout 180 "$helper" index-service --index "$work/index2" "$work/files" --linger 150 \
+        < /dev/null > "$work/daemon.out" 2> "$work/daemon.err" || echo "daemon exit $?"
+      head -40 "$work/daemon.out" 2>/dev/null
+      echo "--- daemon stderr"; tail -20 "$work/daemon.err" 2>/dev/null
+      echo "--- daemon worker.log"; tail -20 "$work/index2/worker.log" 2>/dev/null || true
     fi
     echo "no report from the panel"
     exit 1
