@@ -292,7 +292,7 @@ PRAGMA user_version = 5;"
             }
             Some(f) => f,
         };
-        let folders: Vec<String> = f
+        let folders: Vec<String> = folders
             .into_iter()
             .map(|folder| crate::paths::standardize(&crate::paths::to_slashes(&folder)))
             .collect();
