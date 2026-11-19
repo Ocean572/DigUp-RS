@@ -141,10 +141,16 @@ jobs:
           # mirror sed is Ubuntu-only; on Debian it matches nothing (its archive is
           # deb.debian.org) and the retries carry the arm.
           as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
-          as_root sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' /etc/apt/sources.list
+          # Measured 2026-11-19: ubuntu:22.04/24.04 cleared this step as root; the
+          # Debian image died on sed — Debian 12 stores its sources deb822-ONLY
+          # (sources.list.d/debian.sources), no /etc/apt/sources.list to edit. The
+          # classic-file sed runs only when that file exists. curl joins the install:
+          # the model pre-download below needs it and bare containers carry none
+          # (measured: 'curl: not found' on both Ubuntu arms, exit 127).
+          as_root sh -c 'if [ -f /etc/apt/sources.list ]; then sed -i "s|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g" /etc/apt/sources.list; fi'
           as_root find /etc/apt/sources.list.d -name '*.sources' -exec sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.security.ubuntu.com|g' {} +
           apt-get -o Acquire::Retries=5 update -q
-          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ca-certificates xvfb xauth dbus
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y -q --no-install-recommends ca-certificates curl xvfb xauth dbus
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
