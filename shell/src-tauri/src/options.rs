@@ -106,9 +106,26 @@ impl Options {
                 _ => return Err(format!("unknown argument {arg}")),
             }
         }
-        // On a Mac the shell is only tried out: the helper's default index there is the Mac app's.
+        // On a Mac the shell launched OUTSIDE an app bundle is only tried out: the default
+        // index there belongs to the Mac app — the rule from the era when that app was the
+        // Swift one. Measured 2026-11-20: the Tauri .app IS the Mac app now, and Finder/
+        // Launchpad launches carry no argv, so the old blanket refusal made the packaged
+        // app exit at once ("pass --index: …") — launched, quit within seconds, no window,
+        // no crash report. Inside a bundle the shell takes the default index exactly like
+        // the Linux and Windows packages do (index_folder: LOCALAPPDATA there, XDG-style
+        // data here — the app owns it); the refusal stays for bare CLI runs from a terminal.
         if cfg!(target_os = "macos") && options.index.is_none() {
-            return Err("pass --index: on a Mac the default index belongs to the DigUp app".into());
+            let bundled = std::env::current_exe()
+                .map(|exe| {
+                    exe.components()
+                        .any(|c| c.as_os_str().to_string_lossy().ends_with(".app"))
+                })
+                .unwrap_or(false);
+            if !bundled {
+                return Err(
+                    "pass --index: on a Mac the default index belongs to the DigUp app".into(),
+                );
+            }
         }
         Ok(options)
     }
