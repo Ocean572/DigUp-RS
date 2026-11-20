@@ -1288,7 +1288,11 @@ fn byte_count(bytes: i64) -> String {
             Some(at) => (rounded[..at].to_string(), rounded[at..].to_string()),
             None => (rounded.clone(), String::new()),
         };
-        format!("{}{}", formats::number(head.parse::<i64>().unwrap_or(0)), tail)
+        format!(
+            "{}{}",
+            formats::number(head.parse::<i64>().unwrap_or(0)),
+            tail
+        )
     };
     let unit_name = match unit {
         0 if bytes == 1 => "byte",
