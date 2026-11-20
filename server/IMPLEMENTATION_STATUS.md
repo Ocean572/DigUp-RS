@@ -2,6 +2,41 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-20 — Python-free plan complete (P0–P4); CI green at `6fff6a6`; repo audit + cleanup (ai-ubuntu-computer)
+
+**Plan status: P0–P4 done.** P1 gates, P2 compose/CI flip, P3 FastAPI retirement (the
+contract suite drives the shipping `digup-server` binary), P4 the record — all measured,
+all pushed. CI at tip `6fff6a6`: Engine run 44667069057 **success** (fmt + clippy
+`-D warnings` + `cargo test --workspace`); Server run 44667069026 green in progress at
+write time (the suite numbers below are from the same tree, measured on this box).
+
+**Dependency audit — no unused libraries.** Rust: `cargo machete` 0.7.1 (Docker, pinned
+1.99.1 toolchain): *"didn't find any unused dependencies"* for the workspace **and** for
+`shell/src-tauri`. JS: `depcheck` on `server/ui`: *"No depcheck issue"* (lit +
+vite/vitest/jsdom, all used; `shell/ui` has no package.json by design). Python:
+`pyproject` runtime deps are empty — pytest + httpx only, for the suite (P4 record:
+scripts and Node/Vite stay Python/JS on purpose). Vendored C libs all pull their weight
+in the Rust tree: llama, ffmpeg, PDFium, stb, SQLite(FTS5); miniz survives as the
+byte-parity spec in `crates/core/src/zipfile.rs` (the Swift side links it —
+`fetch-vendor.sh` keeps it for the reference + `scripts/notices.py`).
+
+**Cleanup (this box, explicit tags only — never mass prune).** Removed 8 superseded
+image tags (builder/fixes3, the pre-P3 test harnesses, swiftrun, the two CUDA-era
+images) + the clippy/machete audit images; 3 dangling Nextcloud-install volumes; builder
+cache trimmed to 20 GB (`--keep-storage`, vendor/llama mounts kept warm). Docker images
+59.04 GB → **46.63 GB** (12.38 GB reclaimable remains, all keep-list: CUDA product,
+runtime, FastAPI baseline the `fastapi-gate` container runs on). Disk `/`: 62 G →
+**91 G free**. Kept: `digup-rust-server:local` (bench stack, Up healthy),
+`digup-rust-server-cuda:local`, shipping images, `digup-server-test:p3`,
+`digup-server-fastapi:local`, `digup-davfs:local`.
+
+**Git tidy.** Deleted the merged branches — local `tmp/rust-080-gate` (3917d8e) +
+`feature/rust-core-port` (1023796, worktree removed first), origin
+`feat/server` + `feat/nextcloud-integration` + `feature/rust-core-port`; both local
+branches verified `merge-base --is-ancestor main` before `-d`. Two stale worktree
+records pruned. Remaining refs: `main` + `swift-reference` (local + origin), tags
+through `v0.8.0`. `git gc` run at tip.
+
 ## 2026-11-20 — P3: the contract suite drives the shipping Rust binary; FastAPI retires (ai-ubuntu-computer)
 
 **Contract suite: 123 passed, 0 failed, 0 skipped, 1 deselected, 204.73 s** (`-rs`, four
