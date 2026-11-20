@@ -13,6 +13,7 @@
   --tertiary: #a1a1a6;
   --line: rgba(0, 0, 0, 0.09);
   --accent: #0a84ff;
+  --on-accent: #ffffff;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, Ubuntu, Cantarell,
     "Noto Sans", sans-serif;
   font-size: 13px;
@@ -45,7 +46,7 @@ main { flex: 1; min-height: 0; overflow-y: auto; padding: 34px 48px 12px; }
 .icon { width: 96px; height: 96px; filter: drop-shadow(0 6px 14px rgba(53, 102, 82, 0.35)); }
 
 h1 { font-size: 30px; margin: 10px 0 0; }
-h2 { font-size: 24px; margin: 0 0 6px; }
+h2 { font-size: 20px; margin: 0 0 6px; } /* the app's hero/step title: 20 (SearchWindow.swift:424) */
 h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--secondary); margin: 28px 0 10px; }
 
 .tagline { font-size: 16px; color: var(--secondary); margin: 2px 0 0; }
@@ -63,7 +64,7 @@ h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: 
   background: linear-gradient(145deg, var(--leaf), var(--moss));
   display: grid; place-items: center;
 }
-.tile svg { width: 18px; height: 18px; fill: none; stroke: white; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tile svg { width: 18px; height: 18px; fill: none; stroke: var(--on-accent); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .privacy { max-width: 470px; margin: 26px auto 0; font-size: 12px; color: var(--secondary); line-height: 1.45; }
 
@@ -116,7 +117,7 @@ button {
   font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--line);
   border-radius: 7px; padding: 6px 16px;
 }
-button.primary { background: var(--moss); color: white; border-color: transparent; }
+button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; } /* controls follow the system accent; moss stays brand (the tiles, the progress fill) */
 button.primary:disabled { opacity: 0.45; }
 button.link { background: none; border: 0; color: var(--ember); padding: 10px 2px 0; }
 

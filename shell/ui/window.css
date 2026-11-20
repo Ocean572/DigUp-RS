@@ -22,6 +22,27 @@
   --chip: rgba(79, 128, 88, 0.1);
   --chip-hover: rgba(79, 128, 88, 0.2);
   --leaf-text: #4f8058;
+  /* Paper, overlays and shadows: the page/passage surfaces, on-image chrome, scrims and
+     drops. Named so dark mode flips them; Swift's Color.primary/.secondary auto-adapt,
+     these are the CSS side of that. */
+  --paper: #ffffff;
+  --ink: rgba(0, 0, 0, 0.78);
+  --ink-strong: rgba(0, 0, 0, 0.85);
+  --on-accent: #ffffff;
+  --on-paper: #000000;
+  --on-image: rgba(0, 0, 0, 0.5);
+  --on-image-strong: rgba(0, 0, 0, 0.6);
+  --play-fill: rgba(0, 0, 0, 0.45);
+  --scrim: rgba(0, 0, 0, 0.45);
+  --marks-dim: rgba(0, 0, 0, 0.35);
+  --on-image-soft: rgba(255, 255, 255, 0.3);
+  --on-accent-dim: rgba(255, 255, 255, 0.8);
+  --danger: #c4441c;
+  --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.16);
+  --shadow-frame: 0 2px 8px rgba(0, 0, 0, 0.18), 0 0 0 0.5px var(--line);
+  --shadow-passage: 0 2px 6px rgba(0, 0, 0, 0.15), 0 0 0 0.5px var(--line);
+  --shadow-menu: 0 8px 28px rgba(0, 0, 0, 0.22), 0 0 0 0.5px var(--fill-strong);
+  --shadow-sheet: 0 18px 60px rgba(0, 0, 0, 0.35);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, Ubuntu, Cantarell,
     "Noto Sans", sans-serif;
   font-size: 13px;
@@ -44,6 +65,21 @@
     --chip: rgba(162, 199, 142, 0.12);
     --chip-hover: rgba(162, 199, 142, 0.22);
     --leaf-text: #a2c78e;
+    --paper: #26262a;
+    --ink: rgba(235, 235, 245, 0.82);
+    --ink-strong: #f2f2f7;
+    --on-accent: #ffffff;
+    --on-paper: #f2f2f7;
+    --on-image: rgba(0, 0, 0, 0.62);
+    --on-image-strong: rgba(0, 0, 0, 0.72);
+    --play-fill: rgba(0, 0, 0, 0.55);
+    --scrim: rgba(0, 0, 0, 0.62);
+    --marks-dim: rgba(0, 0, 0, 0.5);
+    --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.5);
+    --shadow-frame: 0 2px 8px rgba(0, 0, 0, 0.55), 0 0 0 0.5px var(--line);
+    --shadow-passage: 0 2px 6px rgba(0, 0, 0, 0.5), 0 0 0 0.5px var(--line);
+    --shadow-menu: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 0.5px var(--fill-strong);
+    --shadow-sheet: 0 18px 60px rgba(0, 0, 0, 0.65);
   }
 }
 
@@ -98,7 +134,7 @@ svg { display: block; }
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 18px;
+  font-size: 17px; /* Swift .system(size: 17, weight: .semibold) — the field's type size (SearchWindow.swift:371) */
 }
 
 #query::placeholder { color: var(--tertiary); }
@@ -154,7 +190,7 @@ svg { display: block; }
 .chip:hover { background: var(--fill-strong); }
 .chip svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .chip .number { opacity: 0.6; font-variant-numeric: tabular-nums; }
-.chip.selected { background: var(--accent); color: white; }
+.chip.selected { background: var(--accent); color: var(--on-accent); }
 .kinds .divider { width: 1px; height: 16px; margin: 0 4px; background: var(--line); }
 
 /* Results and the preview beside them */
@@ -203,17 +239,17 @@ svg { display: block; }
   position: absolute;
   inset: 12px 32px 0;
   padding: 9px 10px;
-  background: white;
-  color: rgba(0, 0, 0, 0.78);
+  background: var(--paper);
+  color: var(--ink);
   border-radius: 3px 3px 0 0;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.16);
-  font-size: 8.5px;
+  box-shadow: var(--shadow-card);
+  font-size: 10px; /* the print-miniature: the scale's floor (Swift's smallest is 10) */
   line-height: 1.38;
   overflow: hidden;
   white-space: pre-wrap;
   word-break: break-word;
 }
-.cell .text-card b { color: black; font-weight: 700; }
+.cell .text-card b { color: var(--on-paper); font-weight: 700; }
 
 .kind-badge {
   position: absolute;
@@ -222,11 +258,11 @@ svg { display: block; }
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--on-image);
   display: grid;
   place-items: center;
 }
-.kind-badge svg { width: 11px; height: 11px; fill: none; stroke: white; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.kind-badge svg { width: 11px; height: 11px; fill: none; stroke: var(--on-accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 
 .place {
   font-size: 10px;
@@ -237,7 +273,7 @@ svg { display: block; }
   background: var(--fill-strong);
   white-space: nowrap;
 }
-.place.on-image { color: white; background: rgba(0, 0, 0, 0.6); }
+.place.on-image { color: var(--on-accent); background: var(--on-image-strong); }
 .cell .place { position: absolute; right: 6px; bottom: 6px; }
 
 .cell .name {
@@ -251,7 +287,7 @@ svg { display: block; }
 
 /* A folder too long for its line loses its start: "…/Pictures/Screenshots". */
 .cell .folder, .row .folder, .facts .folder {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -338,7 +374,7 @@ svg { display: block; }
 }
 .mark img { position: relative; width: 84px; height: 84px; filter: drop-shadow(0 6px 14px rgba(53, 102, 82, 0.3)); }
 
-.center h1 { margin: 18px 0 0; font-size: 24px; font-weight: 700; }
+.center h1 { margin: 18px 0 0; font-size: 20px; font-weight: 700; } /* the app's hero title: 20 bold (SearchWindow.swift:424) */
 .center h2 { margin: 18px 0 0; font-size: 20px; font-weight: 700; }
 .center h3 { margin: 10px 0 0; font-size: 17px; font-weight: 600; max-width: 480px; }
 .center p { margin: 6px 0 0; max-width: 440px; font-size: 13px; line-height: 1.45; color: var(--secondary); }
@@ -354,7 +390,7 @@ svg { display: block; }
   border: 0;
   border-radius: 99px;
   background: var(--chip);
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: pointer;
 }
 .example:hover { background: var(--chip-hover); }
@@ -390,7 +426,7 @@ svg { display: block; }
   border-radius: 7px;
   background: var(--surface);
 }
-.button.primary { background: var(--accent); color: white; border-color: transparent; }
+.button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .button:active { filter: brightness(0.92); }
 
 .spinner {
@@ -420,7 +456,7 @@ svg { display: block; }
   display: flex;
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18), 0 0 0 0.5px var(--line);
+  box-shadow: var(--shadow-frame);
 }
 .preview-picture .frame img { max-width: 292px; max-height: 230px; display: block; }
 .preview-picture video { max-width: 100%; max-height: 100%; border-radius: 8px; background: black; }
@@ -447,13 +483,13 @@ svg { display: block; }
   gap: 7px;
   pointer-events: none;
 }
-.marks.dim { background: linear-gradient(transparent, rgba(0, 0, 0, 0.35)); }
+.marks.dim { background: linear-gradient(transparent, var(--marks-dim)); }
 
 .moment-bar { position: relative; width: 100%; height: 4px; border-radius: 2px; background: var(--fill-strong); }
 .moment-bar .lit { position: absolute; top: 0; bottom: 0; min-width: 4px; border-radius: 2px; background: var(--accent); }
 .moment-bar .head { position: absolute; top: -2.5px; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--text); }
-.marks .moment-bar { background: rgba(255, 255, 255, 0.3); }
-.marks .moment-bar .lit { background: white; }
+.marks .moment-bar { background: var(--on-image-soft); }
+.marks .moment-bar .lit { background: var(--on-accent); }
 
 .play {
   position: absolute;
@@ -462,14 +498,14 @@ svg { display: block; }
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.7);
-  background: rgba(0, 0, 0, 0.45);
+  border: 1.5px solid var(--on-image-soft);
+  background: var(--play-fill);
   display: grid;
   place-items: center;
   padding: 0;
   cursor: pointer;
 }
-.play svg { width: 20px; height: 20px; fill: white; margin-left: 3px; }
+.play svg { width: 20px; height: 20px; fill: var(--on-accent); margin-left: 3px; }
 
 .audio-moment {
   width: 100%;
@@ -495,7 +531,7 @@ svg { display: block; }
   padding: 0;
   cursor: pointer;
 }
-.audio-moment .toggle svg { width: 14px; height: 14px; fill: white; }
+.audio-moment .toggle svg { width: 14px; height: 14px; fill: var(--on-accent); }
 .audio-moment .toggle.play-icon svg { margin-left: 2px; }
 .audio-moment .moment-bar { width: 220px; }
 .audio-moment .span { font-size: 11px; color: var(--secondary); font-variant-numeric: tabular-nums; }
@@ -508,9 +544,9 @@ svg { display: block; }
   overflow: hidden;
   padding: 14px;
   border-radius: 8px;
-  background: white;
-  color: rgba(0, 0, 0, 0.85);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15), 0 0 0 0.5px var(--line);
+  background: var(--paper);
+  color: var(--ink-strong);
+  box-shadow: var(--shadow-passage);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -519,7 +555,7 @@ svg { display: block; }
   -webkit-user-select: text;
   cursor: text;
 }
-.passage mark, .code-lines mark { background: var(--mark); color: black; border-radius: 2px; }
+.passage mark, .code-lines mark { background: var(--mark); color: var(--on-paper); border-radius: 2px; }
 .passage + .place, .code-lines + .place { position: absolute; right: 8px; bottom: 8px; }
 
 /* The lines of code that matched, numbered as in the file; the line it opens at is lit. */
@@ -539,7 +575,7 @@ svg { display: block; }
   cursor: text;
 }
 .code-lines .line { display: flex; gap: 10px; padding: 0 8px; white-space: pre; }
-.code-lines .line.focus { background: rgba(242, 162, 42, 0.16); }
+.code-lines .line.focus { background: rgba(242, 162, 42, 0.16); } /* the amber lit-line: the brand mark at 16 % (Swift's highlight family) */
 .code-lines .number { flex: none; text-align: right; color: var(--tertiary); }
 
 .facts { margin-top: 12px; display: flex; flex-direction: column; gap: 3px; }
@@ -579,12 +615,12 @@ svg { display: block; }
 .actions { margin-top: 14px; display: flex; gap: 8px; }
 .actions button {
   padding: 5px 14px;
-  font-size: 12.5px;
+  font-size: 12px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface);
 }
-.actions button.primary { background: var(--accent); color: white; border-color: transparent; }
+.actions button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .actions button:active { filter: brightness(0.92); }
 
 .side .message { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; color: var(--secondary); padding: 0 12px; }
@@ -625,7 +661,7 @@ svg { display: block; }
   padding: 5px;
   border-radius: 9px;
   background: var(--menu);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22), 0 0 0 0.5px var(--fill-strong);
+  box-shadow: var(--shadow-menu);
 }
 .menu button {
   display: flex;
@@ -639,25 +675,25 @@ svg { display: block; }
   text-align: left;
   font-size: 13px;
 }
-.menu button:hover:not(:disabled) { background: var(--accent); color: white; }
+.menu button:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 .menu button:disabled { color: var(--tertiary); }
 .menu .shortcut { color: var(--tertiary); }
-.menu button:hover:not(:disabled) .shortcut { color: rgba(255, 255, 255, 0.8); }
+.menu button:hover:not(:disabled) .shortcut { color: var(--on-accent-dim); }
 .menu hr { border: 0; height: 1px; margin: 5px 4px; background: var(--line); }
 
 /* The big preview (Space): the selected result over the window, as big as it allows. */
-.big { position: fixed; inset: 0; z-index: 20; display: flex; padding: 24px; background: rgba(0, 0, 0, 0.45); }
+.big { position: fixed; inset: 0; z-index: 20; display: flex; padding: 24px; background: var(--scrim); }
 .big[hidden] { display: none; }
 .big .sheet {
   flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: 12px;
-  background: var(--surface); box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  background: var(--surface); box-shadow: var(--shadow-sheet);
 }
 .big .head { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); }
 .big .title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 .big .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .big .title .place { flex: none; font-size: 12px; color: var(--secondary); }
-.big .head button { padding: 5px 14px; font-size: 12.5px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); }
-.big .head button.primary { background: var(--accent); color: white; border-color: transparent; }
+.big .head button { padding: 5px 14px; font-size: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); }
+.big .head button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .big .head button.close { padding: 2px 10px; font-size: 18px; line-height: 1; border-color: transparent; background: none; color: var(--secondary); }
 .big .view { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--pane); }
 .big .view img, .big .view video { max-width: 100%; max-height: 100%; object-fit: contain; }
