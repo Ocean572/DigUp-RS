@@ -57,7 +57,7 @@ services:
     build:
       context: ..
       dockerfile: server/docker/Dockerfile
-      target: server-runtime-cuda # CPU-only: target: server-runtime and drop the args block
+      target: server-rust-runtime-cuda # CPU-only: target: server-rust-runtime and drop the args block
       args:
         BASE_IMAGE: ${CUDA_BASE:-nvidia/cuda:12.4.1-devel-ubuntu22.04}
         CUDA_RUNTIME_IMAGE: ${CUDA_RUNTIME_IMAGE:-nvidia/cuda:12.4.1-runtime-ubuntu22.04}

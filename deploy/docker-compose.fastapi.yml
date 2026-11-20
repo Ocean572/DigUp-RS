@@ -1,0 +1,27 @@
+# Opt-in PARITY override: the old FastAPI image (uvicorn + the Python wrapper), kept as the
+# measured escape hatch for one release cycle after the default flipped to the Rust server
+# (docs/implementation/python-free-plan.md P2). Same Dockerfile, the `server-runtime` target;
+# same mounts, same uid 990, same 8787, same `DIGUP_SERVER_*` env (the wrapper reads the
+# same names), same supervision shape (tini → uvicorn → the engine's helpers).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.fastapi.yml up -d --build
+#
+# Why this file exists: when a divergence appears, it is reproducible against the Python
+# baseline byte-for-byte, not argued. Diffs on this shape run the same contract suite
+# (`server-test` is its test alias). After the release cycle this file retires with the
+# wrapper (plan P3) — do not build new shapes on it.
+#
+# The GPU parity shape (only if a CUDA divergence must be reproduced against the baseline):
+# build it by hand on the box with the card, matched to the driver (gpu-handoff.md):
+#
+#   docker build --target server-runtime-cuda -f server/docker/Dockerfile \
+#     --build-arg BASE_IMAGE=nvidia/cuda:<X>.X.0-devel-ubuntu22.04 \
+#     --build-arg CUDA_RUNTIME_IMAGE=nvidia/cuda:<X>.X.0-runtime-ubuntu22.04 \
+#     --build-arg CUDA_ARCHS=<plain number> -t digup-server:local .
+#
+# then run the stack with `--no-build`.
+services:
+  server:
+    build:
+      target: server-runtime
+    image: digup-server:local

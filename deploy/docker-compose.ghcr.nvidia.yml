@@ -7,7 +7,7 @@
 # Toolkit, and on multi-GPU hosts DIGUP_NVIDIA_GPU pins the card (a UUID from
 # `nvidia-smi -L`). The engine, not this file, decides whether the card is USED
 # (`digup speed --model` measures it; the proof of use is gpu-handoff.sh's utilization
-# gate) — the image shape is the same server-runtime-cuda target the build path ships.
+# gate) — the image shape is the same server-rust-runtime-cuda target the build path ships.
 #
 # Tag knob mirrors docker-compose.ghcr.yml, with the -cuda suffix appended by the
 # literal below: DIGUP_IMAGE_TAG=latest → :latest-cuda; DIGUP_IMAGE_TAG=feat-server →

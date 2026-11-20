@@ -1,12 +1,16 @@
-# The DigUp server, CPU-only first release (docs/implementation/README.md §3, §5, §7, §11).
+# The DigUp server, CPU-only default deploy (docs/implementation/README.md §3, §5, §7, §11).
 #
 #   docker compose up -d --build          →  http://127.0.0.1:8787/  (UI + /api/v1)
 #
 # One service. The image is built from the repo's multi-stage Dockerfile on this machine's
-# own architecture (never under emulation, §11). Bind mounts keep the index, model, config
-# and job log OUTSIDE the image: container recreation never destroys them (§5). Media is
-# mounted read-only; the server never modifies originals and never takes paths from
-# clients (§7). Indexing never starts by itself: "Index now" in the UI, or POST /index.
+# own architecture (never under emulation, §11) — the target is `server-rust-runtime`: the
+# Python-free shipping image (`digup-server`, the Rust server, stage 6), same engine, same
+# Lit UI, same supervision. The old FastAPI image is the opt-in parity escape hatch,
+# `docker-compose.fastapi.yml` — same mounts, same env, one release cycle. Bind mounts keep
+# the index, model, config and job log OUTSIDE the image: container recreation never
+# destroys them (§5). Media is mounted read-only; the server never modifies originals and
+# never takes paths from clients (§7). Indexing never starts by itself: "Index now" in the
+# UI, or POST /index.
 #
 # Paths come from the environment so this file is portable; defaults sit beside it under
 # deploy/data/. On a production box, point the DIGUP_* variables at the real folders and
@@ -35,7 +39,11 @@ services:
     build:
       context: ..
       dockerfile: server/docker/Dockerfile
-      target: server-runtime
+      target: server-rust-runtime
+      args:
+        # The pinned Rust toolchain (the workspace's floor is rust-version = 1.88; the
+        # builder installs 1.99.1 through rustup — see the Dockerfile's rust stages).
+        RUST_VERSION: ${RUST_VERSION:-1.99.1}
     image: digup-server:local
     # A job mid-embed (a photo takes ~10–40 s of CPU) needs room for the engine's safe
     # point: with the Docker default 10 s the stop lands as SIGKILL and the job recovers

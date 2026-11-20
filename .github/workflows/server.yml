@@ -148,7 +148,7 @@ jobs:
       # Rust --help proves nothing, the title is the proof).
       - name: The runtime image runs the CLI headless
         run: |
-          docker build --target server-runtime-rust -f server/docker/Dockerfile -t digup-engine:ci .
+          docker build --target server-rust-runtime -f server/docker/Dockerfile -t digup-engine:ci .
           docker run --rm digup-engine:ci digup --help
           docker run --rm digup-engine:ci digup --help | sed -n 1p
 
@@ -205,6 +205,28 @@ jobs:
             exit 1
           fi
           grep -qE '[0-9]+ passed' "$RUNNER_TEMP/suite.log"
+
+      # The parity alias, one release cycle (docs/implementation/python-free-plan.md P2):
+      # the SAME suite against the FastAPI image (`server-test`), so any divergence between
+      # the two servers is a measured diff on identical fixtures, never an argument. The
+      # alias retires with the wrapper (plan P3) — its index dir is its own (the ghost-row
+      # rule: each root layout keeps its own index).
+      - name: Contract tests against the FastAPI alias (parity, one release cycle)
+        run: |
+          docker build --target server-test -f server/docker/Dockerfile -t digup-server-test-fastapi:ci .
+          mkdir -p "$RUNNER_TEMP/index-fastapi"
+          docker run --rm \
+            -v "$PWD/server/tests/corpus/media:/corpus:ro" \
+            -v "$PWD/server/tests/corpus:/corpus-root:ro" \
+            -v "$RUNNER_TEMP/models:/models:ro" \
+            -v "$RUNNER_TEMP/index-fastapi:/index" \
+            digup-server-test-fastapi:ci /srv/server/.venv/bin/pytest -rs 2>&1 | tee "$RUNNER_TEMP/suite-fastapi.log"
+          if grep -qE '^(SKIPPED|tests/.*SKIPPED)' "$RUNNER_TEMP/suite-fastapi.log"; then
+            echo "::error::a test SKIPPED on the FastAPI alias — the same zero-skip bar applies"
+            grep -E 'SKIPPED' "$RUNNER_TEMP/suite-fastapi.log" | head -20
+            exit 1
+          fi
+          grep -qE '[0-9]+ passed' "$RUNNER_TEMP/suite-fastapi.log"
 
       - name: The headless proof (index + search + eval, the engine's own words)
         run: |
@@ -303,17 +325,20 @@ jobs:
           DIGUP_MEDIA_BIND_OPTS=ro,rslave DAV_HOST_DIR=/media/dav \
           NEXTCLOUD_URL=http://nextcloud DAV_USERS="ci-alice ci-bob" DAV_APPPW="ci-alice:x ci-bob:y" \
           docker compose -f docker-compose.all-in-one.yml --profile nvidia --profile dav config --quiet
-          # The Rust payload overrides (docker-compose.rust.yml: the all-Rust server +
-          # engine image, the same mounts/env/supervision as the default; and its CUDA
-          # sibling): the base CPU file stays the default deploy, so both are pinned
-          # plain AND with the nvidia profile, exactly like the nvidia compose override's shape.
-          docker compose -f docker-compose.yml -f docker-compose.rust.yml config --quiet
-          docker compose -f docker-compose.yml -f docker-compose.nvidia.yml \
-            -f docker-compose.rust.yml -f docker-compose.rust.nvidia.yml --profile nvidia config --quiet
+          # The FastAPI parity override (docker-compose.fastapi.yml: the old Python image,
+          # the measured escape hatch for one release cycle after the default flipped to the
+          # Rust server — the base file's target IS server-rust-runtime now, so the Rust
+          # shape is the plain default chain pinned above). Pinned plain and LAN-merged.
+          docker compose -f docker-compose.yml -f docker-compose.fastapi.yml config --quiet
+          DIGUP_LAN_BIND=192.0.2.1 docker compose -f docker-compose.yml -f docker-compose.fastapi.yml -f docker-compose.lan.yml config --quiet
 
       - name: The server runtime image boots, answers, serves the UI, stops cleanly
         run: |
-          docker build --target server-runtime -f server/docker/Dockerfile -t digup-server:ci .
+          # The shipping image (stage 6): tini PID 1 → digup-server → the engine's helpers
+          # (the ParentWatch chain), non-root (uid 990), HEALTHCHECK = the API's own /health
+          # by curl, the UI served at / from the bundle baked beside the binary. Same
+          # stop contract as the FastAPI era: SIGTERM must end it *stopped, not killed*.
+          docker build --target server-rust-runtime -f server/docker/Dockerfile -t digup-server:ci .
           mkdir -p "$RUNNER_TEMP/data/index" "$RUNNER_TEMP/data/config"
           # 777 as in the proof step: the server image is non-root (uid 990) and must own
           # its writer lock + job log under /data/index — a runner-owned 775 dir denies it.
@@ -327,13 +352,16 @@ jobs:
             digup-server:ci
           code=0
           for i in $(seq 1 30); do
-            # The image's OWN healthcheck script — the exact file Docker runs, proven here
-            # against the live API (its exit 0 is the health Docker reports).
-            if docker exec server-ci python /opt/digup/healthcheck.py; then code=200; break; fi
+            # The image's OWN healthcheck command (stage 6's HEALTHCHECK CMD, verbatim):
+            # curl on /api/v1/health, and 503 counts ALIVE (exit 22 — the searcher
+            # warming/respawning is the engine's honest "not right now", not a sick
+            # container). Its exit 0 is the health Docker reports.
+            if docker exec server-ci sh -c 'curl -fsS -o /dev/null http://127.0.0.1:8787/api/v1/health || test $? -eq 22'; then code=200; break; fi
             sleep 2
           done
           test "$code" = "200"
-          docker exec server-ci python -c 'import urllib.request; html = urllib.request.urlopen("http://127.0.0.1:8787/", timeout=3).read().decode(); assert "DigUp" in html and "app.js" in html'
+          docker exec server-ci curl -fsS http://127.0.0.1:8787/ -o /tmp/ui.html
+          docker exec server-ci sh -c 'grep -q DigUp /tmp/ui.html && grep -q app.js /tmp/ui.html'
           docker stop --time 15 server-ci
           exit_code=$(docker inspect server-ci --format '{{.State.ExitCode}}')
           test "$exit_code" != "137"        # 137 = SIGKILL: the lifespan shutdown hung
@@ -344,7 +372,7 @@ jobs:
         if: always()
         run: |
           shopt -s nullglob
-          files=("$RUNNER_TEMP"/proof/*.log "$RUNNER_TEMP"/suite.log)
+          files=("$RUNNER_TEMP"/proof/*.log "$RUNNER_TEMP"/suite.log "$RUNNER_TEMP"/suite-fastapi.log)
           if [ ${#files[@]} -eq 0 ]; then echo "no proof/suite logs to show"; exit 0; fi
           for f in "${files[@]}"; do echo "::group::${f##*/}"; cat "$f"; echo "::endgroup::"; done
 
@@ -356,6 +384,7 @@ jobs:
           path: |
             ${{ runner.temp }}/proof
             ${{ runner.temp }}/suite.log
+            ${{ runner.temp }}/suite-fastapi.log
           if-no-files-found: warn
 
   # Pull-and-run publishes here (server/README.md "Pull the published image"): pushes to
@@ -439,13 +468,14 @@ jobs:
           password: ${{ github.token }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # The CPU image — the target server-runtime the stop-gate step above booted,
+      # The CPU image — the target server-rust-runtime the stop-gate step above booted
+      # (the Python-free shipping image; the FastAPI alias is a test-only shape now),
       # tagged :latest on main, :<branch> on a feature branch.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: server/docker/Dockerfile
-          target: server-runtime
+          target: server-rust-runtime
           push: true
           tags: ${{ env.IMAGE }}:${{ env.TAG_CPU }}
           platforms: linux/amd64
@@ -458,14 +488,14 @@ jobs:
       # re-evaluate the base when the line moves); CMake lists are semicolon-separated and
       # the Dockerfile's engine-builder normalizes this comma string (run #6, 2026-11-05:
       # raw commas = ONE invalid arch token, configure died in seconds). Its build gate is the Dockerfile's own:
-      # server-runtime-cuda runs `ldd libggml-cuda.so` and fails the build on any
+      # server-rust-runtime-cuda runs `ldd libggml-cuda.so` and fails the build on any
       # "not found" (measured 2026-11-04, Gate B), so a broken CUDA image never publishes.
       # Separate gha cache scope: the CPU and CUDA layer sets must not evict each other.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: server/docker/Dockerfile
-          target: server-runtime-cuda
+          target: server-rust-runtime-cuda
           push: true
           tags: ${{ env.IMAGE }}:${{ env.TAG_CUDA }}
           platforms: linux/amd64

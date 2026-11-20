@@ -163,7 +163,7 @@ services:
     build:
       context: ..
       dockerfile: server/docker/Dockerfile
-      target: server-runtime
+      target: server-rust-runtime
     image: digup-server:local
     restart: unless-stopped
     stop_grace_period: 90s

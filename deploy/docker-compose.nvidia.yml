@@ -6,9 +6,9 @@
 # Prerequisite: the NVIDIA Container Toolkit on the host (its test is in gpu-handoff.md).
 # `libcuda.so.1` and the driver's CUDA userland come from the HOST through the toolkit —
 # never baked into an image. The image carries the CUDA backend only when it was built
-# from a matching CUDA base (see the Dockerfile's server-runtime-cuda target):
+# from a matching CUDA base (see the Dockerfile's server-rust-runtime-cuda target):
 #
-#   DOCKER_BUILDKIT=1 docker build --target server-runtime-cuda \
+#   DOCKER_BUILDKIT=1 docker build --target server-rust-runtime-cuda \
 #     --build-arg BASE_IMAGE=nvidia/cuda:<X>.X.0-devel-ubuntu22.04 \
 #     --build-arg CUDA_RUNTIME_IMAGE=nvidia/cuda:<X>.X.0-runtime-ubuntu22.04 \
 #     -f server/docker/Dockerfile -t digup-server:local ..
@@ -31,18 +31,19 @@
 services:
   server:
     profiles: ["nvidia"]
-    # The CUDA shape of the image: same Dockerfile, the server-runtime-cuda target, the
-    # matching devel + runtime bases, the card's CUDA_ARCHS — a plain number for one card
+    # The CUDA shape of the image: same Dockerfile, the server-rust-runtime-cuda target,
+    # the matching devel + runtime bases, the card's CUDA_ARCHS — a plain number for one card
     # (apt cmake 3.22.1, see the comment above) or a fat list like `61,70,89` for many;
     # the Dockerfile normalizes the separators. Compose merges this over the base file's
     # CPU build, so `--profile nvidia … up -d --build` produces the CUDA image on the box
     # that has it.
     build:
-      target: server-runtime-cuda
+      target: server-rust-runtime-cuda
       args:
         BASE_IMAGE: ${CUDA_BASE:-nvidia/cuda:12.4.1-devel-ubuntu22.04}
         CUDA_RUNTIME_IMAGE: ${CUDA_RUNTIME_IMAGE:-nvidia/cuda:12.4.1-runtime-ubuntu22.04}
         CUDA_ARCHS: ${CUDA_ARCHS:-native}
+        RUST_VERSION: ${RUST_VERSION:-1.99.1}
     environment:
       NVIDIA_VISIBLE_DEVICES: ${DIGUP_NVIDIA_GPU:-all}
     deploy:

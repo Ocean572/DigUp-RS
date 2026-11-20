@@ -25,8 +25,8 @@ Three measured rules before anything else:
   the server then dies on the writer lock (`EACCES`). Measured, not folklore.
 - **Index rows carry the roots they were crawled from.** Moving a mount to a new path
   makes answers thin + ghost rows; cure with `POST /api/v1/index {"prune":true}`.
-- **Exactly one server process**: media ids and the job runner live inside one uvicorn.
-  `--workers >1`, replicas, or a LB in front of two containers 404s media ids.
+- **Exactly one server process**: media ids and the job runner live inside one `digup-server`
+  process. `--workers >1`, replicas, or a LB in front of two containers 404s media ids.
   Concurrency *within* the process is fine.
 
 ## Which compose file for which shape
@@ -41,6 +41,7 @@ Three measured rules before anything else:
 | `docker-compose.nextcloud.yml` | full Nextcloud + server stack, self-contained (dav service behind `--profile dav`) |
 | `docker-compose.nextcloud.lan.yml` | LAN bind for the Nextcloud web port |
 | `docker-compose.all-in-one.yml` | **example**: all of the above merged into one file (peel instructions in its header) |
+| `docker-compose.fastapi.yml` | **parity escape hatch**: the old FastAPI image, opt-in, one release cycle (see its header) |
 
 Overlay files merge onto the base — the chain order is the merge order, and every
 shape below is `docker compose -f …[-f …] [--profile …] up -d`. CI schema-validates
@@ -89,6 +90,9 @@ docker compose -f docker-compose.nextcloud.yml up -d
 
 # everything at once (example, one file)
 docker compose -f docker-compose.all-in-one.yml --profile nvidia --profile dav up -d --build
+
+# the FastAPI baseline, for parity checks only (opt-in, one release cycle — its header says why)
+docker compose -f docker-compose.yml -f docker-compose.fastapi.yml up -d --build
 ```
 
 ## Env var reference (compose layer)
