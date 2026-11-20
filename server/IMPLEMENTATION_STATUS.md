@@ -2,6 +2,58 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-20 — Desktop-app Swift style pass + full Rust code review; engine gate measured on the latest stable (ai-ubuntu-computer)
+
+**UI (`31e642c`, desktop app only — `shell/ui/{window,panel,settings,setup}.css`, +102/−54).**
+Type scale exact to Swift (8.5→10, 10.5→11, 12.5→12, 18→17, 22/24→20 px), one control-color
+rule (settings tabs + setup primary: moss→accent; moss stays brand), unified focus ring
+(accent@60 %, 2 px), dark-mode token set (`--paper/--ink/--on-accent/--on-image/--play-*/
+--scrim/--shadow-*/--danger`); chip radii confirmed as Swift's formula (17×0.42, 20×0.42).
+Every fact cited by Swift line in `docs/implementation/swift-ui-style-parity.md`; its gap G4
+(glass window chrome) planned — the panel already ships transparent+borderless
+(`shell/src-tauri/src/main.rs:1136-1138`).
+
+**Code review (`256a3ae` +316/−230 over 24 files, + `bf6b141`, `a46eb98`).** Two full audits
+of `crates/**` + `shell/src-tauri`: 30 duplication sites, 16 quality findings, **no
+high-severity defect**. Fixed: dead verb consts + dead `summaries`/`raw` + the stale
+`server/digup_server/` (`__pycache__` only); one home per law (cli format twins →
+`formats.rs`, cli emit → `services::emit`, `DEVICE_ENV`/`MODELS_ENV`, z-gate literals →
+`scoring::Z_GATE`, trailing-slash rule → `paths::bound`, worker-log names → `paths::WORKER_LOG*`,
+estimate knob → `config::estimate_timeout()`, pixel ints → `config::py_int`, `targets`
+lexical/clean merged); overflow-checked zip bounds ×4; one-buffer scoring; tag/range regex
+caches; CORS `expect` → `if-let`; job-log replay streams. Kept-with-evidence (the audits'
+"unused" claims were wrong): `json_object`/`json_str` (pinned `info`-column bytes),
+`pub mod zipfile`/`folder_selection` (cross-crate users), `known_language` (integration
+tests), server `#![allow(dead_code)]` (names what it silences). The full fixed/kept/deferred
+record is `docs/implementation/rust-code-review-2026-11.md`.
+
+**Engine gate on this box (Docker, rust:1.99.0 — newer than CI's pinned 1.99.1; kernel
+7.0.0-43-generic, Ryzen 9 7950X, 20 cores).** `cargo test --workspace --all-targets`:
+38 suites, **214 passed / 0 failed / 3 ignored** (model-pinned tests self-skip — no model
+files in the gate, by design). `cargo clippy --workspace --all-targets -- -D warnings`:
+**rc 0**. `cargo fmt --all --check`: **clean**. Vendor: llama b11461 (patched, native CPU),
+ffmpeg 9.0.2 (the media suite runs on the 9.0.2 seam with the documented note — answers
+pinned to 4.4.2, `ANSWER_FFMPEG`, `crates/native/tests/media.rs:59`), PDFium, SQLite
+3.54.0, stb, miniz. The gate runs as **uid 1000** with CI's exact test env
+(`LD_LIBRARY_PATH=Vendor/llama/lib:Vendor/pdfium/lib`, `DIGUP_BACKENDS`, `DIGUP_FFMPEG`,
+`DIGUP_DEVICE=cpu DIGUP_THREADS=8`): the pdf parity test
+`a_page_copy_that_cannot_be_written_fails_the_extraction` measures DAC — root carries
+`CAP_DAC_OVERRIDE` and writes into its own `0500` render folder, so a root run lands on the
+test's fail-before panic path on a seam CI proves green; under uid 1000 the DAC binds
+(probe line: "write into 0500 refused") and the suite answers the refusal: 7 passed,
+1 ignored. Harness lessons, not code: zero engine changes were needed for any of it.
+
+**CI at tip `a46eb98`.** Engine run 56 (44760534878) **success** (Format gate + clippy
+`-D warnings` + `cargo test --workspace --all-targets` as the `ci` user, done 15:13:14).
+Server run 55 (44760534864): suite job **success** 15:23:12; the publish (deploy + stop-grace)
+job running. The one red step en route: run 55 at `bf6b141` Format gate (one cli hunk) →
+fixed by rustfmt, green at `a46eb98`.
+
+**Plan status.** P0–P4 complete (entry below). The review pass is complete; deferred
+follow-ups, each its own tested PR with reasons recorded in the audit doc: the `"code:"`
+prefix divergence (`cli` ↔ `core::model`), `status` GROUP BY aggregate, the poison policy
+on shared locks, a shared protocol crate, the packages.yml model-pin drift guard.
+
 ## 2026-11-20 — Python-free plan complete (P0–P4); CI green at `6fff6a6`; repo audit + cleanup (ai-ubuntu-computer)
 
 **Plan status: P0–P4 done.** P1 gates, P2 compose/CI flip, P3 FastAPI retirement (the
