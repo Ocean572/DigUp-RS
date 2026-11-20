@@ -79,6 +79,16 @@ for b in digup digup-server; do
     || install_name_tool -add_rpath @loader_path "$out/payload/$b"
   codesign --force --sign - "$out/payload/$b"
 done
+# The PDFium dylib is a PREBUILT download (fetch-vendor): it arrives unsigned, and arm64
+# refuses to load an unsigned dylib — measured 2026-11-20 on Apple Silicon, a payload run
+# on a user machine DYLD-aborts with "library load disallowed by system policy" (the
+# runner never sees this: its build-time rpath folder exists there, the loader never
+# reaches the @loader_path copy the signature rule judges). Sign every payload member
+# the binaries load, same last-step rule as the two binaries above; ffmpeg/ffprobe carry
+# the linker's own ad-hoc signature and are re-signed for the same reason (a copied byte
+# can lose it).
+codesign --force --sign - "$out/payload/libpdfium.dylib" "$out/payload/ffmpeg" "$out/payload/ffprobe"
+codesign --verify --strict "$out/payload/"*
 if [ "${#targets[@]}" = 2 ]; then
   for f in digup digup-server libpdfium.dylib; do
     archs=$(lipo -archs "$out/payload/$f")
