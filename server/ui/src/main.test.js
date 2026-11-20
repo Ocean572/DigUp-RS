@@ -1,7 +1,7 @@
 // src/main.js — the full UI's boot as served: index.html DECLARES <digup-app> and the
 // entry wires that element (store, theme, api, controllers); the first paint is idle
-// (body[data-page]), the status poll starts. This is the shape FastAPI's static mount
-// hands the browser at `/`.
+// (body[data-page]), the status poll starts. This is the shape the server's static
+// mount hands the browser at `/`.
 import { describe, expect, it, afterEach, vi } from "vitest";
 import { installFetch, mockReply } from "./lib/test-util.js";
 

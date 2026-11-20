@@ -3,7 +3,7 @@
 // same asset names the contract suite pins (`app.js`, `style.css`, `embed.js`, `embed.css`),
 // same-origin only, no external URLs (README §10.4, test_media_ui pins). Node exists at
 // BUILD time only (the Dockerfile's frontend-builder stage); the runtime image ships the
-// static dist and FastAPI serves it. No server, no router library, no framework runtime.
+// static dist and `digup-server` serves it. No server, no router library, no framework runtime.
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -34,7 +34,7 @@ export default defineConfig({
   },
   server: {
     // Dev only: `npm run dev` (Vite on :5173) proxies the API to a running server
-    // (`deploy/` compose → 127.0.0.1:8787). Production needs no server: FastAPI serves dist.
+    // (`deploy/` compose → 127.0.0.1:8787). Production needs no server: `digup-server` serves dist.
     // The default binds loopback (the server's own §7 discipline: nothing listens on a
     // LAN address unless the operator says so). LAN dev access is env-forced:
     //   DIGUP_UI_DEV_HOST=0.0.0.0 DIGUP_UI_DEV_ALLOWED_HOSTS=<lan-name>,<lan-ip>

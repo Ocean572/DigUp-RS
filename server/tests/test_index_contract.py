@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from conftest import _cfg
-from digup_server.engine import IndexBusy, IndexService, SearchService, cli
+from engine import IndexBusy, IndexService, SearchService, cli
 
 
 def events_of(events, name):

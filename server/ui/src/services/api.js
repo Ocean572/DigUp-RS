@@ -44,7 +44,7 @@ export function createApiClient({
     }
     const body = await reply.json().catch(() => ({}));
     if (!reply.ok) {
-      // FastAPI validation answers a LIST of dicts in `detail` (`new Error(list)` is
+      // The API's validation layer answers a LIST of dicts in `detail` (`new Error(list)` is
       // "[object Object]" on the footer): render each {loc, msg}, quote any string, fall
       // back to statusText for a non-JSON body (502 from a proxy, an HTML error page).
       const d = body.detail;

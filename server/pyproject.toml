@@ -1,19 +1,19 @@
 [project]
 name = "digup-server"
 version = "0.8.0"
-description = "DigUp as a self-hosted search server: a thin HTTP wrapper over the Swift engine, speaking only DigUp's own JSON-lines protocol"
+description = "DigUp as a self-hosted search server: the contract suite's harness around the Rust server (`digup-server`), speaking only DigUp's own JSON-lines protocol"
 requires-python = ">=3.12,<3.13"
-# The adapter (Stage 3) is dependency-free by design: stdlib subprocess/json/fcntl.
-# FastAPI and uvicorn arrive with the API (Stage 4); uv.lock pins exact versions.
-dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-]
+# Plan P3 (docs/implementation/python-free-plan.md): the product's server is Rust
+# (`crates/server` → `digup-server`), so this project has NO runtime dependencies — the
+# suite spawns the shipping binary and talks HTTP to it. Python here is the harness
+# (P4 records what stays Python, on purpose): stdlib subprocess/json/socket, plus the
+# two dev packages below. `uv.lock` pins exact versions.
+dependencies = []
 
 [dependency-groups]
 dev = [
     "pytest>=8.4",
-    "httpx>=0.28",   # starlette's TestClient: API tests, in-process, real adapter
+    "httpx>=0.28",   # the live-shape client: the suite is a thin client of the binary
 ]
 
 [tool.uv]
@@ -21,7 +21,9 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+# `tests` on the path: the suite's own modules (conftest, support, the engine harness
+# package) import each other by name, the same way the harness has always done it.
+pythonpath = ["tests"]
 # The slow mark times the model (`speed --model`, ~1 min): part of the proof run, not of every test run.
 addopts = "-q -m 'not slow'"
 markers = [

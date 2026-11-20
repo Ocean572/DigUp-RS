@@ -28,7 +28,7 @@ describe("createApiClient", () => {
     expect(pointed).toBe(1);
   });
 
-  it("FastAPI's 422 detail LIST renders as loc+msg pairs (never [object Object])", async () => {
+  it("the API's 422 detail LIST renders as loc+msg pairs (never [object Object])", async () => {
     const { api } = createApiClient({ getToken: () => null });
     installFetch({ "/api/v1/search": mockReply(422, { detail: [
       { loc: ["body", "limit"], msg: "limit > 100" },

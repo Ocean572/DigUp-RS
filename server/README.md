@@ -9,13 +9,13 @@ the current results are in [`../docs/implementation/`](../docs/implementation/RE
 
 | path | what it is |
 |---|---|
-| `digup_server/engine/` | the adapter: config, JSON-lines supervision, `search-service` + `index-service` clients, the read-only CLI calls |
-| `digup_server/api.py` | the FastAPI app on `/api/v1` (`health`, `status`, `search`, `estimate`, `index`, `jobs`) — on top of the adapter, never around it; localhost by default |
+| `crates/server/` (repo root) | **the server**: `digup-server` — the Rust (axum) server on `/api/v1` (`health`, `status`, `search`, `estimate`, `index`, `jobs`), the engine's JSON-lines supervision and CLI calls inside it, localhost by default. Plan P3 (docs/implementation/python-free-plan.md) retired the FastAPI wrapper it replaced |
 | `docs/API.md` | **the API reference** — schemas, media identifiers, limits and pagination, errors, curl examples, versioning and security: the compatibility promise clients code against (`tests/test_api_docs.py` fails if an endpoint is not in it) |
-| `digup_server/jobs.py` | the index-job runner: one writer (adapter flock), `queued/running/done/interrupted/busy`, append-only job log **rotated at size** (history replays from all rotations), stop-at-safe-point on shutdown, `reload → prewarm` after a done job |
-| `ui/` | the web app: a **Lit + Vite** frontend (migrated 2026-11-08, `ui/AGENTS.md` is its manual) built to static files (`dist/`, served by FastAPI same-origin at `/`, `fetch()` to `/api/v1` only; Node exists at Docker build time only — never at runtime) |
+| `tests/engine/` | the suite's harness: config, JSON-lines supervision, `search-service` + `index-service` clients, the read-only CLI calls — the contract tests' window on the engine's published interfaces (harness, not product: plan P4 records what stays Python, on purpose) |
+| `tests/support.py` | the live-shape harness: spawns the shipping `digup-server` with the compose's env names and hands out an httpx client — every API test is a thin client of the binary, teardown is SIGTERM (the stop contract) |
+| `ui/` | the web app: a **Lit + Vite** frontend (migrated 2026-11-08, `ui/AGENTS.md` is its manual) built to static files (`dist/`, served by `digup-server` same-origin at `/`, `fetch()` to `/api/v1` only; Node exists at Docker build time only — never at runtime) |
 | `.env.example` | every setting as an environment variable (index, roots, models, excludes, bind) — no secrets, no client-chosen paths |
-| `docker/Dockerfile` | multi-stage build: `frontend-builder` (npm ci + vitest + vite build, Node here only) + `engine-builder → engine-payload → engine-runtime` (+ `server-test`), one per architecture |
+| `docker/Dockerfile` | multi-stage build: `frontend-builder` (npm ci + vitest + vite build, Node here only) + `rust-engine-builder → rust-engine-payload → engine-runtime` (+ `server-test`/`server-test-rust`, `server-rust-runtime`), one per architecture |
 | `tests/corpus/` | the pinned, attributed test corpus (Commons photos committed; videos + clip fetched/built by `build.sh`) |
 | `tests/proof.sh` | the Stage-2 headless proof: index + search + eval, the engine's own words |
 | `tests/test_*_contract.py`, `tests/test_api.py` | contract tests against the real CLI in the container — no mocks, ever |
@@ -69,30 +69,30 @@ type, `Accept-Ranges`/206 so `<video>` seeking works, inline for media kinds, at
 `127.0.0.1:8787` by default.
 
 ```sh
-docker run --rm --init --platform linux/arm64 \
+docker run --rm --platform linux/x86_64 \
   -p 127.0.0.1:8787:8787 \
   -v "$PWD/server/tests/corpus/media:/corpus:ro" \
   -v "$HOME/Projects/digup-data/models:/models:ro" \
   -v "$HOME/Projects/digup-data/index-suite:/index" \
   -e DIGUP_SERVER_INDEX=/index -e DIGUP_SERVER_ROOTS=/corpus -e DIGUP_SERVER_MODELS=/models \
   -e DIGUP_SERVER_CONFIG=/index/server-config \
-  digup-server-test:local uv run uvicorn --factory digup_server.api:app_factory \
-    --host 0.0.0.0 --port 8787
+  digup-server:local
 ```
 
 Then open `http://127.0.0.1:8787/` (the UI, served by the API) or go direct:
 `curl http://127.0.0.1:8787/api/v1/health` and
 `curl -X POST http://127.0.0.1:8787/api/v1/search -H 'content-type: application/json' -d '{"q":"wakeboarding"}'`.
 
-The `--init` is not cosmetic: `estimate --json` / `search-service` / `index-service` are
-ParentWatch helpers that exit the moment their parent is PID 1 ("the app is gone",
-reconnaissance §15 item 8). `docker run --init` (and `tini` in the runtime image, Stage 7)
-gives uvicorn a non-PID-1 parent, so the API *is* a parent the helpers accept, and a
-stopped API takes its helpers with it. Inside the container uvicorn binds `0.0.0.0`
-because the publish line (`127.0.0.1:8787:8787`) is what enforces localhost-only (§7).
+The `--platform` and the image's own `tini` are not cosmetic: `estimate --json` /
+`search-service` / `index-service` are ParentWatch helpers that exit the moment their parent
+is PID 1 ("the app is gone", reconnaissance §15 item 8). `tini` as PID 1 (the runtime image's
+ENTRYPOINT, Stage 7) gives `digup-server` a non-PID-1 parent, so the API *is* a parent the
+helpers accept, and a stopped API takes its helpers with it — a manual `docker run` of a
+non-tini image needs `--init` for the same reason. Inside the container the server binds
+`0.0.0.0` because the publish line (`127.0.0.1:8787:8787`) is what enforces localhost-only (§7).
 
 **One API process, on purpose.** The media handles (`media_id`) live in this process's LRU
-cache and the index-job runner is a thread inside it, so the deployment is exactly one uvicorn
+cache and the index-job runner is a thread inside it, so the deployment is exactly one server
 process: `--workers >1`, replicas, or a load balancer in front of two containers sharing the
 index volume 404s media ids issued by another process's searches and lets two job runners race
 the flock. Scale by giving the machine more cores. Concurrency is fine — searches are
@@ -146,9 +146,11 @@ by the GPU override file itself. The package is public while the repository is
 has `read:packages` first. The `chown -R 990` step above stays required on Linux —
 the pull shape changes only where the image comes from, not what it needs.
 
-The runtime image is `server-runtime`: engine payload + API + UI, `tini` as PID 1 (the
-ParentWatch chain: helpers' parent is uvicorn, never PID 1), non-root (`uid 990`), a
-HEALTHCHECK that asks the API's own `/health`. SIGTERM (even mid-job): the runner sends
+The runtime image is `server-rust-runtime`: engine payload + `digup-server` + the Lit
+bundle, `tini` as PID 1 (the ParentWatch chain: helpers' parent is `digup-server`, never
+PID 1), non-root (`uid 990`), a HEALTHCHECK that asks the API's own `/health` by `curl`
+(503 counts alive — the searcher warming/respawning is the engine's honest "not right
+now"). SIGTERM (even mid-job): the runner sends
 the engine's `stop` — the writer ends between files. Two truthful paths, both measured:
 with the Compose `stop_grace_period: 90s` the lifespan finishes inside the grace — the
 job records *interrupted* **with its partial counts**, exit 143,
@@ -243,7 +245,7 @@ Nextcloud, by Nextcloud's own permission APIs), and the no-mutation discipline
 
 `server/ui/` is a browser client of the published API — a Lit + Vite frontend (the
 migration of 2026-11-08, `server/ui/AGENTS.md`; §10.4's dated amendment records the
-decision: Lit+JS, no TypeScript, no other framework, no Node at runtime — FastAPI
+decision: Lit+JS, no TypeScript, no other framework, no Node at runtime — `digup-server`
 serves the built `dist`) — no external URLs (pinned by test), the stable asset names
 `app.js` / `style.css` / `embed.js` / `embed.css` (pinned too), with the desktop
 panel's behavior (`shell/ui/panel.js`
@@ -345,7 +347,7 @@ runs earlier) in the container against the shipped engine
 payload (17 search-contract + 19 API + 6 index-contract + 13 job/persistence + 17 UI/media
 + 4 CLI), and the shipping
 shape runs live: `docker compose up -d` in `deploy/` boots `digup-server:local` (engine + API
-+ UI, tini, non-root, healthy via its own `healthcheck.py`) on `http://127.0.0.1:8787/` with the desktop panel's behavior
++ UI, tini, non-root, healthy via the image's own `curl` HEALTHCHECK) on `http://127.0.0.1:8787/` with the desktop panel's behavior
 in the web UI (keyword-first typing, filters, code mode, preview pane, Open at the video's
 moment, Estimate, System/Light/Dark — the dark palette measured for WCAG contrast and the
 whole flow driven through a real browser, Playwright, in both themes — Space, Esc, focus,

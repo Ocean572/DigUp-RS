@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from digup_server.engine import EngineConfig, IndexService, SearchService, cli
+from engine import EngineConfig, IndexService, SearchService, cli
 
 PHOTOS = ["wakeboard-logan.jpg", "cat-sitting-on-a-sofa.jpg", "a-dog-running-on-the-beach.jpg",
           "people-surrounding-campfire.jpg"]

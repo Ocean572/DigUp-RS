@@ -4,9 +4,10 @@
 #
 # One service. The image is built from the repo's multi-stage Dockerfile on this machine's
 # own architecture (never under emulation, §11) — the target is `server-rust-runtime`: the
-# Python-free shipping image (`digup-server`, the Rust server, stage 6), same engine, same
-# Lit UI, same supervision. The old FastAPI image is the opt-in parity escape hatch,
-# `docker-compose.fastapi.yml` — same mounts, same env, one release cycle. Bind mounts keep
+# shipping image (`digup-server`, the Rust server, stage 6), same engine, same Lit UI, same
+# supervision. Plan P3 (docs/implementation/python-free-plan.md) retired the FastAPI
+# wrapper and its parity override: this is the shipping shape, with no Python in the image.
+# Bind mounts keep
 # the index, model, config and job log OUTSIDE the image: container recreation never
 # destroys them (§5). Media is mounted read-only; the server never modifies originals and
 # never takes paths from clients (§7). Indexing never starts by itself: "Index now" in the

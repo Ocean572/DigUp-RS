@@ -1,11 +1,14 @@
 """Stage 12 integration groundwork (docs/implementation/stage-12-integrations.md): the
 named-token map, the CORS allowlist, the principal log, the embed widget, and the
-Nextcloud compose shape. The middleware tests are engine-free (pure ASGI, the
-test_security pattern); the last test drives the token map through the real API with
-the real engine. The rules they pin:
+Nextcloud compose shape. Plan P3 moved the middleware tests onto the live server — the
+same knobs the container ships (`DIGUP_SERVER_READ_TOKENS`, `DIGUP_SERVER_ALLOWED_ORIGINS`,
+`DIGUP_SERVER_ALLOWED_HOSTS`, `DIGUP_SERVER_TOKEN`, `DIGUP_SERVER_ADMIN_TOKEN`), each shape
+its own spawn of the binary, refusals read as HTTP answers, and the principal log read from
+the server's own log file (the audit line IS the binary's stdout line). The rules they pin:
 
 * `DIGUP_SERVER_READ_TOKENS=name:token,…` — every entry guards the read scope, each is
-  attributable by name, one entry's revocation touches no other;
+  attributable by name, one entry's revocation touches no other, a typo entry is skipped
+  loudly (the warning names it, on the server's log);
 * the CORS allowlist is exact origins only, inert when unset, and it is the boundary
   that lets an allowlisted browser widget POST (the guard's cross-origin exception is
   set ONLY by a CORS-passed preflight, stage-12 §11.4);
@@ -17,218 +20,253 @@ the real engine. The rules they pin:
 
 from __future__ import annotations
 
-import json
-import logging
 import re
+import time
 
 import pytest
-from fastapi.testclient import TestClient
 
-from digup_server.security import (
-    Auth,
-    BearerAuth,
-    Cors,
-    HostOriginGuard,
-    PrincipalLog,
-    allowed_origins_from_env,
-    auth_from_env,
-    read_tokens_from_env,
-)
+from conftest import _cfg
+from support import LiveApp, live_server
 
 
-async def echo(scope, receive, send) -> None:
-    """Minimal ASGI app: answers 200 with what the middlewares wrote on the scope, so a
-    request that passed is distinguishable from one refused — and the accepted principal
-    (BearerAuth) and the CORS pass-mark (Cors) are readable from the answer."""
-    body = json.dumps({"ok": True, "method": scope["method"], "path": scope["path"],
-                       "principal": scope.get("digup.principal"),
-                       "cors_allowed": scope.get("digup.cors_allowed", False)}).encode()
-    await send({"type": "http.response.start", "status": 200,
-                "headers": [(b"content-type", b"application/json")]})
-    await send({"type": "http.response.body", "body": body})
+@pytest.fixture(scope="module")
+def empty_tree(tmp_path_factory):
+    """Roots with nothing to crawl: these tests prove the gate, not the engine."""
+    return tmp_path_factory.mktemp("integ-empty-roots")
+
+
+def started(tmp_path_factory, cfg, config_name, env_extra=None):
+    """A live server handed out as the APP (not the client): the tests below read both
+    its HTTP answers and its log lines (the principal audit)."""
+    app = LiveApp(cfg, config_dir=str(tmp_path_factory.mktemp(config_name)),
+                  env_extra=env_extra)
+    app.start()
+    try:
+        yield app
+    finally:
+        app.stop()
+
+
+def audit_lines(app: LiveApp) -> list[str]:
+    return [line for line in app.tail(200_000).splitlines() if "principal=" in line]
+
+
+def writer_is_free(app: LiveApp, token: str) -> None:
+    """Run one crawl to its end, asking through the honest 409.
+
+    The module-scoped fixtures above already queued crawls, and a writer keeps its
+    flock for the closing moment after its last job (`AGENTS.md`: a second `POST
+    /index` answers **409** — busy means a job is running). The audit pin below must
+    measure its lines from a request the writer ACCEPTS, so the writer is run to its
+    end first — and its requests, all of them, land before `base` is read."""
+    headers = {"Authorization": f"Bearer {token}"}
+    deadline = time.monotonic() + 240.0
+    while time.monotonic() < deadline:
+        r = app.client.post("/api/v1/index", json={}, headers=headers)
+        if r.status_code == 409:
+            time.sleep(1.0)
+            continue
+        assert r.status_code == 202, (r.status_code, r.text)
+        job_id = r.json()["job"]["id"]
+        while time.monotonic() < deadline:
+            state = app.client.get(f"/api/v1/jobs/{job_id}", headers=headers).json()["job"]["state"]
+            if state in ("done", "interrupted", "busy"):
+                assert state == "done", state
+                return
+            time.sleep(0.5)
+        break
+    pytest.fail("the writer never came free")
 
 
 # ── the named-token map: parsing, scopes, revocation-isolation ───────────────────────────
 
-def test_the_map_parses_names_and_tokens():
-    assert read_tokens_from_env({}) == {}
-    assert read_tokens_from_env({"DIGUP_SERVER_READ_TOKENS": "  "}) == {}
-    m = read_tokens_from_env({"DIGUP_SERVER_READ_TOKENS": "nc-a:tokA, nc-b:tokB,NC-A:dup"})
-    assert m == {"nc-a": "tokA", "nc-b": "tokB"}          # names lowercase; FIRST wins on dupes
-    assert read_tokens_from_env({"DIGUP_SERVER_READ_TOKENS": "nc-a:tokA,broken-no-colon"}) == \
-        {"nc-a": "tokA"}                                   # a typo is skipped, loudly:
+@pytest.fixture(scope="module")
+def map_app(empty_tree, tmp_path_factory):
+    """Names mixed-case with a duplicate, and one entry that is not a name:token pair."""
+    yield from started(
+        tmp_path_factory, _cfg(tmp_path_factory.mktemp("integ-map-index"), (empty_tree,)),
+        "integ-map-config",
+        {"DIGUP_SERVER_READ_TOKENS": "nc-a:tokA, nc-b:tokB,NC-A:dup,broken-no-colon",
+         "DIGUP_SERVER_ADMIN_TOKEN": "adm"})
 
 
-def test_a_dropped_map_entry_names_itself_in_the_log(caplog):
-    with caplog.at_level(logging.WARNING, logger="digup.auth"):
-        read_tokens_from_env({"DIGUP_SERVER_READ_TOKENS": "nc-a:tokA,typo-entry"})
-    assert any("typo-entry" in r.message for r in caplog.records), \
-        "a silently-dropped token is an outage nobody asked for"
-
-
-def test_auth_from_env_assembles_all_three_knobs():
-    a = auth_from_env({"DIGUP_SERVER_TOKEN": "plain", "DIGUP_SERVER_ADMIN_TOKEN": "adm",
-                       "DIGUP_SERVER_READ_TOKENS": "nc-a:tokA,nc-b:tokB"})
-    assert a.read == "plain" and a.admin == "adm"
-    assert a.readers == {"nc-a": "tokA", "nc-b": "tokB"}
-    assert a.enabled is True
-    assert a.token_names("tokB") == ("nc-b",)
-    assert a.token_names("adm") == ("admin",)             # admin covers the read scope too
-    assert a.token_names("nope") == ()
-
-
-def bearer_client(auth: Auth) -> TestClient:
-    return TestClient(PrincipalLog(BearerAuth(echo, auth=auth)))
-
-
-def test_map_tokens_guard_reads_and_admin_stays_admins_alone():
-    both = bearer_client(Auth(readers={"nc-a": "tokA", "nc-b": "tokB"}, admin="adm"))
+def test_the_map_is_the_live_scope_map_it_parsed(map_app):
+    """Names lowercase, FIRST entry wins on a duplicate, a typo entry is skipped (it is
+    nobody's token): all three are the answers the gate gives, on the wire."""
+    def search(token):
+        return map_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                                   headers={"Authorization": f"Bearer {token}"})
     for token in ("tokA", "tokB"):
-        assert both.post("/api/v1/search",
-                         headers={"Authorization": f"Bearer {token}"}).status_code == 200
-        refused = both.post("/api/v1/index", headers={"Authorization": f"Bearer {token}"})
+        assert search(token).status_code in (200, 503), token
+    assert search("dup").status_code == 401            # the lowercase dupe lost to the first
+    assert search("no-colon").status_code == 401       # the typo entry minted no token
+    assert search("adm").status_code in (200, 503)     # admin covers the read scope too
+
+
+def test_a_dropped_map_entry_names_itself_in_the_server_log(map_app):
+    """`DIGUP_SERVER_READ_TOKENS` parses at boot; an entry with no colon is a typo, and a
+    silently-dropped token is an outage nobody asked for — the server says which entry."""
+    assert "broken-no-colon" in map_app.tail(200_000)
+
+
+def test_map_tokens_guard_reads_and_admin_stays_admins_alone(map_app):
+    for token in ("tokA", "tokB"):
+        assert map_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                                   headers={"Authorization": f"Bearer {token}"}).status_code \
+            in (200, 503)
+        refused = map_app.client.post("/api/v1/index", json={},
+                                      headers={"Authorization": f"Bearer {token}"})
         assert refused.status_code == 403 and "admin" in refused.json()["detail"]
-    assert both.post("/api/v1/index",
-                     headers={"Authorization": "Bearer adm"}).status_code == 200
-    assert both.post("/api/v1/search", headers={"Authorization": "Bearer nope"}).status_code == 401
-    assert both.post("/api/v1/search").status_code == 401
+    assert map_app.client.post("/api/v1/index", json={},
+                               headers={"Authorization": "Bearer adm"}).status_code == 202
+    assert map_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                               headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert map_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1}).status_code == 401
 
 
-def test_each_request_is_attributed_to_the_principal_that_asked(caplog):
-    both = bearer_client(Auth(read="plain", readers={"nc-a": "tokA", "nc-b": "tokB"}, admin="adm"))
-    with caplog.at_level(logging.INFO, logger="digup.auth"):
-        assert both.post("/api/v1/search", headers={"Authorization": "Bearer tokA"}).status_code == 200
-        assert both.post("/api/v1/search", headers={"Authorization": "Bearer tokB"}).status_code == 200
-        assert both.post("/api/v1/search", headers={"Authorization": "Bearer plain"}).status_code == 200
-        assert both.post("/api/v1/search", headers={"Authorization": "Bearer adm"}).status_code == 200
-        assert both.post("/api/v1/index", headers={"Authorization": "Bearer adm"}).status_code == 200
-    lines = [r.message for r in caplog.records if "principal=" in r.message]
+def test_each_request_is_attributed_to_the_principal_that_asked(map_app):
+    def post(path, token, json_body=None):
+        return map_app.client.post(path, json=json_body if json_body is not None else {"q": "dog"},
+                                   headers={"Authorization": f"Bearer {token}"})
+    # the map fixture is module-scoped: earlier tests already wrote audit lines, so the
+    # pin reads the lines THIS test's requests added, in order. The writer is run to its
+    # end first (its answer must be the accepted 202, not a closing-moment 409), and
+    # those requests are the lines BEFORE `base`.
+    writer_is_free(map_app, "adm")
+    base = len(audit_lines(map_app))
+    assert post("/api/v1/search", "tokA").status_code in (200, 503)
+    assert post("/api/v1/search", "tokB").status_code in (200, 503)
+    assert post("/api/v1/index", "adm", {}).status_code == 202
+    lines = audit_lines(map_app)[base:]
     assert "principal=nc-a" in lines[0] and "principal=nc-b" in lines[1]
-    assert "principal=read" in lines[2]
-    assert "principal=admin (read scope)" in lines[3]    # an admin token on the read side says so
-    assert "principal=admin" in lines[4]
+    assert "principal=admin" in lines[2]
     # health/docs stay out of the audit line: they are the healthcheck and the docs page
-    both.get("/api/v1/health")
-    assert not any("/api/v1/health" in r.message for r in caplog.records)
+    map_app.client.get("/api/v1/health")
+    assert not any("/api/v1/health" in line for line in audit_lines(map_app))
 
 
-def test_an_unguarded_deployment_still_logs_its_principals_as_none(caplog):
-    open_book = bearer_client(Auth())
-    with caplog.at_level(logging.INFO, logger="digup.auth"):
-        assert open_book.post("/api/v1/search").status_code == 200
-    assert any(r.message.endswith("principal=none") and "/api/v1/search" in r.message
-               for r in caplog.records)
+@pytest.fixture(scope="module")
+def plain_read_app(empty_tree, tmp_path_factory):
+    """All three token knobs at once: `auth_from_env` assembles read + admin + the map, and
+    an admin token on the read side says so in the audit line."""
+    yield from started(
+        tmp_path_factory, _cfg(tmp_path_factory.mktemp("integ-plain-index"), (empty_tree,)),
+        "integ-plain-config",
+        {"DIGUP_SERVER_TOKEN": "plain", "DIGUP_SERVER_ADMIN_TOKEN": "adm",
+         "DIGUP_SERVER_READ_TOKENS": "nc-a:tokA,nc-b:tokB"})
+
+
+def test_read_scope_admin_scope_and_the_map_coexist_in_one_boot(plain_read_app):
+    c = plain_read_app.client
+    assert c.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                  headers={"Authorization": "Bearer plain"}).status_code in (200, 503)
+    assert c.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                  headers={"Authorization": "Bearer tokB"}).status_code in (200, 503)
+    assert c.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                  headers={"Authorization": "Bearer adm"}).status_code in (200, 503)
+    assert c.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                  headers={"Authorization": "Bearer nope"}).status_code == 401
+    lines = audit_lines(plain_read_app)
+    assert any("principal=read" in line for line in lines)
+    assert any("principal=nc-b" in line for line in lines)
+    assert any("principal=admin (read scope)" in line for line in lines)
+
+
+@pytest.fixture(scope="module")
+def open_app(empty_tree, tmp_path_factory):
+    yield from started(tmp_path_factory,
+                       _cfg(tmp_path_factory.mktemp("integ-open-index"), (empty_tree,)),
+                       "integ-open-config")
+
+
+def test_an_unguarded_deployment_still_logs_its_principals_as_none(open_app):
+    assert open_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1}).status_code \
+        in (200, 503)
+    assert any("principal=none" in line and "/api/v1/search" in line
+               for line in audit_lines(open_app))
 
 
 # ── the CORS allowlist: exact origins, inert by default, the widget's boundary ───────────
 
-def test_the_cors_allowlist_is_exact_and_off_by_default():
-    assert allowed_origins_from_env({}) is None
-    assert allowed_origins_from_env({"DIGUP_SERVER_ALLOWED_ORIGINS": "  "}) is None
-    origins = allowed_origins_from_env(
-        {"DIGUP_SERVER_ALLOWED_ORIGINS": "http://Nextcloud.Lan:8081/, http://a.example"})
-    assert origins == frozenset({"http://nextcloud.lan:8081", "http://a.example"})
-    inert = TestClient(Cors(echo))
-    preflight = inert.options("/api/v1/search", headers={"Origin": "http://a.example"})
-    assert "access-control-allow-origin" not in preflight.headers
-    plain = inert.get("/api/v1/status", headers={"Origin": "http://a.example"})
-    assert "access-control-allow-origin" not in plain.headers   # off = no CORS headers, period
+def test_the_cors_allowlist_is_inert_by_default(tmp_path_factory):
+    """No `DIGUP_SERVER_ALLOWED_ORIGINS`: the middleware passes requests through and
+    decorates NOTHING — no CORS headers, period (server-to-server stays normal)."""
+    roots, folder = tmp_path_factory.mktemp("cors-off-roots"), tmp_path_factory.mktemp("cors-off-index")
+    with live_server(_cfg(folder, (roots,)),
+                     config_dir=str(tmp_path_factory.mktemp("cors-off-config"))) as c:
+        preflight = c.options("/api/v1/search", headers={"origin": "http://a.example",
+                                                         "access-control-request-method": "POST"})
+        assert "access-control-allow-origin" not in preflight.headers
+        plain = c.get("/api/v1/status", headers={"origin": "http://a.example"})
+        assert "access-control-allow-origin" not in plain.headers
+        # a request with no Origin at all is untouched too
+        assert "access-control-allow-origin" not in c.get("/api/v1/status").headers
 
 
-def test_an_allowlisted_origin_gets_preflight_and_decorated_answers():
-    cors = TestClient(Cors(echo, allowed_origins=frozenset({"http://nc.example"})))
-    pre = cors.options("/api/v1/search", headers={"Origin": "http://nc.example",
-                                                  "access-control-request-method": "POST"})
-    assert pre.status_code == 204
-    assert pre.headers["access-control-allow-origin"] == "http://nc.example"
-    assert "POST" in pre.headers["access-control-allow-methods"]
-    assert "authorization" in pre.headers["access-control-allow-headers"]
-    assert pre.headers["vary"] == "Origin"
-    posted = cors.post("/api/v1/search", headers={"Origin": "http://nc.example"})
-    assert posted.status_code == 200
-    assert posted.headers["access-control-allow-origin"] == "http://nc.example"
-    assert posted.json()["cors_allowed"] is True           # the guard's exception is marked
-    # an origin NOT on the list: the middleware passes through, decorates nothing
-    off = cors.post("/api/v1/search", headers={"Origin": "http://evil.example"})
-    assert off.status_code == 200
-    assert "access-control-allow-origin" not in off.headers
-    assert off.json()["cors_allowed"] is False
-    # a request with no Origin (server-to-server: PHP, curl, agents) is untouched
-    assert "access-control-allow-origin" not in cors.get("/api/v1/status").headers
+@pytest.fixture(scope="module")
+def widget_app(empty_tree, tmp_path_factory):
+    """The composed stack as a deployment names it: the hosts it serves, the one widget
+    origin it embeds, and the read token for the widget."""
+    yield from started(
+        tmp_path_factory, _cfg(tmp_path_factory.mktemp("integ-widget-index"), (empty_tree,)),
+        "integ-widget-config",
+        {"DIGUP_SERVER_ALLOWED_HOSTS": "nc.example, 127.0.0.1",
+         "DIGUP_SERVER_ALLOWED_ORIGINS": "http://nc.example",
+         "DIGUP_SERVER_TOKEN": "tokA"})
 
 
-# ── the composed stack: Cors → Guard → Bearer, the widget's real path ───────────────────
-
-def widget_stack() -> TestClient:
-    """The stack create_app installs, over the echo app: the operator names the hosts it
-    serves and the one widget origin it embeds, with the read token for the widget."""
-    app = Cors(HostOriginGuard(BearerAuth(echo, auth=Auth(read="tokA")),
-                               allowed_hosts=frozenset({"nc.example", "127.0.0.1"})),
-               allowed_origins=frozenset({"http://nc.example"}))
-    return TestClient(app)
-
-
-def test_the_allowlisted_widget_posts_cross_origin_with_the_bearer_token():
-    stack = widget_stack()
-    widget = {"Host": "nc.example:8787", "Origin": "http://nc.example",
+def test_the_allowlisted_widget_posts_cross_origin_with_the_bearer_token(widget_app):
+    widget = {"host": "nc.example:8787", "origin": "http://nc.example",
               "Authorization": "Bearer tokA"}
-    ok = stack.post("/api/v1/search", headers=widget)
-    assert ok.status_code == 200 and ok.json()["principal"] == "read"
+    ok = widget_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1}, headers=widget)
+    assert ok.status_code in (200, 503), ok.text
     assert ok.headers["access-control-allow-origin"] == "http://nc.example"
+    assert any("principal=read" in line for line in audit_lines(widget_app))
     # the preflight lands before the POST and passes the guard (OPTIONS is not state-changing)
-    pre = stack.options("/api/v1/search", headers={"Host": "nc.example:8787",
-                                                   "Origin": "http://nc.example"})
+    pre = widget_app.client.options("/api/v1/search", headers={"host": "nc.example:8787",
+                                                                "origin": "http://nc.example"})
     assert pre.status_code == 204
 
 
-def test_an_unallowlisted_browser_still_hits_the_same_origin_rule():
+def test_an_unallowlisted_browser_still_hits_the_same_origin_rule(widget_app):
     """The guard's cross-origin POST refusal survives CORS: a page the operator never
     allowlisted gets no exception, token or no token."""
-    stack = widget_stack()
-    refused = stack.post("/api/v1/search", headers={"Host": "nc.example:8787",
-                                                    "Origin": "http://evil.example",
-                                                    "Authorization": "Bearer tokA"})
+    refused = widget_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                                     headers={"host": "nc.example:8787",
+                                              "origin": "http://evil.example",
+                                              "Authorization": "Bearer tokA"})
     assert refused.status_code == 403
     # server-to-server (no Origin at all) remains the normal, unblessed path
-    assert stack.post("/api/v1/search", headers={"Host": "nc.example:8787",
-                                                 "Authorization": "Bearer tokA"}).status_code == 200
+    assert widget_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                                  headers={"host": "nc.example:8787",
+                                           "Authorization": "Bearer tokA"}).status_code \
+        in (200, 503)
     # the host allowlist outranks everything: a stale Host is refused before tokens
-    assert stack.post("/api/v1/search", headers={"Host": "evil.example",
-                                                 "Origin": "http://nc.example",
-                                                 "Authorization": "Bearer tokA"}).status_code == 400
+    assert widget_app.client.post("/api/v1/search", json={"q": "dog", "limit": 1},
+                                  headers={"host": "evil.example",
+                                           "origin": "http://nc.example",
+                                           "Authorization": "Bearer tokA"}).status_code == 400
 
 
-def test_the_app_installs_all_four_middlewares_knobs_from_env(monkeypatch):
-    from digup_server.api import create_app
-    from digup_server.engine import EngineConfig
-    app = create_app(EngineConfig(index="/nonexistent-index", roots=("/nonexistent-root",)))
-    classes = [m.cls for m in app.user_middleware]
-    for cls in (BearerAuth, HostOriginGuard, Cors, PrincipalLog):
-        assert cls in classes, f"{cls.__name__} must be installed"
-    assert app.user_middleware[0].cls is PrincipalLog    # added last = outermost: logs every guarded request
-    assert next(m for m in app.user_middleware if m.cls is Cors).kwargs["allowed_origins"] is None
-    assert next(m for m in app.user_middleware if m.cls is BearerAuth).kwargs["auth"].enabled is False
-    monkeypatch.setenv("DIGUP_SERVER_READ_TOKENS", "nc-a:tokA")
-    monkeypatch.setenv("DIGUP_SERVER_ALLOWED_ORIGINS", "http://nc.example")
-    app = create_app(EngineConfig(index="/nonexistent-index", roots=("/nonexistent-root",)))
-    assert next(m for m in app.user_middleware
-                if m.cls is Cors).kwargs["allowed_origins"] == frozenset({"http://nc.example"})
-    assert next(m for m in app.user_middleware
-                if m.cls is BearerAuth).kwargs["auth"].readers == {"nc-a": "tokA"}
+# The FastAPI-era test that read `create_app(...).user_middleware` (four middlewares,
+# PrincipalLog outermost, knobs from env) retired with the framework: the composed stack
+# is one `api_gate` layer in the binary (`crates/server/src/main.rs`), and the suite
+# pins what the stack DOES — the widget tests above are its end-to-end proof.
 
 
 # ── the embed widget: the same UI rules as the full UI, over the same static mount ──────
 
-def embed_client():
-    from digup_server.api import create_app
-    from digup_server.engine import EngineConfig
-    return TestClient(create_app(EngineConfig(index="/nonexistent-index",
-                                              roots=("/nonexistent-root",))))
+@pytest.fixture(scope="module")
+def embed_client(empty_tree, tmp_path_factory):
+    """The widget needs only the static mount — no engine, no data (the mount is the
+    binary's own: `DIGUP_SERVER_UI`, else the payload-adjacent `ui/dist`)."""
+    with live_server(_cfg(tmp_path_factory.mktemp("integ-embed-index"), (empty_tree,)),
+                     config_dir=str(tmp_path_factory.mktemp("integ-embed-config"))) as c:
+        yield c
 
 
-def test_the_embed_page_is_served_and_dependency_free():
-    client = embed_client()
-    page = client.get("/embed.html")
+def test_the_embed_page_is_served_and_dependency_free(embed_client):
+    page = embed_client.get("/embed.html")
     assert page.status_code == 200
     html = page.text
     assert "DigUp" in html and "embed.js" in html and "embed.css" in html
@@ -240,25 +278,25 @@ def test_the_embed_page_is_served_and_dependency_free():
     assert re.search(r'href="\./(assets/[^"]+\.css)"', html)
     assert 'name="referrer" content="none"' in html         # no referrer leaves the widget
     for asset in ("/embed.css", "/embed.js"):
-        assert client.get(asset).status_code == 200
+        assert embed_client.get(asset).status_code == 200
     # the shared static mount decorates every embed byte the same way (no stale UI)
     assets = ["/embed.html", "/embed.css", "/embed.js"]
     assets += ["/" + p for p in re.findall(r'href="\./((?:chunks|assets)/[^"]+)"', html)]
     for asset in assets:
-        reply = client.get(asset)
+        reply = embed_client.get(asset)
         assert reply.status_code == 200, asset
         assert reply.headers["cache-control"] == "no-cache", asset
         assert "etag" in reply.headers, asset
 
 
-def test_the_embed_widget_uses_the_published_api_and_hides_the_token():
+def test_the_embed_widget_uses_the_published_api_and_hides_the_token(embed_client):
     # The widget's bundle: the embed entry plus the chunks its html links (the api
     # service is a shared module — the pins below name the rules, and the rules are
     # tested as behavior in src/embed.test.js / src/services/api.test.js).
-    client = embed_client()
-    html = client.get("/embed.html").text
-    js = client.get("/embed.js").text + "\n" + "\n".join(
-        client.get("/" + p).text for p in re.findall(r'href="\./((?:chunks|assets)/[^"]+\.js)"', html))
+    html = embed_client.get("/embed.html").text
+    js = embed_client.get("/embed.js").text + "\n" + "\n".join(
+        embed_client.get("/" + p).text
+        for p in re.findall(r'href="\./((?:chunks|assets)/[^"]+\.js)"', html))
     assert "fetch(" in js and "/api/v1/search" in js and "/api/v1/embed_ahead" in js
     # embed.html DECLARES the widget; the entry wires that element (the double-mount
     # bug — an unwired twin above the working widget — is pinned out, 2026-11-08).
@@ -278,7 +316,7 @@ def test_estimate_argv_carries_the_excludes_the_job_will_honour():
     """Stage-12 §11.3, measured on the Nextcloud pilot: the forecast must describe the
     tree the indexer WOULD walk. An estimate that counted the folders the job excludes
     promised work nobody will do (the pilot counted 120 with 36 real files)."""
-    from digup_server.engine import EngineConfig
+    from engine import EngineConfig
     cfg = EngineConfig(index="/idx", roots=("/media/photos",), excluded=("/media/photos/appdata_x",),
                        excluded_extensions=("heic",))
     argv = cfg.estimate_argv()
@@ -301,19 +339,18 @@ def test_estimate_argv_carries_the_excludes_the_job_will_honour():
     assert "--exclude" not in plain_job and "--exclude-ext" not in plain_job
 
 
-def test_the_map_protects_the_real_api_end_to_end(corpus, index, monkeypatch):
-    from conftest import _cfg
-    from digup_server.api import create_app
-    monkeypatch.setenv("DIGUP_SERVER_READ_TOKENS", "nc-a:tokA,nc-b:tokB")
-    monkeypatch.setenv("DIGUP_SERVER_ADMIN_TOKEN", "adm")
-    with TestClient(create_app(_cfg(index, (corpus,)))) as c:
+def test_the_map_protects_the_real_api_end_to_end(corpus, index, tmp_path_factory):
+    with live_server(_cfg(index, (corpus,)),
+                     config_dir=str(tmp_path_factory.mktemp("integ-e2e-config")),
+                     env_extra={"DIGUP_SERVER_READ_TOKENS": "nc-a:tokA,nc-b:tokB",
+                                "DIGUP_SERVER_ADMIN_TOKEN": "adm"}) as c:
         assert c.get("/api/v1/health").status_code == 200          # health: open, always
         assert c.post("/api/v1/search", json={"q": "wakeboarding"}).status_code == 401
         for token in ("tokA", "tokB"):
             reply = c.post("/api/v1/search", json={"q": "wakeboarding", "limit": 3},
                            headers={"Authorization": f"Bearer {token}"})
             assert reply.status_code == 200 and reply.json()["hits"]
-            assert c.post("/api/v1/index",
+            assert c.post("/api/v1/index", json={},
                           headers={"Authorization": f"Bearer {token}"}).status_code == 403
             assert c.get("/api/v1/media/deadbeefcafe/preview",
                          headers={"Authorization": f"Bearer {token}"}).status_code == 404

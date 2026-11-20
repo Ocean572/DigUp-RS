@@ -186,13 +186,20 @@ RUN useradd --system --create-home --uid 990 digup \
 USER digup
 WORKDIR /data
 
-# ── Test harness (dev): the engine payload + the Python adapter + the contract tests ─────────
+# ── Test harness (dev): the engine payload + the Rust server + the contract tests ───────────
 # python:3.12-slim — measured in the built image: Debian 13 (trixie), glibc 2.41. The payload
 # is built on Ubuntu 22.04 (glibc 2.35), so the image runs NEWER glibc than the payload was
 # compiled against — forward, never back. The same payload, the same CLI: the contract tests
 # prove the *shipped* binaries, so a passing suite is a statement about the runtime image,
 # not about a dev box. Runs as root: mounts arrive from the host and the scratch indexes are
 # the tests' own.
+#
+# Plan P3 (python-free plan): the suite drives the SHIPPING server. `server/tests/support.py`
+# spawns `digup-server` (the same binary the compose image runs, on PATH from /opt/digup) with
+# the same env names the container ships, and talks to it over HTTP with httpx. Python is the
+# harness, never the product: no FastAPI, no uvicorn, no import of server code — a test that
+# could only be written as an in-process monkeypatch retires with the framework (its module's
+# docstring records where its rule lives and which live test pins the observable twin).
 FROM python:3.12-slim AS server-test
 
 RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
@@ -202,12 +209,14 @@ RUN pip install --no-cache-dir uv
 
 COPY --from=rust-engine-payload /out/ /opt/digup/
 COPY server /srv/server
-# The built UI (the mount serves server/ui/dist; api.py): a dist that exists is what makes
-# the suite's page fetches real bytes, not skips.
-COPY --from=frontend-builder /build/dist /srv/server/ui/dist
+# The Lit bundle, baked where the Rust server finds it with no knob: the payload's own folder
+# (`digup-server`'s default UI mount is install-relative, config.rs). A dist that exists is
+# what makes the suite's page fetches real bytes, not skips.
+COPY --from=frontend-builder /build/dist /opt/digup/ui/dist
 WORKDIR /srv/server
 ENV PATH=/opt/digup:$PATH
 ENV DIGUP_BIN=digup \
+    DIGUP_SERVER_BIN=digup-server \
     DIGUP_SERVER_CORPUS=/corpus \
     DIGUP_SERVER_CORPUS_ROOT=/corpus-root \
     DIGUP_SERVER_MODELS=/models \
@@ -218,85 +227,37 @@ RUN uv sync --frozen
 # skipped files), /models (the verified model files), /index (a writable index folder; the
 # first run fills it with `digup index`).
 #
-# tini here is not ceremony: the suite's app spawns `search-service` as a child of the test
-# process, and ParentWatch ends a helper whose parent's parent is PID 1 ("the app is gone").
-# Plain `docker run` makes pytest PID 1, so every helper died at once with `exit 0, no
-# stderr` — measured. With tini as PID 1 the test process is a live parent, exactly the
-# production shape, and the suite needs no `--init` flag to be correct.
+# tini here is not ceremony: the suite spawns `digup-server` as a child of the test process,
+# and the server spawns `search-service`/`index-service` as its own children — ParentWatch
+# ends a helper whose parent's parent is PID 1 ("the API is gone"). Plain `docker run` makes
+# pytest PID 1, so every helper died at once with `exit 0, no stderr` — measured. With tini as
+# PID 1 the chain is the production shape (tini → server → helpers), the suite's SIGTERM
+# teardown IS the container's stop contract, and the suite needs no `--init` flag to be
+# correct.
 ENTRYPOINT ["tini", "--"]
 CMD ["uv", "run", "pytest"]
 
-# ── Server runtime: the shipping image ──────────────────────────────────────────────────
-# Engine payload + API + UI. No Swift, no compiler, no dev deps, no Tauri, no desktop
-# stack. python:3.12-slim — measured: Debian 13 (trixie), glibc 2.41, newer than the
-# payload's build glibc 2.35 (Ubuntu 22.04) — forward, never back. tini as PID 1, non-root
-# user. The supervision chain (reconnaissance §15 item 8):
-# tini (PID 1) → uvicorn → helpers; a helper's parent is uvicorn (never PID 1, so
-# ParentWatch accepts it), and when uvicorn dies the helpers reparent to PID 1 and end —
-# a stopped API takes its whole process tree with it, which is the point of the mechanism.
-FROM python:3.12-slim AS server-runtime
-
-RUN apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-    ca-certificates libcurl4 libgomp1 tzdata tini \
-    && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir uv
-
-COPY --from=rust-engine-payload /out/ /opt/digup/
-ENV PATH=/opt/digup:$PATH
-COPY server /srv/server
-COPY server/docker/healthcheck.py /opt/digup/healthcheck.py
-# The built UI: FastAPI serves /srv/server/ui/dist at `/` — static files only, no Node
-# in this image (the frontend-builder stage is where the build happened).
-COPY --from=frontend-builder /build/dist /srv/server/ui/dist
-WORKDIR /srv/server
-RUN uv sync --frozen --no-dev
-
-# The same engine user as the engine-runtime stage (uid 990); /data is README §5's layout
-# (index/, models/, config/) — bind-mounted volumes, owned by the server user. The writer
-# lock lives beside the index (`<index>/.digup-server.writer.lock`), not in a data folder.
-# `digup --help` proves the CLI runs headless in this image; §3's full acceptance — the
-# CLI answering status and searches from the mounted folders — is proven by CI's boot step
-# and the proof battery, which run against a live index, not from an empty image.
-RUN useradd --system --create-home --uid 990 digup \
-    && mkdir -p /data/index /data/models /data/config \
-    && chown -R digup:digup /data /srv/server \
-    && digup --help > /dev/null \
-    && /srv/server/.venv/bin/python -c "import fastapi, uvicorn, digup_server.api" \
-    && ! /srv/server/.venv/bin/python /opt/digup/healthcheck.py
-
-ENV PATH=/srv/server/.venv/bin:$PATH \
-    PYTHONPATH=/srv/server \
-    DIGUP_SERVER_INDEX=/data/index \
-    DIGUP_SERVER_ROOTS=/media/photos \
-    DIGUP_SERVER_MODELS=/data/models \
-    DIGUP_SERVER_CONFIG=/data/config
-# Host and port are NOT env here: the CMD below binds them (DIGUP_SERVER_HOST/PORT feed
-# `python -m digup_server.api`, the bare-metal entry — uvicorn's own args win in a container).
-
-USER digup
-WORKDIR /data
-EXPOSE 8787
-
-# SIGTERM (docker stop): tini forwards it to uvicorn, whose lifespan shutdown marks a
-# running job *interrupted* (the truthful state) and quit()s every helper. The healthcheck
-# asks the API's own /health — a healthy container is one whose engine answers. 503 counts
-# as alive: /health answers 503 while the searcher is respawning (a refused search, the
-# engine's own words) — that is the server honestly saying "not right now", not a sick
-# container, and docker must not restart a live server over it. urlopen raises HTTPError
-# on 503, so it is caught, not propagated.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python /opt/digup/healthcheck.py
-
-ENTRYPOINT ["tini", "--"]
-CMD ["uvicorn", "--factory", "digup_server.api:app_factory", "--host", "0.0.0.0", "--port", "8787"]
-
-# ── Server runtime WITH the CUDA backend (Stage 9 — built only on the box that has the card) ──
-# The same server-runtime plus exactly the CUDA runtime libraries `ldd` of libggml-cuda.so
+# ── CUDA runtime libraries: shipped by the CUDA stages below ────────────────────────────────
+# The GPU flavors of the shipping image (Stage 9 — built only on the box that has the card).
+# The same server image plus exactly the CUDA runtime libraries `ldd` of libggml-cuda.so
 # asks for, shipped beside the payload (its rpath `$ORIGIN` resolves them). `libcuda.so.1`
 # stays unresolved by design: it comes from the HOST driver through the NVIDIA Container
 # Toolkit (docs/implementation/gpu-handoff.md). Two matching build-args (the devel base that
-# builds the backend, the runtime base whose libraries ship), target this stage:
+# builds the backend, the runtime base whose libraries ship):
 #
+#   docker build --target server-rust-runtime-cuda \
+#     --build-arg BASE_IMAGE=nvidia/cuda:11.8.0-devel-ubuntu22.04 \
+#     --build-arg CUDA_RUNTIME_IMAGE=nvidia/cuda:11.8.0-runtime-ubuntu22.04 \
+#     --build-arg CUDA_ARCHS=61 …        # plain number, or a fat list `61,70,…`: the builder's
+#                                        # apt cmake 3.22.1 rejects dotted 6.1 and native alike
+#                                        # (measured 2026-11-04); commas are normalized to
+#                                        # CMake's semicolons in the rust-engine-builder RUN
+#                                        # (measured 2026-11-05, publish run #6)
+#
+# The `cuda-libs` stage is pulled only by the CUDA targets: CPU builds prune it and never
+# touch a CUDA image. The ldd gate in the CUDA stage fails the build if a shipped library
+# does not resolve — ship exactly these, from a CUDA *runtime* base, never the toolkit, never
+# a second copy of libggml*.
 #   docker build --target server-runtime-cuda \
 #     --build-arg BASE_IMAGE=nvidia/cuda:11.8.0-devel-ubuntu22.04 \
 #     --build-arg CUDA_RUNTIME_IMAGE=nvidia/cuda:11.8.0-runtime-ubuntu22.04 \
@@ -338,22 +299,12 @@ RUN set -eux; \
     done; \
     test -n "$nccl_found"
 
-FROM server-runtime AS server-runtime-cuda
-COPY --from=cuda-libs /out/ /opt/digup/
-RUN ldd /opt/digup/libggml-cuda.so \
-    && ! ldd /opt/digup/libggml-cuda.so | grep 'not found' | grep -v 'libcuda.so.1'
-
-
-# The contract suite's Rust-payload name: server-test now CARRIES the Rust payload (the
-# engine-builder/engine-payload Swift stages are retired), so this stage is the name the
-# CI jobs and the agent notes use for the suite image — a FROM alias, zero added layers.
-# The suite is unchanged: same tests, same mounts, same zero-skip bar. This is stage 4f's gate.
+# The contract suite's stage-6 name: the suite image carries the Rust payload AND the Rust
+# server, and drives the server as a process over HTTP (plan P3), so this alias is the name
+# the CI jobs and the agent notes use — a FROM alias, zero added layers, the same tests, the
+# same mounts, the same zero-skip bar. P3 retired the FastAPI suite alias and the FastAPI
+# shipping stages: the suite has one server now, the shipping one.
 FROM server-test AS server-test-rust
-
-# The shipping image with the Rust engine (the deploy compose can target it unchanged):
-# same alias shape — server-runtime's payload COPY is the Rust one, so the name stays for
-# the CI steps and the compose override that target it, with no layers of its own.
-FROM server-runtime AS server-runtime-rust
 
 # ── Stage 6: the shipping image with the Rust server (no Python, no uvicorn) ──────────────────
 # The pure-Rust shape: `digup-server` (crates/server, the axum port of the FastAPI wrapper) +

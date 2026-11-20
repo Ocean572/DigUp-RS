@@ -34,7 +34,8 @@ the search engine), `services` (the JSON-lines services), `cli` (the `digup` bin
 Swift Mac app `Sources/DigUpApp`, and the Swift-era scripts — rides branch `swift-reference` as
 the parity reference (its twin gate `scripts/rust/twin-gate.sh` lives there). The Windows and
 Linux app is `shell/` (Tauri: Rust, with plain HTML and JavaScript for its windows), which runs
-the engine as a helper program. The self-hosted server is `server/` (the FastAPI wrapper, the Lit
+the engine as a helper program. The self-hosted server is `server/` (the Rust `crates/server`
+binary, `digup-server`, the Lit
 web UI, the contract suite) with the compose deployment in `deploy/`. `scripts/` builds llama.cpp,
 ffmpeg and the packages, `scripts/rust/` is the port's own tooling (audit battery,
 package scripts), and `.github/workflows/rust-release.yml` shows every step of the release

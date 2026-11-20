@@ -12,7 +12,7 @@ appearing here.
   (`content-type: application/json` on POST bodies).
 * **One API process.** The media handles ([`media_id`](#media-identifiers)) live in that
   process's LRU cache and the index job runner is a thread inside it. Running more than one
-  uvicorn process (`--workers >1`, replicas, a load balancer in front of two containers
+  server process (`--workers >1`, replicas, a load balancer in front of two containers
   sharing a volume) 404s media ids from another process's searches and lets two job runners
   race. Scale by giving the machine more cores, not by adding processes.
 * Every answer is the engine's. `hits`, `strong`, `meaning`, `ms`, `warning` pass through
@@ -268,7 +268,7 @@ All errors are JSON with a single human-readable `detail` string, safe to show t
 
 | status | when | example body |
 |---|---|---|
-| `422` | validation (bad kind, over-512 `q`, `limit` out of 1–100, missing `q`) | FastAPI's list of error objects — render each item, do not show the raw array |
+| `422` | validation (bad kind, over-512 `q`, `limit` out of 1–100, missing `q`) | the validation layer's list of error objects — render each item, do not show the raw array |
 | `404` | unknown job id, dead media handle, file outside the configured roots, file gone | `{"detail": "no job 1a2b3c4d5e6f"}` |
 | `409` | a job is already running; an estimate is already running | `{"detail": "job 1a2b3c4d5e6f is running"}` |
 | `416` | unsatisfiable `Range` | empty body, `content-range: bytes */size` |
@@ -282,7 +282,7 @@ Retry it. A `500` means a server bug — report it, and it ships with a test.
 ## Security
 
 * Binds `127.0.0.1:8787` by default (`DIGUP_SERVER_HOST`/`DIGUP_SERVER_PORT` for bare metal; in
-  a container uvicorn binds `0.0.0.0` inside and the `127.0.0.1:8787:8787` publish line is what
+  a container the server binds `0.0.0.0` inside and the `127.0.0.1:8787:8787` publish line is what
   enforces localhost). LAN exposure needs authentication first — do not publish the port on a
   routable interface unauthenticated.
 * **Host and Origin validation is opt-in**: `DIGUP_SERVER_ALLOWED_HOSTS` names the URL hosts

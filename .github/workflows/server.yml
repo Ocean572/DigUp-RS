@@ -170,20 +170,22 @@ jobs:
       - name: The corpus clip exists (the video fixtures are not skippable)
         run: test -f server/tests/corpus/media/clips/scenes.mp4
 
-      - name: Build the test image (engine payload + adapter)
+      - name: Build the test image (engine payload + the Rust server + the suite harness)
         run: docker build --target server-test-rust -f server/docker/Dockerfile -t digup-server-test:ci .
 
       # The contract suite against the real CLI: search/index ops and reply fields verbatim,
       # the engine's honest "no good matches", idle-exit restart, single-writer lock, reload,
       # the `/api/v1` surface (health/status/search/estimate/index/jobs/embed_ahead/media
-      # over the real adapter — the lifespan spawns the helpers as children of the test
-      # process, a live parent), the index-job contract (409 while a job runs, the engine's
-      # counts, interrupted recovery from the job log, stop-mid-job resume, log rotation
-      # with history, env knobs), the startup prewarm and the ghost-row rules (walked-root
-      # ghosts retire on plain sync; out-of-scope ghosts survive it and retire under prune),
-      # and the UI surface (the built Lit + Vite app, served same-origin by FastAPI from
-      # the dist the frontend-builder stage compiles — Node runs in the build, never at
-      # runtime; server-issued media ids → previews/text, 404s for unissued ids).
+      # over the live server — plan P3: `support.py` spawns `digup-server`, the shipping
+      # binary, with the compose's env names, and the tests are thin HTTP clients of it;
+      # its helpers are its own children, a live parent), the index-job contract (409 while
+      # a job runs, the engine's counts, interrupted recovery from the job log, stop-mid-job
+      # resume, log rotation with history, env knobs), the startup prewarm and the ghost-row
+      # rules (walked-root ghosts retire on plain sync; out-of-scope ghosts survive it and
+      # retire under prune), and the UI surface (the built Lit + Vite app, served
+      # same-origin by the Rust server from the bundle the frontend-builder stage compiles —
+      # Node runs in the build, never at runtime; server-issued media ids → previews/text,
+      # 404s for unissued ids).
       # Zero-skip gate: the suite skips its own module when /models, /corpus-root or the
       # clip are missing (conftest) — "57 passed, 20 skipped" would be green-by-construction
       # and a lie. In CI every test must RUN: any skip is red, loudly.
@@ -205,28 +207,6 @@ jobs:
             exit 1
           fi
           grep -qE '[0-9]+ passed' "$RUNNER_TEMP/suite.log"
-
-      # The parity alias, one release cycle (docs/implementation/python-free-plan.md P2):
-      # the SAME suite against the FastAPI image (`server-test`), so any divergence between
-      # the two servers is a measured diff on identical fixtures, never an argument. The
-      # alias retires with the wrapper (plan P3) — its index dir is its own (the ghost-row
-      # rule: each root layout keeps its own index).
-      - name: Contract tests against the FastAPI alias (parity, one release cycle)
-        run: |
-          docker build --target server-test -f server/docker/Dockerfile -t digup-server-test-fastapi:ci .
-          mkdir -p "$RUNNER_TEMP/index-fastapi"
-          docker run --rm \
-            -v "$PWD/server/tests/corpus/media:/corpus:ro" \
-            -v "$PWD/server/tests/corpus:/corpus-root:ro" \
-            -v "$RUNNER_TEMP/models:/models:ro" \
-            -v "$RUNNER_TEMP/index-fastapi:/index" \
-            digup-server-test-fastapi:ci /srv/server/.venv/bin/pytest -rs 2>&1 | tee "$RUNNER_TEMP/suite-fastapi.log"
-          if grep -qE '^(SKIPPED|tests/.*SKIPPED)' "$RUNNER_TEMP/suite-fastapi.log"; then
-            echo "::error::a test SKIPPED on the FastAPI alias — the same zero-skip bar applies"
-            grep -E 'SKIPPED' "$RUNNER_TEMP/suite-fastapi.log" | head -20
-            exit 1
-          fi
-          grep -qE '[0-9]+ passed' "$RUNNER_TEMP/suite-fastapi.log"
 
       - name: The headless proof (index + search + eval, the engine's own words)
         run: |
@@ -325,12 +305,6 @@ jobs:
           DIGUP_MEDIA_BIND_OPTS=ro,rslave DAV_HOST_DIR=/media/dav \
           NEXTCLOUD_URL=http://nextcloud DAV_USERS="ci-alice ci-bob" DAV_APPPW="ci-alice:x ci-bob:y" \
           docker compose -f docker-compose.all-in-one.yml --profile nvidia --profile dav config --quiet
-          # The FastAPI parity override (docker-compose.fastapi.yml: the old Python image,
-          # the measured escape hatch for one release cycle after the default flipped to the
-          # Rust server — the base file's target IS server-rust-runtime now, so the Rust
-          # shape is the plain default chain pinned above). Pinned plain and LAN-merged.
-          docker compose -f docker-compose.yml -f docker-compose.fastapi.yml config --quiet
-          DIGUP_LAN_BIND=192.0.2.1 docker compose -f docker-compose.yml -f docker-compose.fastapi.yml -f docker-compose.lan.yml config --quiet
 
       - name: The server runtime image boots, answers, serves the UI, stops cleanly
         run: |
@@ -339,6 +313,13 @@ jobs:
           # by curl, the UI served at / from the bundle baked beside the binary. Same
           # stop contract as the FastAPI era: SIGTERM must end it *stopped, not killed*.
           docker build --target server-rust-runtime -f server/docker/Dockerfile -t digup-server:ci .
+          # Plan P3's image gate, checked in the build step: the shipping image carries NO
+          # Python — no interpreter, no uv, no pip, no venv. `! command -v` is the whole
+          # assertion (a found binary fails the step); the suite image is allowed Python by
+          # design (plan P4: the harness is not the product).
+          docker run --rm digup-server:ci sh -c \
+            '! command -v python python3 uv pip pip3 >/dev/null 2>&1'
+          test -f server/pyproject.toml   # the harness's pins ride with the suite, not the image
           mkdir -p "$RUNNER_TEMP/data/index" "$RUNNER_TEMP/data/config"
           # 777 as in the proof step: the server image is non-root (uid 990) and must own
           # its writer lock + job log under /data/index — a runner-owned 775 dir denies it.
@@ -372,7 +353,7 @@ jobs:
         if: always()
         run: |
           shopt -s nullglob
-          files=("$RUNNER_TEMP"/proof/*.log "$RUNNER_TEMP"/suite.log "$RUNNER_TEMP"/suite-fastapi.log)
+          files=("$RUNNER_TEMP"/proof/*.log "$RUNNER_TEMP"/suite.log)
           if [ ${#files[@]} -eq 0 ]; then echo "no proof/suite logs to show"; exit 0; fi
           for f in "${files[@]}"; do echo "::group::${f##*/}"; cat "$f"; echo "::endgroup::"; done
 
@@ -384,7 +365,6 @@ jobs:
           path: |
             ${{ runner.temp }}/proof
             ${{ runner.temp }}/suite.log
-            ${{ runner.temp }}/suite-fastapi.log
           if-no-files-found: warn
 
   # Pull-and-run publishes here (server/README.md "Pull the published image"): pushes to
@@ -469,8 +449,8 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # The CPU image — the target server-rust-runtime the stop-gate step above booted
-      # (the Python-free shipping image; the FastAPI alias is a test-only shape now),
-      # tagged :latest on main, :<branch> on a feature branch.
+      # (the Python-free shipping image: plan P3 retired the FastAPI wrapper, so this is the
+      # only shipping shape), tagged :latest on main, :<branch> on a feature branch.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .

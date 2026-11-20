@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from digup_server.engine import cli
+from engine import cli
 from conftest import _cfg
 
 

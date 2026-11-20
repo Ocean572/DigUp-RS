@@ -35,6 +35,7 @@ mod cli;
 mod config;
 mod jobs;
 mod media;
+mod openapi;
 mod protocol;
 mod rlock;
 mod security;
@@ -1499,6 +1500,25 @@ where
 /// searcher's live counts. The container's healthcheck reads the MAIN
 /// target only; 503 with the engine's own sentence means the searcher is
 /// mid-respawn: the container is healthy, the healthcheck counts 503 alive.
+/// `GET /api/v1/openapi.json` — the published route table (`openapi.rs`), the
+/// surface `docs/API.md` names. Open path: the gear reads it with no key.
+async fn openapi_json() -> Response {
+    json_response(StatusCode::OK, openapi::spec())
+}
+
+/// `GET /api/v1/docs` — the browsable docs page: self-contained HTML (no
+/// scripts, no external URLs), the same rules the UI's own pages follow.
+async fn docs_page() -> Response {
+    (
+        [(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        )],
+        openapi::DOCS_HTML,
+    )
+        .into_response()
+}
+
 async fn health(State(app): State<Shared>) -> Response {
     let task = {
         let app = app.clone();
@@ -2563,6 +2583,12 @@ async fn main() -> ExitCode {
     // and decorated like Python's stack does them.
     let router = Router::new()
         .route("/api/v1/health", get_only(health))
+        // The OpenAPI surface `docs/API.md` promises (FastAPI served it from its
+        // router for free; here it is hand-written — `openapi.rs`). Both are
+        // `security::OPEN_PATHS`: documentation, not data, asked key-free by the
+        // gear and the healthcheck alike.
+        .route("/api/v1/openapi.json", get_only(openapi_json))
+        .route("/api/v1/docs", get_only(docs_page))
         .route("/api/v1/status", get_only(status_endpoint))
         .route("/api/v1/search", post_only(search))
         .route("/api/v1/embed_ahead", post_only(embed_ahead))

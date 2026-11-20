@@ -1,3 +1,11 @@
 # Text files keep LF line endings on every system (Git for Windows checks text out with CRLF by default): llama.cpp's
 # patch has to match its LF source, and the build scripts run in bash.
 * text=auto eol=lf
+
+# Plan P3 (docs/implementation/python-free-plan.md §P3.3 + §P4): the product is Rust + JS.
+# The contract suite and the fixture/notice generators stay Python ON PURPOSE — they are the
+# gates and the raw material, a harness CI carries, never the shipping image. Marking them
+# vendored makes GitHub's language bar read the product, and records the choice where a
+# reader will look.
+server/tests/** linguist-vendored
+scripts/** linguist-vendored

@@ -845,8 +845,19 @@ impl Inner {
 
     /// `_recover`: replay the log (rotations included, oldest first) — a
     /// `running` job with no final line is *interrupted*. Never success.
+    ///
+    /// The decision is on each job's LAST record, never on any of them: every job
+    /// passes through `running` on its way to `done`, so treating each line as a
+    /// candidate marked every finished job *interrupted* at the next boot — measured
+    /// 2026-11-20 on the suite: the rotation gate's six `done` jobs came back
+    /// interrupted, and the stop gate's truthful `server stopped during job` record
+    /// (with its partial counts) was overwritten by the restart's words. Python's
+    /// `_recover` keeps the last record per id and marks only the ids whose last
+    /// state is `running`; the last-state map keeps that rule, and the mark order
+    /// rides the sorted ids (a BTreeMap: deterministic, and the log's append order
+    /// must not depend on a hash seed).
     fn recover(&self) {
-        let mut seen: Vec<(String, String)> = Vec::new();
+        let mut last: BTreeMap<String, String> = BTreeMap::new();
         for path in self.log_files() {
             let Ok(content) = std::fs::read_to_string(&path) else {
                 continue;
@@ -863,15 +874,15 @@ impl Inner {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                seen.push((id.clone(), state));
+                last.insert(id.clone(), state);
                 let mut state_slot = self.state.lock().expect("the runner state");
-                if !state_slot.order.contains(id) {
+                if !state_slot.order.contains(&id) {
                     state_slot.order.push(id.clone());
                 }
                 state_slot.by_id.insert(id.clone(), record);
             }
         }
-        for (id, state) in seen {
+        for (id, state) in last {
             if state == STATE_RUNNING {
                 self.mark(
                     &id,

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from digup_server.engine import EngineConfig, SearchService
+from engine import EngineConfig, SearchService
 
 BASE_FIELDS = {"path", "kind", "segment", "segment_id", "score", "modified", "size", "info"}
 MAYBE_FIELDS = {"z", "cosine", "keyword_rank", "loc", "loc_end", "focus", "excerpt",
@@ -180,8 +180,8 @@ def test_a_failed_handshake_reaps_the_child_it_spawned(monkeypatch, tmp_path):
     fresh child running with its 3 pipes and 2 reader threads unreferenced until its
     own idle-exit (2 × `--encoder-idle` = 600 s), and every retried request spawned
     another one."""
-    from digup_server.engine import search as search_mod
-    from digup_server.engine.protocol import EngineExited
+    from engine import search as search_mod
+    from engine.protocol import EngineExited
 
     closed = []
 
@@ -206,7 +206,7 @@ def test_a_failed_handshake_reaps_the_child_it_spawned(monkeypatch, tmp_path):
 def test_a_missing_engine_binary_answers_clierror(tmp_path):
     """FileNotFoundError from Popen must reach the API as a 502 quoting the spawn,
     not a bare 500 traceback (api.py:6: quote the engine, invent nothing)."""
-    from digup_server.engine.cli import CLIError
+    from engine.cli import CLIError
     service = SearchService(EngineConfig(index=str(tmp_path), roots=("/corpus",),
                                          binary="/no/such/digup-binary"))
     with pytest.raises(CLIError, match="cannot start the engine helper"):
@@ -218,7 +218,7 @@ def test_a_refusal_without_an_error_field_is_still_a_refusal():
     shaped `{"ok":false,"id":4}` sailed through `_checked` and then api.py's
     `stripped["hits"]` raised KeyError — the exact 500 the Stage-10 battery hit.
     The guard must fire on the shape, not on one field of it."""
-    from digup_server.engine.protocol import EngineRefused
+    from engine.protocol import EngineRefused
     with pytest.raises(EngineRefused):
         SearchService._checked({"ok": False, "id": 4}, {"op": "search"})
     ok = {"hits": [], "strong": 0, "meaning": True, "ms": {}, "id": 5}

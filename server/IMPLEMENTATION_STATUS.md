@@ -2,6 +2,114 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-20 — P3: the contract suite drives the shipping Rust binary; FastAPI retires (ai-ubuntu-computer)
+
+**Contract suite: 123 passed, 0 failed, 0 skipped, 1 deselected, 204.73 s** (`-rs`, four
+mounts, harness image `digup-server-test:p3`). Build rc 0 — the image build IS the crate
+compile (`cargo build --release -p digup-cli -p digup-server`, which compiles the new
+`openapi.rs`); the frontend gate rode the image build (**12 files / 59 tests**). Python
+audit: the harness image carries **no fastapi**, and the shipping images ship no
+`python/python3/uv/pip/pip3` — CI checks exactly that (`! command -v …`).
+
+* **Harness shape** (`server/tests/support.py`): `LiveApp` spawns `digup-server` — the
+  product — with the compose's own env names, waits for ANY HTTP answer (200 healthy,
+  503 engine warming, 4xx a guard refusing the probe: the guard is not a dead server),
+  and tears down with SIGTERM — the measured stop contract (job *interrupted* with its
+  counters, exit 143 inside the grace); `stop(sig=SIGKILL)` and `restart()` carry the
+  kill/replay contracts. The server's helpers are its children, pytest is the parent —
+  the container's chain (tini → server → helpers) with its meaning intact.
+* **FastAPI retires**: `server/digup_server/{api,jobs,security,targets}.py`, the lifespan,
+  `healthcheck.py`, `deploy/docker-compose.fastapi.yml` and the FastAPI Docker stages are
+  deleted; the suite's harness package moved `server/digup_server/engine` →
+  `server/tests/engine`; runtime deps are empty (`dependencies = []`, `uv.lock` shed 281
+  lines) — what stays Python is the suite (stdlib + pytest + httpx), recorded for P4.
+  Non-observable monkeypatch unit tests retired with an in-module note naming their Rust
+  twin; the crate tests are their gate.
+* **The OpenAPI surface lands in the port**: `crates/server/src/openapi.rs` answers
+  `GET /api/v1/openapi.json` (route table pinned to `main.rs`'s Router) and
+  `GET /api/v1/docs` (self-contained page: no scripts, no external URLs), both in
+  `security::OPEN_PATHS`. `test_api_docs.py` is the drift tripwire — a route in the table
+  and not in `docs/API.md` is red in CI.
+* **Product fix of the round** (`crates/server/src/jobs.rs::recover`): the replay decided
+  on EVERY log line, and every job passes through `running` on its way to `done`, so the
+  next boot ghosted finished jobs. Measured on the product (`/tmp/opencode/p3-probe.py`):
+  six `done` jobs came back `interrupted / server restart: job never finished`, and a
+  mid-embed SIGTERM's truthful record (`server stopped during job`, `files_done 6`,
+  `seconds 4.7`) had been overwritten by the restart's words. Python's rule restored:
+  the LAST record per id decides, only `running` is marked (a BTreeMap: deterministic
+  append order, no hash-seed order).
+* **Capped ranges, measured on the product** (a 50,331,702-byte media fixture):
+  `bytes=1000-9000000000` → 206 `bytes 1000-8389607/50331702`, body 8,388,608;
+  `bytes=0-` → `bytes 0-8388607/50331702`; `bytes=-9000000000` →
+  `bytes 41943094-50331701/50331702`; `bytes=100-200` → 101 bytes. (The suite's own parse
+  of the header was the bug of run 2, not the server.)
+* Run 2 was 5 failed / 118 passed / 0 skipped; the five causes were the replay rule above
+  plus four suite bugs of the P3 rewrite (a header parse, a job lookup missing its
+  `?target=` — job ids live in the TARGET's runner, and an audit pin that queued a crawl
+  against a writer in its closing moment, answered by running one crawl to its END first).
+
+## 2026-11-20 — P2 deployed: the compose default is the Rust server; P1 gates measured (ai-ubuntu-computer)
+
+**P1 gates (plan P1, measured on this box; gate scripts `/tmp/opencode/p1-gate*.sh`).**
+Contract suite on the pre-P3 harness (`digup-server-test:local`): **139 passed, 0 skipped,
+1 deselected, 167.58 s**.
+
+* **Gate 1, the stop contract** (compose project `digup-p1`, 400-file tree,
+  `stop_grace_period: 90s`): mid-embed `docker compose stop` → **10 s**, exit **143**,
+  `Application shutdown complete`, the running job recorded *interrupted* with
+  files_done=64; next `POST /index` → **done, 400 searchable / 0 pending**; the 409 busy
+  answer quoted the live job id mid-job. FastAPI parity baseline on the identical tree:
+  **10.4 s / 143**.
+* The first measurement of this gate FAILED (62.7 s lifespan, SIGKILL **137** at 90 s) and
+  the cause was a port defect, fixed in `crates/server/src/jobs.rs`: the event loop holds
+  the writer mutex across `next_event(job_timeout=3600 s)`, and `shutdown()` wrote its
+  `stop` through that same mutex — queueing behind a 3600 s read. The fix sends the stop
+  on the raw process handle (`IndexService::proc()`, mirrored into a `stopper` slot at job
+  start) and bounds the worker join at 20 s via an mpsc marker (Python's
+  `join(timeout=20.0)` shape). Engine CI (fmt + clippy `-D` + `cargo test --workspace`) is
+  the crate gate; the compose gate above is the product measurement.
+* **Gate 2, health supervision:** warm boot **1–1.5 s** (Rust and FastAPI, same box);
+  health never unhealthy, **restarts 0**; SIGKILL of the hot `digup search-service` →
+  the next search answered **200** on both servers (identical, the adapter's respawn).
+  The 503-while-respawn shape is not deploy-observable here (prewarm 1–4 s, respawn
+  instant) and is pinned by the suite's reloading-503 test + cargo, recorded as such.
+* **Gate 2c, named targets:** env target (alpha) + runtime `POST /targets` (beta, gamma).
+  Scope matrix: own target 200/202; cross-target `?target=` **403**; second writer on one
+  target **409**; main-index reads key-free (minted deployment); app key on the main index
+  refused. `<config>/tokens.json` (0600) + `targets.json` written; the registration reply
+  carries `generated`, its own `index`, and the private `token`.
+* **Gate 3b, GPU utilization (the 1070, CUDA image):** pinned to the card
+  (`--gpus device=$GPU_UUID`, GPU 0): healthy after 2 polls; corpus index job ran with
+  `nvidia-smi -lms 500` sampling — **1950 samples**, **GPU0 util>0 in 14** (the embed
+  bursts), **GPU0 peak 93 %**, **GPU0 mem>0 in 975 samples**; the engine's `costs.json`
+  tallies rode the index (image 4.0 units 0.617 s; videoSecond 77.78 units 3.263 s);
+  `worker.log`: **backends: CUDA, CPU**. Script lesson recorded: the card's UUID needs
+  `sed -n 's/.*(UUID: \(GPU-[a-f0-9-]*\)).*/\1/p'` — `awk '{print $3}'` returns the word
+  `NVIDIA`, and `grep -o 'GPU-[a-f0-9]*'` truncates the UUID (the two failures that
+  wasted the first two runs of this gate).
+  The device line (`digup speed --model --tries 3`, same card, same image):
+  **`runs on the GPU`**, model load **1.08 s**, check **22.7 s**, tries **0.40 / 0.39 s**,
+  costs kept (`image ×1.2 · videoSecond ×1.1` vs the M4 Pro baseline); **rc 0** is the
+  engine's own agreement gate (the CPU-baseline child, measured picture 0.989 s). Probe
+  root cause: the image ships `DIGUP_SERVER_MODELS` (the server converts it for its
+  children) — a bare CLI probe needs the engine's knob `DIGUP_MODELS`; without it the
+  CPU-baseline child dies "worker not found" and the outer check reports only "the
+  processor's speed check failed" (the child's stderr is nulled by design).
+* **Gate 4, ParentWatch:** SIGKILL the API inside the container → the whole `digup`
+  helper tree gone at **+1 s**, container exit **137**, restarts 0 (the probe resets
+  `--restart=no`: a restart policy distorts the sampling). The headless proof on the
+  shipping image: **PROOF PASSED**, eval ALL n=17 **R@1 0.76 / R@5 0.88**, 37 vectors.
+
+**P2, the flip.** Base compose targets `server-rust-runtime` (the `.nvidia` override →
+`server-rust-runtime-cuda`; the Nextcloud and all-in-one shapes flipped); the
+`.rust.yml`/`.rust.nvidia.yml` overrides are **deleted** (Rust is the default, not an
+override); `deploy/docker-compose.fastapi.yml` is the new opt-in **parity escape hatch**
+(plan P2.2, one release cycle). server.yml: boot/CLI/stop-gate steps run the Rust image
+(health probe = the image's own `curl … || test $? -eq 22`), the suite ran BOTH aliases
+this cycle, own index dir each. **17 compose chains** validated with
+`docker compose config --quiet`, with and without profiles. Tips `ae6d5d6` (jobs.rs fix)
+and `5897dd9` (compose/CI/deploy README); Engine CI run 48 @ `5897dd9` = success.
+
 ## 2026-11-19 — P0 green: the Packages chain is green on all six arms (`cb7b0fc`, run 16)
 
 Run 16 @ `cb7b0fc`: `linux` build ✓ · `windows` installed-gate ✓ · `macos` .app+.dmg+

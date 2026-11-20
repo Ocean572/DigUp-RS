@@ -2,83 +2,59 @@
 
 Runs in the `server-test` container over the **scratch corpus** (conftest: 4 photos + the
 clip + notes.txt, already indexed): a new file arrives, `POST /api/v1/index` runs the real
-`index-service` under the adapter's flock, the job's counts are the engine's own events,
+`index-service` under the server's flock, the job's counts are the engine's own events,
 and after `done` the searcher answers for the new file — the `reload → prewarm` sequence
-the Stage-3 suite proved, wired by the app itself. No mocks.
+the Stage-3 suite proved, wired by the server itself. No mocks.
 
-The interrupted-recovery test is the rule from README §5 verbatim: *an interrupted job is
-recovered as interrupted, never as success* — a log line `running` with no ending becomes
-`interrupted` at the next startup.
+Plan P3 (python-free plan) made the whole module drive the **shipping binary**, which
+sharpened the recovery contracts into the deployment's own verbs:
+
+* `app.stop()` is SIGTERM — `docker stop`'s stop contract: the writer is asked to close at
+  the engine's safe point, the job records *interrupted* with its partial counters inside
+  the grace, the process ends on the signal (143 / `-15` in Python's exit-code shape);
+* `app.stop(sig=SIGKILL)` is the kill path: the log's last `idle` line carries the totals,
+  and the next boot replays the running record as *interrupted* with those totals;
+* `app.restart()` is the next boot — the replay the recovery tests read over HTTP.
+
+Four tests reached into `JobRunner`'s internals and retired with the Python wrapper
+(`test_an_interrupted_record_always_carries_the_counts_it_saw`,
+`test_progress_lands_on_the_live_record_and_survives_the_final_mark`,
+`test_shutdown_mid_job_finishes_and_marks_the_job_interrupted`,
+`test_a_crashing_job_runner_leaves_indexing_alive`,
+`test_a_prewarm_timeout_after_done_keeps_the_job_done`): their rules are the binary's own
+code paths (`crates/server/src/jobs.rs` — progress merges onto the live record, the mark
+takes the state lock and releases it before appending, `after_done`'s refusal is a note on
+a *done* job), and every one of them has an observable twin pinned below: the interrupted
+record carries its counters, a stop inside the grace answers 143 in bounded time, a job
+whose sync timed out leaves the runner answering the next job, and a done job keeps
+`state == "done"` in the log no matter what the refresh says.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import threading
+import signal
 import time
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
-from digup_server.api import create_app
-from digup_server.engine import EngineConfig
-from digup_server.jobs import JobRunner
 
 from conftest import _cfg
+from engine import EngineConfig
+from support import LiveApp, live_server
 
 NEW_SENTENCE = "A lighthouse stands above a stormy sea at dusk, its beam sweeping the waves.\n"
-
-
-def test_an_interrupted_record_always_carries_the_counts_it_saw():
-    """The rule the stop-mid-job test and README §5 both promise: an interrupted job reports
-    the counts the engine really emitted. The live job record is seeded at zero the first
-    moment of the walk (`_run_one`) and `_live_counts` publishes missing keys as None — a
-    job stopped before any file finished says **0**, not nothing (measured: a stop landing
-    during the model load took the `EngineExited` path and published an interrupted record
-    with no counts at all, which is why the counters ride the live record from the first
-    moment and every ending reads them from there, never from a thread-local list)."""
-    runner = JobRunner.__new__(JobRunner)            # the counts bookkeeping, no worker
-    runner._jobs = {"j1": {"id": "j1"}}
-    runner._lock = threading.Lock()
-    runner._progress("j1", files_done=0, files_failed=0, errors=0)   # _run_one's seeding
-    counts = runner._live_counts("j1")
-    assert counts["files_done"] == 0 and counts["files_failed"] == 0 and counts["errors"] == 0
-    assert counts["files"] is None and counts["vectors"] is None    # no `idle` totals yet
-
-
-def test_the_job_timeout_is_an_operator_knob(scratch, scratch_index, tmp_path_factory, monkeypatch):
-    """3600 s is the runner's patience for corpora (the scratch walk finishes in seconds).
-    A real tree's first pass outlives an hour — measured 2026-11-04: a 131,972-file job
-    recorded *interrupted with its partial counters* at 19,007 when the default expired
-    (and the next job resumed — README §5). The operator owns the ceiling:
-    DIGUP_SERVER_JOB_TIMEOUT_S, read at the lifespan; the default stays 3600."""
-    folder, _ = scratch_index
-    monkeypatch.setenv("DIGUP_SERVER_CONFIG", str(tmp_path_factory.mktemp("job-timeout-config")))
-    monkeypatch.setenv("DIGUP_SERVER_JOB_TIMEOUT_S", "900")
-    with TestClient(create_app(_cfg(folder, (scratch,)))) as c:
-        assert c.app.state.jobs._timeout == 900.0                   # the operator's value
-    monkeypatch.delenv("DIGUP_SERVER_JOB_TIMEOUT_S")
-    with TestClient(create_app(_cfg(folder, (scratch,)))) as c:
-        assert c.app.state.jobs._timeout == 3600.0                  # the default, unchanged
+CANARY = "A red canoe rests on a glass-still lake under the northern lights.\n"
 
 
 @pytest.fixture(scope="module")
 def jobs_client(scratch, scratch_index, tmp_path_factory):
-    """The app over the scratch corpus, with its own job log folder."""
+    """The server over the scratch corpus, with its own job log folder."""
     folder, _ = scratch_index
-    config_dir = tmp_path_factory.mktemp("job-config")
-    saved = os.environ.get("DIGUP_SERVER_CONFIG")
-    os.environ["DIGUP_SERVER_CONFIG"] = str(config_dir)
-    try:
-        with TestClient(create_app(_cfg(folder, (scratch,)))) as c:
-            yield c
-    finally:
-        if saved is None:
-            os.environ.pop("DIGUP_SERVER_CONFIG", None)
-        else:
-            os.environ["DIGUP_SERVER_CONFIG"] = saved
+    with live_server(_cfg(folder, (scratch,)),
+                     config_dir=str(tmp_path_factory.mktemp("job-config"))) as c:
+        yield c
 
 
 def wait_job(client, job_id, timeout=300.0):
@@ -131,22 +107,42 @@ def test_unknown_job_is_404(jobs_client):
     assert jobs_client.get("/api/v1/jobs/not-a-job").status_code == 404
 
 
-def test_a_run_never_logged_finished_recovers_as_interrupted(scratch, scratch_index, tmp_path):
-    folder, _ = scratch_index
+def seed_job_log(tmp_path, lines, name="jobs.jsonl"):
+    """A job log as a hard kill left it — the boot's replay input, written before spawn."""
     config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / name).write_text("".join(json.dumps(l) + "\n" for l in lines), encoding="utf-8")
+    return config_dir
+
+
+def test_a_run_never_logged_finished_recovers_as_interrupted(scratch, scratch_index, tmp_path):
+    """README §5 verbatim: *an interrupted job is recovered as interrupted, never as
+    success*. The log line says `running` with no ending; the next boot rewrites it."""
+    folder, _ = scratch_index
+    config_dir = seed_job_log(tmp_path, [{"id": "abc123", "state": "running", "started": 0}])
+    with live_server(_cfg(folder, (scratch,)), config_dir=str(config_dir)) as c:
+        assert c.get("/api/v1/jobs/abc123").json()["job"]["state"] == "interrupted"
+        lines = [json.loads(l) for l in config_dir.joinpath("jobs.jsonl").read_text().splitlines()]
+        assert lines[-1]["id"] == "abc123" and lines[-1]["state"] == "interrupted"
+
+
+def test_replay_ignores_lines_that_are_not_job_records(scratch, scratch_index, tmp_path):
+    """A hand-edited/merged log must not brick the boot: a replay that indexed `record["id"]`
+    on any parsed JSON raised on a bare `5`, the boot died, and the app refused to start.
+    Torn tails and non-record lines are skipped; the one real `running` record still
+    recovers as *interrupted* and the `done` record stays done."""
+    folder, _ = scratch_index
+    config_dir = tmp_path / "junk-cfg"
     config_dir.mkdir()
     (config_dir / "jobs.jsonl").write_text(
-        json.dumps({"id": "abc123", "state": "running", "started": 0}) + "\n", encoding="utf-8")
-    runner = JobRunner(_cfg(folder, (scratch,)), config_dir=str(config_dir))
-    try:
-        assert runner.job("abc123")["state"] == "interrupted"   # never success — README §5
-        lines = [json.loads(l) for l in
-                 (config_dir / "jobs.jsonl").read_text().splitlines()]
-        assert lines[-1]["id"] == "abc123" and lines[-1]["state"] == "interrupted"
-    finally:
-        runner.shutdown()
-
-CANARY = "A red canoe rests on a glass-still lake under the northern lights.\n"
+        "[1, 2, 3]\n5\nnull\n\"a string\"\n{\"state\":\"running\"}\n"   # valid JSON, not records
+        '{"id":"abc123","state":"running","started":0}\n'
+        '{"id":"real", "state":"done", "ended":1}\n'
+        "truncat",                                                       # torn tail
+        encoding="utf-8")
+    with live_server(_cfg(folder, (scratch,)), config_dir=str(config_dir)) as c:
+        assert c.get("/api/v1/jobs/abc123").json()["job"]["state"] == "interrupted"
+        assert c.get("/api/v1/jobs/real").json()["job"]["state"] == "done"
 
 
 def test_plain_sync_retires_walked_root_ghosts(jobs_client, scratch):
@@ -182,297 +178,247 @@ def test_out_of_scope_rows_survive_plain_sync_and_retire_under_prune(tmp_path):
     touch them; diluting z for live hits is what that dilution looked like in the
     proof. `prune: true` — the engine's `--prune` — retires them: "files no longer
     found under these roots" includes paths outside the roots. The persisted job
-    record echoes the flag, and survives a runner restart (replay)."""
+    record echoes the flag, and survives a restart (replay)."""
     s2 = tmp_path / "old-root"
     s2.mkdir()
     (s2 / "canary2.txt").write_text(CANARY, encoding="utf-8")
     idx = tmp_path / "ghost-index"
     idx.mkdir()
     nowater = {"DIGUP_SERVER_PREWARM": "0"}          # status ops don't need the model
-    saved = os.environ.get("DIGUP_SERVER_PREWARM")
 
-    os.environ["DIGUP_SERVER_PREWARM"] = "0"
-    os.environ["DIGUP_SERVER_CONFIG"] = str(tmp_path / "job-config")
-    try:
-        # A server whose roots INCLUDE the folder: the canary is indexed, searchable.
-        with TestClient(create_app(_cfg(idx, (s2,)))) as scope_a:
-            job = scope_a.post("/api/v1/index", json={}).json()["job"]
-            assert wait_job(scope_a, job["id"])["state"] == "done"
-            assert scope_a.get("/api/v1/status").json()["searchable"] == 1
+    # A server whose roots INCLUDE the folder: the canary is indexed, searchable.
+    with live_server(_cfg(idx, (s2,)), config_dir=str(tmp_path / "job-config-a"),
+                     env_extra=nowater) as scope_a:
+        job = scope_a.post("/api/v1/index", json={}).json()["job"]
+        assert wait_job(scope_a, job["id"])["state"] == "done"
+        assert scope_a.get("/api/v1/status").json()["searchable"] == 1
 
-        # The server AFTER the remount: its roots no longer include that folder.
-        empty = tmp_path / "new-root"
-        empty.mkdir()
-        with TestClient(create_app(_cfg(idx, (empty,)))) as scope_b:
-            status = scope_b.get("/api/v1/status").json()
-            assert status["searchable"] == 1 and status["files"] == 1  # the ghost counts
+    # The server AFTER the remount: its roots no longer include that folder.
+    empty = tmp_path / "new-root"
+    empty.mkdir()
+    with live_server(_cfg(idx, (empty,)), config_dir=str(tmp_path / "job-config-b"),
+                     env_extra=nowater) as scope_b:
+        status = scope_b.get("/api/v1/status").json()
+        assert status["searchable"] == 1 and status["files"] == 1  # the ghost counts
 
-            job = scope_b.post("/api/v1/index", json={}).json()["job"]   # plain sync…
-            assert wait_job(scope_b, job["id"])["state"] == "done"
-            assert scope_b.get("/api/v1/status").json()["searchable"] == 1  # …row SURVIVES
+        job = scope_b.post("/api/v1/index", json={}).json()["job"]   # plain sync…
+        assert wait_job(scope_b, job["id"])["state"] == "done"
+        assert scope_b.get("/api/v1/status").json()["searchable"] == 1  # …row SURVIVES
 
-            started = scope_b.post("/api/v1/index", json={"prune": True})
-            job_id = started.json()["job"]["id"]
-            assert started.json()["job"].get("prune") is True             # echoed live
-            assert wait_job(scope_b, job_id)["state"] == "done"
-            assert scope_b.get("/api/v1/status").json()["searchable"] == 0  # retired
-            assert scope_b.get(f"/api/v1/jobs/{job_id}").json()["job"].get("prune") is True
-    finally:
-        if saved is None:
-            os.environ.pop("DIGUP_SERVER_PREWARM", None)
-        else:
-            os.environ["DIGUP_SERVER_PREWARM"] = saved
+        started = scope_b.post("/api/v1/index", json={"prune": True})
+        job_id = started.json()["job"]["id"]
+        assert started.json()["job"].get("prune") is True             # echoed live
+        assert wait_job(scope_b, job_id)["state"] == "done"
+        assert scope_b.get("/api/v1/status").json()["searchable"] == 0  # retired
+        assert scope_b.get(f"/api/v1/jobs/{job_id}").json()["job"].get("prune") is True
 
 
-def test_progress_lands_on_the_live_record_and_survives_the_final_mark(tmp_path):
-    """The failure this pins, measured in the full suite (97 passed, 1 failed, 306 s):
-    a job stopped by `shutdown()` is marked from the **shutdown** thread, which knows nothing
-    about the worker thread's local event list — so `interrupted` went out with **no counts**
-    (`assert partial is not None`). Counts now ride the live record as they arrive, and
-    `_mark` merges into it, never replaces."""
-    runner = JobRunner(_cfg(str(tmp_path / "idx"), (str(tmp_path / "root"),)),
-                       config_dir=str(tmp_path / "cfg"))
-    try:
-        with runner._lock:
-            runner._active = "p1"
-            runner._jobs["p1"] = {"id": "p1", "state": "running", "started": 1.0}
-        runner._progress("p1", files_done=3, files_failed=1, errors=0)
-        runner._progress("p1", files_done=4)                 # a later event: merge, not reset
-        runner._mark("p1", "interrupted", "server stopped")
-        record = runner.job("p1")
-        assert record["state"] == "interrupted" and record["why"] == "server stopped"
-        assert record["files_done"] == 4 and record["files_failed"] == 1 and record["errors"] == 0
-    finally:
-        runner.shutdown()
+def test_the_job_timeout_is_an_operator_knob(scratch, tmp_path_factory):
+    """3600 s is the runner's patience for corpora (the scratch walk finishes in minutes at
+    worst). A real tree's first pass outlives an hour — measured 2026-11-04: a 131,972-file
+    job recorded *interrupted with its partial counters* at 19,007 when the default expired
+    (and the next job resumed — README §5). The operator owns the ceiling:
+    `DIGUP_SERVER_JOB_TIMEOUT_S`, read at the boot, per `.env.example`.
+
+    Observable shape: a server booted with a 1 s ceiling cannot outlive the model load that
+    opens every walk (no event inside 1 s), so its job records *interrupted* quoting the
+    timeout — and the runner stays ALIVE to answer the next job (the crash path of the same
+    loop: an escaped timeout is a job ending, never a wedged writer). The same tree on a
+    default boot finishes *done*, which is the "default stays the shipping one" half."""
+    idx = tmp_path_factory.mktemp("knob-index")
+    with live_server(_cfg(idx, (scratch,)),
+                     config_dir=str(tmp_path_factory.mktemp("knob-config-tight")),
+                     env_extra={"DIGUP_SERVER_JOB_TIMEOUT_S": "1"}) as tight:
+        job_id = tight.post("/api/v1/index", json={}).json()["job"]["id"]
+        deadline = time.monotonic() + 120.0
+        while time.monotonic() < deadline:
+            job = tight.get(f"/api/v1/jobs/{job_id}").json()["job"]
+            if job["state"] in ("done", "interrupted", "busy"):
+                break
+            time.sleep(0.5)
+        assert job["state"] == "interrupted", job
+        # The binary's own words (protocol.rs `Timeout`): "index-service: no event
+        # within 1 s" — the writer's event read hit the operator's 1 s ceiling.
+        assert "no event" in job["why"] and "within 1 s" in job["why"], job["why"]
+        assert "index-service" in job["why"], job["why"]
+        assert job.get("files_done") is not None, "an interrupted record carries its counters"
+        next_job = tight.post("/api/v1/index", json={})            # the loop survived
+        assert next_job.status_code == 202, next_job.text
+
+    idx2 = tmp_path_factory.mktemp("knob-index-default")
+    with live_server(_cfg(idx2, (scratch,)),
+                     config_dir=str(tmp_path_factory.mktemp("knob-config-default"))) as open_book:
+        job_id = open_book.post("/api/v1/index", json={}).json()["job"]["id"]
+        assert wait_job(open_book, job_id, timeout=900.0)["state"] == "done"
 
 
-def test_a_hard_killed_job_recovers_with_the_totals_the_log_last_saw(tmp_path):
-    """The durable half of the same rule: the engine's `idle` totals ride in the log, so a
-    record recovered after a hard kill is *interrupted* **and** carries the last totals it
-    published (here files 9, files_done 2) — not an empty shell."""
-    cfg, idx, root = str(tmp_path / "c"), str(tmp_path / "i"), str(tmp_path / "r")
-    first = JobRunner(_cfg(idx, (root,)), config_dir=cfg)
-    with first._lock:
-        first._active = "k1"
-        first._jobs["k1"] = {"id": "k1", "state": "running", "started": 1.0}
-    first._progress("k1", log=True, files_done=2, files=9, searchable=9, pending=7, vectors=2)
-    with first._lock:
-        first._active = None               # the log's last line stays `running`: a hard kill
-    first.shutdown()
+def test_the_knobs_are_read_from_the_environment(scratch, scratch_index):
+    """`DIGUP_SERVER_BACKFILL=0` reaches the engine argv (the `--backfill` flag off),
+    `DIGUP_SERVER_JOB_LOG_SIZE` and `DIGUP_SERVER_JOB_TIMEOUT_S` are read at the boot:
+    the settings are env-driven, per `.env.example`; defaults stay the shipping ones
+    (backfill on, 1 MiB, 3600 s). The argv half is the harness's own (it is what builds
+    the engine command lines); the log-size and job-timeout halves are pinned by the two
+    live tests in this module, which boot servers carrying those env values and read what
+    the server does with them (rotation files, a job interrupted at the ceiling)."""
+    folder, _ = scratch_index
+    cfg = EngineConfig(index=str(folder), roots=(str(scratch),))
+    assert "--backfill" not in cfg.index_argv()
+    assert "--backfill" in cfg.index_argv(backfill=True)
 
-    second = JobRunner(_cfg(idx, (root,)), config_dir=cfg)
-    try:
-        recovered = second.job("k1")
-        assert recovered["state"] == "interrupted"           # never success (README §5)
-        assert recovered["files"] == 9 and recovered["files_done"] == 2
-        assert recovered["vectors"] == 2 and recovered["pending"] == 7
-    finally:
-        second.shutdown()
+
+def _log_tail_lines(config_dir: Path, job_id: str) -> list[dict]:
+    out = []
+    for name in sorted(p.name for p in config_dir.iterdir() if p.name.startswith("jobs.jsonl")):
+        for line in (config_dir / name).read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue                                    # the torn tail is skipped
+            if isinstance(record, dict) and record.get("id") == job_id:
+                out.append(record)
+    return out
 
 
 def test_a_stop_mid_job_is_interrupted_and_the_next_job_resumes(tmp_path, scratch):
-    """Stage 8: `shutdown()` sends the engine's `stop` — the writer closes its stream at
-    the safe point **between files** — and the job records *interrupted* with its
-    partial counts, never success. SQLite stays whole: the next writer takes the lock,
-    resumes the walk (files already embedded are unchanged) and finishes it."""
+    """Stage 8, and gate 1 of the python-free plan in suite shape: SIGTERM sends the
+    engine's `stop` — the writer closes its stream at the safe point **between files** —
+    the job records *interrupted* with its partial counts, never success, the process ends
+    on the signal inside the grace (the Python client reports the signal as `-15`, the
+    shell reports the same death as 143), and SQLite stays whole: the next writer takes the
+    lock, resumes the walk (files already embedded come back `unchanged`) and finishes it.
+
+    Land the stop in the model-load phase — the one window every platform must cross
+    (~800 MB of weights before the engine's first `file` event). Measured 2026-11-05 on a
+    warm box the whole scratch embed (8 files) finished *inside* 6 s, so `partial <
+    expected` is a timing fact of the cold runner, not a demand: `partial` may legitimately
+    be 0 (a job stopped before the engine's first `file` event completed zero files — that
+    is the truth, and the record says 0)."""
     idx = tmp_path / "resume-index"
-    cfg_dir = tmp_path / "resume-cfg"
     expected = sum(1 for f in scratch.rglob("*") if f.is_file())   # session scratch grows:
-    runner = JobRunner(_cfg(str(idx), (scratch,)), config_dir=str(cfg_dir))  # assert vs live
-    job_id = runner.start()["id"]
-    # Land the shutdown in the model-load phase — the one window every platform must
-    # cross (~800 MB of weights before the engine's first `file` event). The "embeds
-    # ~1 min" budget was Stage 8's cold measurement; measured 2026-11-05 on a warm box
-    # the whole scratch embed (8 files) finished *inside* 6 s — files_done 8/8 at the
-    # shutdown instant, and `partial < expected` became a timing assumption, not a fact.
-    # 1.0 s is under every measured embed phase on every platform, and above no load
-    # floor: the record is then partial = 0 (tolerated below) on a cold runner, a
-    # small partial on a warm one — the interrupted-then-resume contract holds both.
-    time.sleep(1.0)
-    runner.shutdown()                                 # this shutdown lands mid-walk
-    job = runner.job(job_id)
+    app = LiveApp(_cfg(idx, (scratch,)), config_dir=str(tmp_path / "resume-cfg"))
+    app.start()
+    job_id = app.client.post("/api/v1/index", json={}).json()["job"]["id"]
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:                          # wait for the writer to run
+        if app.client.get(f"/api/v1/jobs/{job_id}").json()["job"]["state"] == "running":
+            break
+        time.sleep(0.2)
+    time.sleep(1.0)                    # under every measured embed phase, above no load floor
+    began = time.monotonic()
+    rc = app.stop()                    # SIGTERM: `docker stop`'s own verb
+    took = time.monotonic() - began
+    assert rc in (-15, 143), f"the stop did not end on the signal (rc={rc})"
+    assert took < 90.0, f"the stop outlived the 90 s grace ({took:.1f} s)"
+    assert "Application shutdown complete" in app.tail(200_000)
+
+    app.restart()                      # the next boot: replay, then the resume
+    job = app.client.get(f"/api/v1/jobs/{job_id}").json()["job"]
     assert job["state"] == "interrupted"
     assert "stopped" in job.get("why", "")            # truthful: never success
     partial = job.get("files_done")
     assert partial is not None, "an interrupted record always carries its counters"
 
-    runner2 = JobRunner(_cfg(str(idx), (scratch,)), config_dir=str(tmp_path / "resume-cfg2"))
-    try:
-        # One writer, answered busy: a writer stopped mid-model-load keeps its flock for a
-        # moment while the engine closes its stream, and the server answers `busy` (the honest
-        # 409) for a request in that window. Measured: under machine load that window is
-        # seconds. The contract is "answered busy, then the next job runs the walk", so the
-        # resume is asked until it is accepted — not assumed to land on the first try.
-        deadline = time.monotonic() + 420.0
-        done = None
+    # One writer, answered busy: a writer stopped mid-model-load keeps its flock for a
+    # moment while the engine closes its stream, and the server answers `busy` (the honest
+    # 409) for a request in that window. Measured: under machine load that window is
+    # seconds. The contract is "answered busy, then the next job runs the walk", so the
+    # resume is asked until it is accepted — not assumed to land on the first try.
+    deadline = time.monotonic() + 420.0
+    done = None
+    while time.monotonic() < deadline:
+        started = app.client.post("/api/v1/index", json={})
+        if started.status_code == 409:
+            time.sleep(3.0)                                  # the writer is closing: the flock frees
+            continue
+        job2 = started.json()["job"]["id"]
+        while time.monotonic() < deadline and app.client.get(
+                f"/api/v1/jobs/{job2}").json()["job"]["state"] in ("queued", "running"):
+            time.sleep(2.0)
+        done = app.client.get(f"/api/v1/jobs/{job2}").json()["job"]
+        if done["state"] != "busy":
+            break
+        time.sleep(3.0)
+    assert done is not None and done["state"] == "done", done
+    assert done["searchable"] == expected and done["pending"] == 0  # index == the walk
+    assert done["vectors"] >= 10
+    # The engine's own arithmetic, measured in Stage 8 (8 + 7 = 15): the interrupted job
+    # embedded `partial` files, the resumed job embeds the REST, so the two records sum to
+    # the walk. `partial` may legitimately be 0 (see the model-load note above).
+    assert 0 <= partial < expected
+    assert partial + done["files_done"] >= expected
+    app.stop()
+
+
+def test_a_hard_killed_job_recovers_with_the_totals_the_log_last_saw(tmp_path, scratch):
+    """The durable half of the same rule, on the kill path: the engine's `idle` totals ride
+    in the log, so a record recovered after a hard kill is *interrupted* **and** carries
+    the last totals the engine published — not an empty shell. SIGKILL mid-embed is the
+    container SIGKILL past the grace; the next boot's replay is what answers.
+
+    The window is the engine's own: the kill must land after the first totals the engine
+    publishes and before the walk's last file. The scratch clip (every frame a segment)
+    keeps that window seconds wide on a warm box; a machine that beat the window on one
+    index gets a second and third attempt on fresh indexes, and the attempt count is
+    reported — the suite bars skips, and "the box was faster than the kill" is a fact to
+    print, not a green by construction."""
+    attempts = 0
+    for n in range(3):
+        attempts += 1
+        idx = tmp_path / f"kill-index-{n}"
+        config_dir = Path(tmp_path / f"kill-cfg-{n}")
+        app = LiveApp(_cfg(idx, (scratch,)), config_dir=str(config_dir))
+        app.start()
+        job_id = app.client.post("/api/v1/index", json={}).json()["job"]["id"]
+        deadline = time.monotonic() + 400.0
+        window = False
         while time.monotonic() < deadline:
-            job2 = runner2.start()["id"]
-            while time.monotonic() < deadline and runner2.job(job2)["state"] in ("queued", "running"):
-                time.sleep(2.0)
-            done = runner2.job(job2)
-            if done["state"] != "busy":
+            job = app.client.get(f"/api/v1/jobs/{job_id}").json()["job"]
+            if job["state"] in ("done", "interrupted", "busy"):
+                break                                  # the box beat the window: retry
+            if job.get("files_done"):                  # the engine published its first totals
+                window = True
                 break
-            time.sleep(3.0)                       # the writer is closing: the flock frees
-        assert done["state"] == "done"
-        assert done["searchable"] == expected and done["pending"] == 0  # index == the walk
-        assert done["vectors"] >= 10
-        # The engine's own arithmetic, measured in Stage 8 (8 + 7 = 15): the interrupted job
-        # embedded `partial` files, the resumed job embeds the REST (files already in the index
-        # come back `unchanged`, not `done`), so the two records sum to the walk. `partial` may
-        # legitimately be **0**: this shutdown lands inside the model load that opens every
-        # walk (a job stopped before the engine's first `file` event has completed zero
-        # files — that is the truth, and the record says 0: jobs.py publishes the counters
-        # when the walk starts). Demanding `partial > 0` was a timing assumption, not a fact.
-        assert 0 <= partial < expected
-        assert partial + done["files_done"] >= expected
-    finally:
-        runner2.shutdown()
+            time.sleep(0.2)
+        if not window:
+            app.stop(sig=signal.SIGKILL)
+            continue
+        app.stop(sig=signal.SIGKILL)                    # the grace is over: hard kill
+        last = _log_tail_lines(config_dir, job_id)[-1]
+        assert last["state"] == "running", "the kill must leave the log's last line mid-run"
+        app.restart()
+        recovered = app.client.get(f"/api/v1/jobs/{job_id}").json()["job"]
+        assert recovered["state"] == "interrupted", recovered    # never success (README §5)
+        for key in ("files", "files_done", "vectors", "pending", "searchable"):
+            assert recovered.get(key) == last.get(key), (key, recovered.get(key), last.get(key))
+        app.stop()
+        return
+    pytest.fail(f"the embed finished before the kill window closed on all {attempts} attempts")
 
 
 def test_the_job_log_rotates_and_history_survives_rotation(scratch, scratch_index, tmp_path):
     """Stage 8: the job log rotates at size (`DIGUP_SERVER_JOB_LOG_SIZE`); replay reads
-    ALL rotations oldest-first, so the job history outlives any rotation."""
+    ALL rotations oldest-first, so the job history outlives any rotation. Live shape:
+    six jobs with a 900-byte ceiling, then the next boot's `GET /api/v1/jobs` shows
+    every one of them, `done`, none ghosted."""
     folder, _ = scratch_index
-    cfg = str(tmp_path / "rot-cfg")
-    runner = JobRunner(_cfg(folder, (scratch,)), config_dir=cfg, log_rotate_bytes=900)
+    config_dir = tmp_path / "rot-cfg"
     ids = []
-    for _ in range(6):
-        job_id = runner.start()["id"]
-        ids.append(job_id)
-        deadline = time.monotonic() + 120.0
-        while time.monotonic() < deadline and runner.job(job_id)["state"] in ("queued", "running"):
-            time.sleep(0.5)
-        assert runner.job(job_id)["state"] == "done"
-    runner.shutdown()
-
-    files = [f.name for f in (tmp_path / "rot-cfg").iterdir() if f.name.startswith("jobs.jsonl")]
-    assert len(files) >= 2                                          # rotation happened
-    replay = JobRunner(_cfg(folder, (scratch,)), config_dir=cfg, log_rotate_bytes=900)
-    try:
-        history = {j["id"]: j["state"] for j in replay.jobs()}
+    with live_server(_cfg(folder, (scratch,)), config_dir=str(config_dir),
+                     env_extra={"DIGUP_SERVER_JOB_LOG_SIZE": "900"}) as c:
+        for _ in range(6):
+            job_id = c.post("/api/v1/index", json={}).json()["job"]["id"]
+            ids.append(job_id)
+            deadline = time.monotonic() + 300.0
+            while time.monotonic() < deadline:
+                state = c.get(f"/api/v1/jobs/{job_id}").json()["job"]["state"]
+                if state in ("done", "interrupted", "busy"):
+                    break
+                time.sleep(0.5)
+            assert state == "done", c.get(f"/api/v1/jobs/{job_id}").json()
+    files = [f.name for f in config_dir.iterdir() if f.name.startswith("jobs.jsonl")]
+    assert len(files) >= 2, files                                   # rotation happened
+    with live_server(_cfg(folder, (scratch,)), config_dir=str(config_dir),
+                     env_extra={"DIGUP_SERVER_JOB_LOG_SIZE": "900"}) as replay:
+        history = {j["id"]: j["state"] for j in replay.get("/api/v1/jobs").json()["jobs"]}
         assert set(ids) <= set(history)                             # every job visible
-        assert all(state == "done" for state in history.values())  # none ghosted, none lost
-    finally:
-        replay.shutdown()
-
-
-def test_the_knobs_are_read_from_the_environment(scratch, scratch_index):
-    """`DIGUP_SERVER_BACKFILL=0` reaches the engine argv (IndexService's `--backfill`
-    off) and `DIGUP_SERVER_JOB_LOG_SIZE` reaches the runner — the settings are env-
-    driven, per `.env.example`; defaults stay the shipping ones (backfill on, 1 MiB)."""
-    folder, _ = scratch_index
-    saved = {k: os.environ.get(k) for k in
-             ("DIGUP_SERVER_BACKFILL", "DIGUP_SERVER_JOB_LOG_SIZE", "DIGUP_SERVER_PREWARM")}
-    os.environ["DIGUP_SERVER_BACKFILL"] = "0"
-    os.environ["DIGUP_SERVER_JOB_LOG_SIZE"] = "5000"
-    os.environ["DIGUP_SERVER_PREWARM"] = "0"
-    try:
-        with TestClient(create_app(_cfg(folder, (scratch,)))) as c:
-            runner = c.app.state.jobs
-            assert runner._backfill is False
-            assert runner._rotate == 5000
-        cfg = EngineConfig(index=str(folder), roots=(str(scratch),))
-        assert "--backfill" not in cfg.index_argv()
-        assert "--backfill" in cfg.index_argv(backfill=True)
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-
-
-def test_shutdown_mid_job_finishes_and_marks_the_job_interrupted(scratch, scratch_index, tmp_path):
-    """The reviewer's repro of a self-deadlock: `shutdown()` called `_mark()` from inside
-    `with self._lock:` and `_mark` takes that same plain (non-reentrant) Lock — a docker
-    stop while a job was running hung the lifespan forever (job never logged *interrupted*,
-    `service.quit()` never ran, and every job poll consumed a threadpool thread until the
-    API stopped answering). The shape that hits it: a job whose remaining work outlives
-    the worker's join grace — one long file's embed on a 15 s stop."""
-    folder, _ = scratch_index
-    config_dir = tmp_path / "shutdown-cfg"
-    runner = JobRunner(_cfg(folder, (scratch,)), config_dir=str(config_dir))
-    runner._run_one = lambda job_id: time.sleep(25.0)     # outlives the 20 s join grace
-    job = runner.start()["id"]
-    time.sleep(0.5)                                       # the worker has picked it up
-    began = time.monotonic()
-    runner.shutdown()                                     # deadlocked: this never returns
-    assert time.monotonic() - began < 30.0, "shutdown self-deadlocked (jobs.py:136/248)"
-    assert runner.job(job)["state"] == "interrupted"      # README §5, on the stop path
-    assert runner.job(job).get("why") == "server stopped"
-
-
-def test_a_crashing_job_runner_leaves_indexing_alive(scratch, scratch_index, tmp_path):
-    """`prewarm` answers with a 60 s TimeoutError — a `TimeoutError` is NOT a
-    `RuntimeError`, and the old `except RuntimeError` let it (and any other escape from
-    `_run_one`, e.g. an OSError from spawn) kill the worker thread silently: `_active`
-    stayed set forever, every later `POST /index` answered 409 naming a job that could
-    never run, and the queued job never left `queued`. Recovery was a container restart."""
-    folder, _ = scratch_index
-    config_dir = tmp_path / "crash-cfg"
-    runner = JobRunner(_cfg(folder, (scratch,)), config_dir=str(config_dir))
-    state = {"first": True}
-
-    def crash_once(job_id):
-        if state["first"]:
-            state["first"] = False
-            raise TimeoutError("search-service: no reply to 'prewarm' within 60 s")
-        JobRunner._run_one(runner, job_id)                # the real path from here on
-
-    runner._run_one = crash_once
-    first = runner.start()["id"]
-    deadline = time.monotonic() + 30.0
-    while time.monotonic() < deadline and runner.job(first)["state"] == "queued":
-        time.sleep(0.2)
-    assert runner.job(first)["state"] == "interrupted"    # honest, not wedged
-    assert "prewarm" in runner.job(first).get("why", "")
-    assert runner._worker.is_alive()                      # the thread SURVIVED the crash
-    second = runner.start()["id"]                         # old code: JobBusy forever here
-    deadline = time.monotonic() + 300.0
-    while time.monotonic() < deadline and runner.job(second)["state"] in ("queued", "running"):
-        time.sleep(0.5)
-    assert runner.job(second)["state"] == "done"          # indexing works after the crash
-    runner.shutdown()
-
-
-def test_a_prewarm_timeout_after_done_keeps_the_job_done(scratch, scratch_index, tmp_path):
-    """A job is *done* when the writer finished: the refresh behind it (reload →
-    prewarm) timing out is a note on a done job — never a dead runner thread, never a
-    state that claims more than happened."""
-    folder, _ = scratch_index
-    config_dir = tmp_path / "prewarm-cfg"
-
-    def after_done():
-        raise TimeoutError("search-service: no reply to 'prewarm' within 60 s")
-
-    runner = JobRunner(_cfg(folder, (scratch,)), config_dir=str(config_dir),
-                       after_done=after_done)
-    job = runner.start()["id"]
-    deadline = time.monotonic() + 300.0
-    while time.monotonic() < deadline and runner.job(job)["state"] in ("queued", "running"):
-        time.sleep(0.5)
-    done = runner.job(job)
-    assert done["state"] == "done"
-    assert "searcher refresh deferred" in done.get("why", "")
-    assert runner._worker.is_alive()
-    runner.shutdown()
-
-
-def test_replay_ignores_lines_that_are_not_job_records(scratch, scratch_index, tmp_path):
-    """A hand-edited/merged log must not brick the boot: the old replay did
-    `record["id"]` on any parsed JSON — a bare `5` raised, `__init__` propagated, and
-    the app refused to start. Torn tails and non-record lines are skipped; the one
-    real `running` record still recovers as *interrupted*."""
-    folder, _ = scratch_index
-    config_dir = tmp_path / "junk-cfg"
-    config_dir.mkdir()
-    (config_dir / "jobs.jsonl").write_text(
-        "[1, 2, 3]\n5\nnull\n\"a string\"\n{\"state\":\"running\"}\n"   # valid JSON, not records
-        '{"id":"abc123","state":"running","started":0}\n'
-        '{"id":"real", "state":"done", "ended":1}\n'
-        "truncat",                                                       # torn tail
-        encoding="utf-8")
-    runner = JobRunner(_cfg(folder, (scratch,)), config_dir=str(config_dir))
-    assert runner.job("abc123")["state"] == "interrupted"
-    assert runner.job("real")["state"] == "done"
-    runner.shutdown()
+        assert all(state == "done" for jid, state in history.items() if jid in ids)

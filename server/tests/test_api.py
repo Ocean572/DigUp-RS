@@ -11,12 +11,19 @@ made them, minus the protocol's own `id` bookkeeping.
 
 from __future__ import annotations
 
+import struct
+import threading
+import time
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from digup_server.api import SearchRequest, create_app
+# The live shape (plan P3): the shipping `digup-server` binary over HTTP — the suite is a
+# thin client of the product, the same relationship every UI has to it. The server's
+# helpers are its own children (ParentWatch's chain), and the fixture's teardown is
+# SIGTERM: the measured stop contract (interrupted + 143 inside the grace).
+from conftest import _cfg
+from support import LiveApp, live_server
 
 # The three wakeboard media — the corpus's planted answer to "wakeboarding". Their ORDER
 # is not portable: the embedding matmul moves with CPU features. Measured 2026-11-04 on
@@ -31,11 +38,67 @@ WAKEBOARD_TOP3 = {"wakeboarding-vienna.webm", "wakeboard-logan.jpg", "wakeboardi
 
 
 @pytest.fixture(scope="module")
-def client(corpus, index):
-    from conftest import _cfg
-    app = create_app(_cfg(index, (corpus,)))
-    with TestClient(app) as c:          # lifespan: spawn search-service, quit() on exit
+def client(corpus, index, tmp_path_factory):
+    with live_server(_cfg(index, (corpus,)),
+                     config_dir=str(tmp_path_factory.mktemp("api-config"))) as c:
         yield c
+
+
+@pytest.fixture(scope="module")
+def big_photo(tmp_path_factory):
+    """One indexed photo BIGGER than the 8 MiB range cap, in its own tree and index.
+
+    Written in Python as a 4096×4096 24-bit BMP (50 MB, decodable by the engine's stb
+    seam), named `big png.png` so the query's words are the name's own FTS tokens
+    (`big`, `png` — the name segment splits on spaces and slashes). A fixture that
+    *renders* with ffmpeg needs lavfi: the payload's ffmpeg is decode-only (measured:
+    the mandelbrot source dies with exit 234 on it), and the suite must not grow a
+    dependency on an apt ffmpeg inside the harness image for one fixture. A BMP is
+    dependency-free, past the cap by construction, and keyword-matchable by name."""
+    root = tmp_path_factory.mktemp("big-photo-tree")
+    path = root / "big png.png"
+    width = height = 4096
+    row = b"\x13\x37\x59" * width                      # 24-bit BGR; 12288 B ≡ 0 (mod 4)
+    pixels = row * height
+    header = struct.pack("<2sIHHI", b"BM", 54 + len(pixels), 0, 0, 54)
+    header += struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0,
+                          len(pixels), 0, 0, 0, 0)
+    path.write_bytes(header + pixels)
+    assert path.stat().st_size > 8 * 1024 * 1024       # the fixture's promise, by size
+    folder = tmp_path_factory.mktemp("big-photo-index")
+    app = LiveApp(_cfg(folder, (root,)), config_dir=str(tmp_path_factory.mktemp("big-photo-config")))
+    app.start()
+    try:
+        job = app.client.post("/api/v1/index", json={})
+        assert job.status_code == 202, job.text
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            st = app.client.get("/api/v1/status").json()
+            if st.get("pending") == 0 and st.get("searchable", 0) >= 1:
+                break
+            time.sleep(1)
+        reply = app.client.post("/api/v1/search", json={"q": "big png", "limit": 10}).json()
+        ids = [h["media_id"] for h in reply["hits"] if h.get("kind") == "image"]
+        assert ids, "no image handle issued for the big photo"
+        yield app, ids[0]
+    finally:
+        app.stop()
+
+
+@pytest.fixture(scope="module")
+def deep_tree(tmp_path_factory):
+    """A tree whose engine WALK takes seconds: 300 nested folders × 100 files. The
+    busy-estimate rule (one crawl server-wide) and the estimate-timeout knob are only
+    observable on a walk that outlives a burst of requests: 12 threads fire inside
+    milliseconds, the walk takes ~1 s, so the overlap — the 409 — is guaranteed, and a
+    0.01 s ceiling cannot fit a walk of 30k files (the 502 half)."""
+    root = tmp_path_factory.mktemp("deep-tree")
+    for d in range(300):
+        sub = root / f"d{d:03d}"
+        sub.mkdir()
+        for f in range(100):
+            (sub / f"f{f:03d}.txt").write_text("", encoding="utf-8")
+    return root
 
 
 def paths(hits):
@@ -98,7 +161,9 @@ def test_the_default_limit_is_the_engines_default(client):
     client that names no limit gets the engine's answer, not a shorter one — the server
     invents no cap of its own. Pinned twice: the typed default, and the reply on the same
     query against an explicit 40 (the UI sends 40 explicitly, so nothing client-side moves)."""
-    assert SearchRequest.model_fields["limit"].default == 40
+    # (the typed default is the binary's own constant — crates/server pins 40 in
+    # `cargo test`; what this suite can see is that an unnamed limit and an
+    # explicit 40 answer identically, which is the "server invents no cap" fact.)
     quiet = client.post("/api/v1/search", json={"q": "wakeboarding"}).json()
     explicit = client.post("/api/v1/search", json={"q": "wakeboarding", "limit": 40}).json()
     assert paths(quiet["hits"]) == paths(explicit["hits"])
@@ -159,37 +224,16 @@ def test_openapi_is_the_versioned_public_surface(client):
         {p.rsplit("/", 1)[1] for p in spec["paths"]}
 
 
-def test_engine_refusal_becomes_a_503_not_a_keyerror(corpus, index):
-    """A searcher mid-transition answers `{"ok":false,"error":…}` — the Stage-10 battery
-    hit exactly that as a 500 (`KeyError: 'hits'` in `api.py`). The refusal is the
-    engine's own words; they surface verbatim as a 503, and nothing reads `hits`/`files`
-    out of an answer that has none. No lifespan, no engine: the injected service refuses."""
-    from conftest import _cfg
-    from digup_server.engine.protocol import EngineRefused
-
-    app = create_app(_cfg(index, (corpus,)))
-
-    class RefusingSearch:
-        def search(self, *args, **kwargs):
-            raise EngineRefused("search", "index is reloading, try again")
-        def status(self):
-            raise EngineRefused("status", "index is reloading, try again")
-
-    app.state.search = RefusingSearch()
-    c = TestClient(app)                      # no `with`: no lifespan — the state stays
-    r = c.post("/api/v1/search", json={"q": "anything", "limit": 1})
-    assert r.status_code == 503
-    assert "index is reloading" in r.json()["detail"]
-    assert c.get("/api/v1/status").status_code == 503
-
-
+# The refusal path (`EngineRefused` → 503 with the engine's sentence verbatim) moved to
+# `cargo test -p digup-server` with the wrapper: the adapter raises it (pinned below, the
+# harness layer survives the flip), and the HTTP mapping is the binary's own code path.
 def test_a_refusal_reply_is_raised_in_the_adapter(index, corpus):
     """The same fact one layer down: `SearchService` raises `EngineRefused` on an
     `ok:false` reply (the engine's refusal, `SearchService.swift:106,115`) — stub proc,
     no engine, the reply is the engine's refusal shape verbatim."""
     from conftest import _cfg
-    from digup_server.engine.protocol import EngineRefused
-    from digup_server.engine.search import SearchService
+    from engine.protocol import EngineRefused
+    from engine.search import SearchService
 
     svc = SearchService(_cfg(index, (corpus,)))
 
@@ -222,134 +266,70 @@ def test_startup_prewarms_the_searcher(client):
 # ── review-round units (this file's fixtures stay real: app + engine, no mocks) ────────
 
 
-def test_open_and_huge_ranges_are_capped_at_the_served_span():
-    """`bytes=0-` is what every browser media element sends first. Uncapped, it read
-    the whole file into RAM (a 20 GB clip asked for a 20 GB buffer). Open ranges,
-    huge explicit ranges and huge suffix ranges all cap at MAX_RANGE_SPAN; the
-    200 (no-range) path is untouched — `save as` still gets the whole file."""
-    from digup_server.api import parse_range, MAX_RANGE_SPAN
-    big, huge = (1 << 30), (2 << 30)
-    assert parse_range("bytes=0-", huge) == (0, MAX_RANGE_SPAN - 1)
-    assert parse_range("bytes=-5000000000", big) == (big - MAX_RANGE_SPAN, big - 1)
-    assert parse_range("bytes=1000-9000000000", huge) == (1000, 1000 + MAX_RANGE_SPAN - 1)
-    assert parse_range("bytes=0-99", 500) == (0, 99)              # normal spans untouched
-    assert parse_range("bytes=-40", 500) == (460, 499)
-
-
-def test_hit_cache_is_a_true_lru_get_refreshes():
-    """The docstring promised LRU; eviction was insertion-order. The UI re-searches
-    per keystroke-pause (up to 40 handles per search): after ~26 searches the handles
-    of the rows on screen were evicted, and their thumbnails/preview/file 404'd with
-    no recovery path. `get()` must move_to_end."""
-    from digup_server.api import HitCache
-    cache = HitCache(capacity=3)
-    a = cache.put("/a.jpg", "image", 1, None, False)
-    b = cache.put("/b.jpg", "image", 2, None, False)
-    c = cache.put("/c.jpg", "image", 3, None, False)
-    assert cache.get(a) is not None                              # refresh a
-    d = cache.put("/d.jpg", "image", 4, None, False)              # evicts b, not a
-    assert cache.get(a) is not None and cache.get(c) is not None
-    assert cache.get(d) is not None
-    assert cache.get(b) is None                                  # the LRU victim: b
-
-
-def test_search_reply_publishes_fields_this_model_has_never_seen():
-    """`extra="allow"`: an engine field this model has never seen rides through to
-    the client, not dropped at the Pydantic boundary (hits already ride raw; the
-    top level must answer the engine's growth the same way)."""
-    from digup_server.api import SearchReply
-    reply = SearchReply(hits=[], strong=0, meaning=True, ms={}, fresh_engine_field={"a": 1})
-    assert reply.model_dump()["fresh_engine_field"] == {"a": 1}
-
-
-def test_a_slow_estimate_answers_busy_never_parallel(client, monkeypatch):
-    """`estimate` walks the whole tree (120 s timeout) as a sync endpoint: a second
-    UI tab, a user retry, a retry during a job all stacked full-tree crawls with no
-    mutual exclusion. Now the second click is a 409, the engine's one-crawl rule."""
-    import threading
-    import time
-    import digup_server.api as api_mod
-
-    def crawling(config, **kwargs):
-        time.sleep(3.0)                                          # a slow crawl, in flight
-        return [{"path": str(config.roots[0]), "files": 15}]
-
-    monkeypatch.setattr(api_mod, "estimate_lines", crawling)
-    box = []
-    first = threading.Thread(target=lambda: box.append(
-        client.post("/api/v1/estimate", json={})))
-    first.start()
-    time.sleep(0.3)                                              # crawl #1 running
-    second = client.post("/api/v1/estimate", json={})
-    assert second.status_code == 409
-    assert "already running" in second.json()["detail"]
-    first.join(30)
-    assert box[0].status_code == 200                             # crawl #1 finished honest
-    third = client.post("/api/v1/estimate", json={})
-    assert third.status_code == 200                              # the lock released
-
-
-def test_the_estimate_timeout_is_an_operator_knob(client, monkeypatch):
+def test_open_and_huge_ranges_are_capped_at_the_served_span(big_photo, tmp_path_factory):
+    """`bytes=0-` is what every browser media element sends first. Uncapped, it read the
+    whole file into RAM (a 20 GB clip asked for a 20 GB buffer). Open ranges, huge
+    explicit ranges and huge suffix ranges all cap at the served span (8 MiB,
+    `media.rs:MAX_RANGE_SPAN`). Observable over HTTP: a media file BIGGER than the cap,
+    asked for ranges that outrange it — every answer is 206 and the served span is
+    exactly the cap, never the whole file; a normal short span stays untouched."""
+    app, media_id = big_photo
+    whole = app.client.get(f"/api/v1/media/{media_id}/file")
+    size = len(whole.content)
+    assert size > 8 * 1024 * 1024, size                      # the fixture's promise
+    huge = app.client.get(f"/api/v1/media/{media_id}/file",
+                          headers={"range": "bytes=1000-9000000000"})
+    assert huge.status_code == 206
+    unit, rng_total = huge.headers["content-range"].split(" ")   # "bytes" + "1000-…/size"
+    rng, total = rng_total.split("/")
+    assert unit == "bytes" and int(total) == size                 # the cap names the real file
+    start, end = (int(v) for v in rng.split("-"))
+    assert start == 1000 and end - start + 1 == 8 * 1024 * 1024
+    assert len(huge.content) == 8 * 1024 * 1024
+    open_range = app.client.get(f"/api/v1/media/{media_id}/file", headers={"range": "bytes=0-"})
+    assert open_range.status_code == 206
+    assert len(open_range.content) == 8 * 1024 * 1024
+    suffix = app.client.get(f"/api/v1/media/{media_id}/file", headers={"range": "bytes=-40"})
+    assert suffix.status_code == 206 and len(suffix.content) == 40
+    short = app.client.get(f"/api/v1/media/{media_id}/file", headers={"range": "bytes=0-99"})
+    assert short.status_code == 206 and len(short.content) == 100      # normal spans untouched
+def test_a_slow_estimate_answers_busy_never_parallel(deep_tree, tmp_path_factory):
+    """`estimate` walks the whole tree as a sync endpoint with a server-wide one-crawl
+    rule: a second UI tab, a user retry, a retry during a crawl must never stack
+    full-tree crawls. Observable: fire a crowd of estimates at a tree whose crawl takes
+    seconds — the first answers the engine's forecast, every request that overlapped it
+    answers 409 quoting the rule, and a later one runs clean."""
+    with live_server(_cfg(tmp_path_factory.mktemp("busy-config-index"), (deep_tree,)),
+                     config_dir=str(tmp_path_factory.mktemp("busy-config"))) as c:
+        results = []
+        threads = [threading.Thread(target=lambda b=results: b.append(
+            c.post("/api/v1/estimate", json={}))) for _ in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        codes = sorted(r.status_code for r in results)
+        assert 200 in codes and codes.count(200) < len(codes), codes   # the crawl, and the refusals
+        for r in results:
+            if r.status_code == 409:
+                assert "already running" in r.json()["detail"]
+        later = c.post("/api/v1/estimate", json={})
+        assert later.status_code == 200                                 # the lock released
+def test_the_estimate_timeout_is_an_operator_knob(deep_tree, tmp_path_factory):
     """The 120 s default fits corpus-sized trees; a real media tree on a spinning disk
     needs minutes (measured 2026-11-04: 187k files on a 2 TB HDD crossed the default →
-    502). The route reads DIGUP_SERVER_ESTIMATE_TIMEOUT_S per request — default 120
-    keeps every existing pin, an operator's value reaches the CLI call."""
-    import digup_server.api as api_mod
-
-    seen = {}
-
-    def counted(config, **kwargs):
-        seen["timeout"] = kwargs.get("timeout")
-        return [{"path": str(config.roots[0]), "files": 15}]
-
-    monkeypatch.setattr(api_mod, "estimate_lines", counted)
-    assert client.post("/api/v1/estimate", json={}).status_code == 200
-    assert seen["timeout"] == 120.0                              # the default, unchanged
-    monkeypatch.setenv("DIGUP_SERVER_ESTIMATE_TIMEOUT_S", "900")
-    assert client.post("/api/v1/estimate", json={}).status_code == 200
-    assert seen["timeout"] == 900.0                              # the operator's value
-
-
-def test_a_cli_timeout_surfaces_as_a_quoted_502_not_a_500(client, monkeypatch):
-    """`subprocess.TimeoutExpired` is a SubprocessError, not a TimeoutError — no
-    handler covered it, so a `digup status` stalling behind the writer's WAL, or an
-    estimate crossing its 120 s, died as a bare 500 traceback. This file's own rule
-    (api.py:6): quote the engine. The mapping lives in cli.run, where it covers
-    every one-shot call at once."""
-    import subprocess
-    import digup_server.engine.cli as cli_mod
-
-    def timed_out(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, 120)
-
-    monkeypatch.setattr(cli_mod.subprocess, "run", timed_out)
-    reply = client.post("/api/v1/estimate", json={})
-    assert reply.status_code == 502
-    assert "timed out" in reply.json()["detail"]
-
-
-def test_the_cli_identity_is_served_from_a_short_cache():
-    """The UI polls /status every 15 s and the container HEALTHCHECK hits /health
-    every 30 s — each one used to spawn a `digup status` doing real SQLite counting.
-    The identity fields move slowly, so they ride a TTL cache: a poll costs an
-    argument, not a subprocess. A TTL of 0 is the dev escape hatch (every poll
-    re-reads, e.g. while watching a job's counts land)."""
-    from digup_server.api import StatusCache
-
-    calls = []
-
-    def fetch(config):
-        calls.append(config)
-        return {"engine": {"fingerprints": "embeddinggemma-2@2188ac1d"}}
-
-    cache = StatusCache(fetch, ttl_s=60.0)
-    first = cache.get("cfg")
-    second = cache.get("cfg")
-    assert len(calls) == 1                      # the second poll: the cache, not a subprocess
-    assert first is second                      # the same identity dict, unchanged
-    assert first["engine"]["fingerprints"] == "embeddinggemma-2@2188ac1d"
-
-    live = StatusCache(fetch, ttl_s=0.0)        # TTL 0: every poll re-reads
-    live.get("cfg")
-    live.get("cfg")
-    assert len(calls) == 3                      # 1 + 2: nothing served stale
+    502). Observable: the knob is read at boot (the env the container ships), so a
+    server booted with a tiny ceiling answers a slow walk as a 502 quoting the timeout,
+    and the default boot answers the same tree clean."""
+    with live_server(_cfg(tmp_path_factory.mktemp("knob-index"), (deep_tree,)),
+                     config_dir=str(tmp_path_factory.mktemp("knob-config-tight")),
+                     env_extra={"DIGUP_SERVER_ESTIMATE_TIMEOUT_S": "0.01"}) as tight:
+        r = tight.post("/api/v1/estimate", json={})
+        assert r.status_code == 502, r.text
+        assert "timed out" in r.json()["detail"]
+    with live_server(_cfg(tmp_path_factory.mktemp("knob-index2"), (deep_tree,)),
+                     config_dir=str(tmp_path_factory.mktemp("knob-config-default"))) as open_book:
+        assert open_book.post("/api/v1/estimate", json={}).status_code == 200
+# The `subprocess.TimeoutExpired` → quoted 502 mapping is now observable through the
+# estimate-knob test above (a real crawl crossing a real ceiling): the 502 quote IS the
+# mapping, with no monkeypatch in sight.

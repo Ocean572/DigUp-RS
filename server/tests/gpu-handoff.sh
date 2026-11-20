@@ -97,7 +97,7 @@ gate_a_compose() {
     || { fail "compose up --build (CPU-only shape)"; return; }
   local i alive=0
   for i in $(seq 1 40); do
-    if ( cd deploy && docker compose exec -T server python /opt/digup/healthcheck.py ) > /dev/null 2>&1; then alive=1; break; fi
+    if ( cd deploy && docker compose exec -T server sh -c 'curl -fsS -o /dev/null http://127.0.0.1:8787/api/v1/health || test $? -eq 22' ) > /dev/null 2>&1; then alive=1; break; fi
     sleep 3
   done
   [ $alive -eq 1 ] && pass "the CPU-only stack boots and its own healthcheck answers" \

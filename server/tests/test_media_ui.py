@@ -23,23 +23,24 @@ from __future__ import annotations
 import re
 
 import pytest
-from fastapi.testclient import TestClient
 
 from conftest import _cfg
-from digup_server.api import create_app
+from support import live_server
 
 
 @pytest.fixture(scope="module")
-def media_client(corpus, index):
-    with TestClient(create_app(_cfg(index, (corpus,)))) as c:
+def media_client(corpus, index, tmp_path_factory):
+    with live_server(_cfg(index, (corpus,)),
+                     config_dir=str(tmp_path_factory.mktemp("media-ui-config"))) as c:
         yield c
 
 
 @pytest.fixture(scope="module")
-def doc_client(scratch, scratch_index):
+def doc_client(scratch, scratch_index, tmp_path_factory):
     """Same app shape over the scratch corpus — the one with a text document."""
     folder, _ = scratch_index
-    with TestClient(create_app(_cfg(folder, (scratch,)))) as c:
+    config = str(tmp_path_factory.mktemp("doc-config"))
+    with live_server(_cfg(folder, (scratch,)), config_dir=config) as c:
         yield c
 
 
@@ -415,7 +416,7 @@ def test_open_range_streams_the_video_rather_than_buffering_it(media_client):
     clip asked for a 20 GB read) — and answered 206 with the ENTIRE file, so seeking
     never streamed. Now: open ranges are capped at MAX_RANGE_SPAN and the span is
     streamed in chunks from its own file handle."""
-    from digup_server.api import MAX_RANGE_SPAN
+    MAX_RANGE_SPAN = 8 << 20                       # media.rs:MAX_RANGE_SPAN, the shipped cap
     hit = media_client.post("/api/v1/search",
                             json={"q": "wakeboarding", "kinds": ["video"], "limit": 1}
                             ).json()["hits"][0]
