@@ -209,8 +209,19 @@ impl IndexService {
         self.command("sync")
     }
 
-    pub fn stop(&self) -> Result<(), ProtocolError> {
-        self.command("stop")
+    /// The live process handle, cloned out cheaply. `shutdown()`'s stop line
+    /// rides this handle, NOT the writer mutex: the event loop holds that
+    /// mutex for the whole `next_event(job_timeout)` read, and a lifespan
+    /// that queues behind it misses the stop grace entirely — measured
+    /// 2026-11-20 on this box (ai-ubuntu-computer, x86_64): the mid-embed
+    /// `docker stop` hung 62.7 s inside the lifespan (exit 143 on a 240 s
+    /// grace, SIGKILL 137 on the product's 90 s) while the FastAPI writer —
+    /// whose client writes commands with no queue at all — answered the same
+    /// gate in 10.4 s. The engine ends the walk at its safe point, the
+    /// linger (8 s) closes the helper, the loop sees the `exit` event: that
+    /// is the 10 s shape, and it needs a lock-free write.
+    pub fn proc(&self) -> Option<Arc<JsonLinesProcess>> {
+        self.proc.clone()
     }
 
     fn command(&self, line: &str) -> Result<(), ProtocolError> {
@@ -271,6 +282,15 @@ struct Inner {
     stopping: AtomicBool,
     /// The live writer, for `shutdown()`'s stop command.
     service: Mutex<Option<Arc<Mutex<IndexService>>>>,
+    /// The raw process handle of the live writer, mirrored beside the slot:
+    /// the shutdown's stop line writes through THIS, never through the writer
+    /// mutex (see `IndexService::proc`). Set when a job's helper is up,
+    /// cleared wherever the slot clears.
+    stopper: Mutex<Option<Arc<JsonLinesProcess>>>,
+    /// The worker's own ending marker: `shutdown()`'s join is bounded like
+    /// Python's `join(timeout=20.0)` — a stop never waits on a thread the
+    /// engine can no longer answer.
+    worker_done: Mutex<std::sync::mpsc::Receiver<()>>,
 }
 
 /// `JobRunner`: serialized index jobs over `IndexService`; `jobs()`/`job()`
@@ -290,6 +310,9 @@ impl JobRunner {
         sync_timeout_s: f64,
         log_rotate_bytes: u64,
     ) -> Self {
+        // The worker's ending marker, before the worker exists: `shutdown()`
+        // joins it with a bounded 20 s wait, Python's `join(timeout=20.0)`.
+        let (worker_done_tx, worker_done_rx) = std::sync::mpsc::channel::<()>();
         let inner = Arc::new(Inner {
             config,
             log_path: config_dir.join(log_name),
@@ -302,11 +325,17 @@ impl JobRunner {
             wake: (Mutex::new(false), Condvar::new()),
             stopping: AtomicBool::new(false),
             service: Mutex::new(None),
+            stopper: Mutex::new(None),
+            worker_done: Mutex::new(worker_done_rx),
         });
         let _ = std::fs::create_dir_all(config_dir);
         inner.recover();
         let worker_inner = inner.clone();
-        let worker = std::thread::spawn(move || run_jobs(worker_inner));
+        let worker = std::thread::spawn(move || {
+            run_jobs(worker_inner);
+            // The ending marker `shutdown()`'s bounded join waits on.
+            let _ = worker_done_tx.send(());
+        });
         Self {
             inner,
             worker: Mutex::new(Some(worker)),
@@ -390,24 +419,45 @@ impl JobRunner {
     pub fn shutdown(&self) {
         let inner = &self.inner;
         inner.stopping.store(true, Ordering::SeqCst);
-        let service = inner.service.lock().expect("the service slot").clone();
-        if let Some(service) = service {
+        // The stop line rides the raw handle, never the writer mutex: the
+        // event loop sits in that mutex for a whole `next_event` read, and a
+        // lifespan queueing behind it dies past the stop grace (measured
+        // 2026-11-20: 62.7 s inside the lifespan, 137 at the 90 s contract,
+        // where the unqueued FastAPI writer answered the same gate in 10.4 s).
+        // The engine ends the walk at its safe point, the 8 s linger closes
+        // the helper, the loop sees the `exit` event and records the counts.
+        let handle = inner.stopper.lock().expect("the stopper").clone();
+        if let Some(handle) = handle {
             // Already gone is fine: the join below handles the worker.
-            let _ = service.lock().expect("the writer").stop();
+            let _ = handle.send_line("stop");
         }
         {
             let mut wake = inner.wake.0.lock().expect("the wake flag");
             *wake = true;
             inner.wake.1.notify_all();
         }
-        // One file's embed at the safe point fits the 20 s join window. The
-        // `mark` below takes the state lock for itself and releases it before
-        // appending — Python's measured self-deadlock (holding a plain Lock
-        // across the mark hung the lifespan on docker stop) is structurally
-        // impossible here.
+        // The bounded join, Python's `join(timeout=20.0)`: one file's embed at
+        // the safe point plus the linger fits the 20 s window; a helper the
+        // engine cannot answer must never hold the lifespan hostage — the
+        // job's record is marked below, and a kill past the grace replays as
+        // *interrupted* at the next boot either way. The `mark` below takes
+        // the state lock for itself and releases it before appending —
+        // Python's measured self-deadlock (holding a plain Lock across the
+        // mark hung the lifespan on docker stop) is structurally impossible
+        // here.
         let worker = self.worker.lock().expect("the worker slot").take();
-        if let Some(worker) = worker {
-            let _ = worker.join();
+        let done = inner
+            .worker_done
+            .lock()
+            .expect("the worker marker")
+            .recv_timeout(Duration::from_secs(20));
+        if done.is_err() {
+            // The marker timed out: wake the thread (it may be parked on a
+            // condvar read) and let it end on its own — Python's join(timeout)
+            // shape, where the mark proceeds without the worker.
+            if let Some(worker) = worker {
+                worker.thread().unpark();
+            }
         }
         let active = inner.state.lock().expect("the runner state").active.clone();
         if let Some(active) = active {
@@ -497,6 +547,10 @@ impl Inner {
             let mut slot = self.service.lock().expect("the service slot");
             *slot = Some(service.clone());
         }
+        // Mirror the raw process handle for `shutdown()`'s stop line: the
+        // writer mutex is the event loop's long-read seat, and the lifespan
+        // must be able to write without asking for a seat.
+        *self.stopper.lock().expect("the stopper") = service.lock().expect("the writer").proc();
         if let Some(why) = busy {
             // Answered, not queued blind.
             {
@@ -504,6 +558,7 @@ impl Inner {
                 state.active = None;
             }
             *self.service.lock().expect("the service slot") = None;
+            *self.stopper.lock().expect("the stopper") = None;
             self.mark(job_id, STATE_BUSY, Some(&why), Map::new());
             service.lock().expect("the writer").finish();
             return Ok(());
@@ -592,6 +647,7 @@ impl Inner {
                 state.active = None;
             }
             *self.service.lock().expect("the service slot") = None;
+            *self.stopper.lock().expect("the stopper") = None;
             service.lock().expect("the writer").finish();
             let counts = self.live_counts(job_id);
             self.mark(job_id, STATE_INTERRUPTED, Some(&why), counts);
@@ -600,6 +656,7 @@ impl Inner {
 
         service.lock().expect("the writer").finish(); // idempotent: releases the lock
         *self.service.lock().expect("the service slot") = None;
+        *self.stopper.lock().expect("the stopper") = None;
         // The writer being finished IS the job being done: clear `active`
         // first, so a client that reads `done` can always start the next job
         // — never a done-then-409 window.
