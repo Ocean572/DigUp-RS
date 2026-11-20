@@ -2,6 +2,39 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-19 — P0 green: the Packages chain is green on all six arms (`cb7b0fc`, run 16)
+
+Run 16 @ `cb7b0fc`: `linux` build ✓ · `windows` installed-gate ✓ · `macos` .app+.dmg+
+signature ✓ · `linux-check` on ubuntu:22.04 ✓ · ubuntu:24.04 ✓ · debian:12 ✓. Each
+installed gate runs the shipped package hidden: first launch finds `recipe.txt` by
+meaning (panel facts, 5/5 vectors), the second launch renders the recording's audio
+preview, the daemon probe answers `sync files:5 pending:5 → model → file… → idle
+vectors:5`, and the one-shot re-index reports `5 unchanged`.
+
+Engine fix of the campaign (measured on the Windows installed gate, unit-gated on
+`windows-latest`, verified on Linux daemon probes): **one canonical path form on
+Windows** — Foundation spelled every path with slashes in the Swift era; Rust's
+`PathBuf::push`/`canonicalize` spell backslashes, and the byte-order scope ranges
+split rows from counters and re-sync ('UNIQUE constraint failed: files.path').
+`paths::to_slashes` is now the ONE form at the engine's boundaries (crawler rows,
+standardize, real_path, the store's root intake, the three `home()`s); every piece
+is `cfg!(windows)`; unix bytes untouched (the function is the identity there).
+
+CI fixes along the chain: apt Azure mirrors + `Acquire::Retries` (hosted runners
+live in Azure); Vulkan SDK rides `actions/cache` with resumable curl; the job
+containers run as root with no `sudo` (`as_root` guard) and Debian 12 keeps its
+sources deb822-only (guarded sed) and ships no curl (Tools installs it); the
+gate's `.deb` installs `--no-install-recommends` (the full install pulls
+xdg-desktop-portal → `fusermount3` fails without `/dev/fuse` on the 22.04 runner
+hosts); the hidden launches run `GST_AUTO_AUDIO_SINK=fakesink` +
+`WEBKIT_DISABLE_COMPOSITING_MODE=1` (no audio device / no DRI3 software GL in
+containers — the two stalls that made the audio-preview step flaky).
+
+Gate discipline recorded from this campaign: engine edits push to the Engine CI
+(fmt + clippy -D + `cargo test --workspace`, the gates matrix runs `cfg(windows)`
+tests on windows-latest) before Packages is dispatched — `cargo fmt` parses, it
+does not typecheck, and the RAM rule keeps cargo check off this box.
+
 ## 2026-11-18 — plan filed: Python-free product (flip to the Rust server), gated on the Packages chain
 
 `docs/implementation/python-free-plan.md`: the deploy flip (stage-6 Rust-server image, P0
