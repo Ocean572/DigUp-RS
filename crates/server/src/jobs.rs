@@ -876,7 +876,12 @@ impl Inner {
                     .to_string();
                 last.insert(id.clone(), state);
                 let mut state_slot = self.state.lock().expect("the runner state");
-                if !state_slot.order.contains(&id) {
+                // `id` is already `&String` here (the pattern matches through `record.get()`,
+                // match ergonomics): `contains(id)` is the plain form the original had —
+                // `contains(&id)` is `&&String` and clippy's `needless_borrow` says so
+                // (measured 2026-11-20: Engine CI run 44666076863, the Format gate green,
+                // Clippy red on exactly this line, reproduced in Docker on this box).
+                if !state_slot.order.contains(id) {
                     state_slot.order.push(id.clone());
                 }
                 state_slot.by_id.insert(id.clone(), record);
