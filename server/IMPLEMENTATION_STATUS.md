@@ -6,9 +6,11 @@ One document, kept current (docs/implementation/README.md §10). Newest first.
 
 **Plan status: P0–P4 done.** P1 gates, P2 compose/CI flip, P3 FastAPI retirement (the
 contract suite drives the shipping `digup-server` binary), P4 the record — all measured,
-all pushed. CI at tip `6fff6a6`: Engine run 44667069057 **success** (fmt + clippy
-`-D warnings` + `cargo test --workspace`); Server run 44667069026 green in progress at
-write time (the suite numbers below are from the same tree, measured on this box).
+all pushed. CI at tip `548f1aa`: Engine run 44668426263 **success** (fmt + clippy
+`-D warnings` + `cargo test --workspace`, done 03:35:09); Server run 44668426231
+**success** (done 04:55:34 — contract suite 03:44–03:51 = 6 min 56 s, headless proof,
+compose-shape validation, the boot/UI/stop gate; all 19 steps green). The suite numbers
+below are from the same tree, measured on this box.
 
 **Dependency audit — no unused libraries.** Rust: `cargo machete` 0.7.1 (Docker, pinned
 1.99.1 toolchain): *"didn't find any unused dependencies"* for the workspace **and** for
