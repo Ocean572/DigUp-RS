@@ -26,9 +26,16 @@
 //! signal (re-raise after the graceful part) — so the shell reports 143/130
 //! and a Python subprocess reports -15.
 
-// The stage-4 surface implements the whole protocol ahead of its gates
-// (render slots, the raw passthrough, the index argv builders, send_line):
-// their contract tests land with the 4f suite.
+// Engine CI runs `cargo clippy -D warnings`, so this allow is load-bearing, not
+// cosmetic: the crate has items with no Rust caller — measured on the tree as it
+// stands (2026-11-20), `security::read_auth`. The stage-4 endpoints' gates are the
+// Python contract suite (server/tests), which never reaches Rust's dead-code lint,
+// so a Rust-side cleanup gate needs the suite in the same language first.
+// The dead `summaries` / `raw` passthrough methods this allow used to cover are
+// deleted (no caller on either side of the seam: `service.rs` answers the typed ops,
+// and `render_call` checks its own reply through `checked`, so `call`'s
+// `check: false` arm — the refusal-passthrough shape `ok:false` verbatim — is kept
+// as the seam the Python suite owns, not as live code).
 #![allow(dead_code)]
 
 mod cli;
@@ -1234,25 +1241,23 @@ async fn api_gate(State(app): State<Shared>, req: Request, next: Next) -> Respon
     // reaches the inner app; the audit line (outermost) sees the 204.
     if let Some(origin) = cors_origin.clone() {
         if method == Method::OPTIONS {
-            let response = (
-                StatusCode::NO_CONTENT,
-                [
-                    (
-                        ACCESS_CONTROL_ALLOW_ORIGIN,
-                        HeaderValue::try_from(origin).expect("origin header"),
-                    ),
-                    header("access-control-allow-methods", "POST, GET, OPTIONS"),
-                    header(
-                        "access-control-allow-headers",
-                        "authorization, content-type",
-                    ),
-                    header("access-control-max-age", "600"),
-                    (VARY, HeaderValue::from_static("Origin")),
-                    (axum::http::header::CONTENT_LENGTH, HeaderValue::from(0u64)),
-                ],
-                Body::empty(),
-            )
-                .into_response();
+            // An origin value HeaderValue cannot carry (control bytes) has no ACAO header: the
+            // preflight answers 204 WITHOUT it, the same fall-through `_decorate` runs above
+            // (`if let Ok(value) = HeaderValue::try_from(origin)`) — no panic. Everything the
+            // preflight answers for a valid origin is unchanged.
+            let mut preflight = Vec::new();
+            if let Ok(value) = HeaderValue::try_from(&origin) {
+                preflight.push((ACCESS_CONTROL_ALLOW_ORIGIN, value));
+            }
+            preflight.push(header("access-control-allow-methods", "POST, GET, OPTIONS"));
+            preflight.push(header(
+                "access-control-allow-headers",
+                "authorization, content-type",
+            ));
+            preflight.push(header("access-control-max-age", "600"));
+            preflight.push((VARY, HeaderValue::from_static("Origin")));
+            preflight.push((axum::http::header::CONTENT_LENGTH, HeaderValue::from(0u64)));
+            let response = status_with_headers(StatusCode::NO_CONTENT, preflight, Body::empty());
             return finish(response, &ctx, target_set);
         }
     }
@@ -1741,11 +1746,12 @@ async fn estimate(
     // run on a tokio worker (the audit-base ran it there, stalling every request parked
     // on that worker). `in_scope` is the port's established shape (the media endpoints
     // ride it). The gate opens on every ending, inside the same task.
-    let timeout = match crate::config::knob_float("DIGUP_SERVER_ESTIMATE_TIMEOUT_S", 120.0) {
+    let timeout = match crate::config::estimate_timeout() {
         Ok(seconds) => Duration::from_secs_f64(seconds),
         // api.py:642 reads this knob PER REQUEST: a typo is an uncaught
         // ValueError in the handler - Starlette's plain 500, not a silent
-        // default and not a boot death.
+        // default and not a boot death. `config::estimate_timeout` is the knob's
+        // one home; the `estimate_timeout_s` field is only its mirror.
         Err(_) => return ApiError::Internal.into_response(),
     };
     let outcome = in_scope(app.clone(), target, move |scope| {

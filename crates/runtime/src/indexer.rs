@@ -326,13 +326,7 @@ impl Indexer {
             let vanished: Vec<String> = root_paths
                 .iter()
                 .filter(|path| !Path::new(path).exists())
-                .map(|path| {
-                    if path.ends_with('/') {
-                        path.clone()
-                    } else {
-                        format!("{path}/")
-                    }
-                })
+                .map(|path| paths::bound(path))
                 .collect();
             for row in &existing {
                 if !seen.contains(&row.path)

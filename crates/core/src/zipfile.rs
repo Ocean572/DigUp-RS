@@ -251,12 +251,15 @@ impl ZipArchive {
         let file = File::open(path).map_err(|error| ExtractError::Unreadable {
             why: error.to_string(),
         })?;
-        let len = file
+        let size = file
             .metadata()
             .map_err(|error| ExtractError::Unreadable {
                 why: error.to_string(),
             })?
-            .len() as usize;
+            .len();
+        // checked: a file whose size leaves `usize` has no window this reader can walk — the
+        // same archive-level refusal the site makes for every other implausible size.
+        let len = usize::try_from(size).map_err(|_| not_a_zip())?;
         if len < 22 {
             return Err(not_a_zip()); // MZ_ZIP_END_OF_CENTRAL_DIR_HEADER_SIZE
         }
@@ -328,7 +331,11 @@ impl ZipArchive {
         if (this_disk | cdir_disk) != 0 && (this_disk != 1 || cdir_disk != 1) {
             return Err(not_a_zip()); // UNSUPPORTED_MULTIDISK
         }
-        if size < total * 46 {
+        // checked: a `total` whose product with the record size leaves `usize` asks for more
+        // central directory than any file can hold — the same refusal, never a wrap to a small
+        // floor that the `size` check would wave through.
+        let min_cdir = total.checked_mul(46);
+        if !min_cdir.is_some_and(|floor| size >= floor) {
             return Err(not_a_zip()); // m_cdir_size < total * MZ_ZIP_CENTRAL_DIR_HEADER_SIZE
         }
         if size > len || offset > (len - size) as u64 {
@@ -426,7 +433,10 @@ impl ZipArchive {
             // The local header + stored data inside the file (miniz.c:3962-3966) — at INIT,
             // with the central sizes. The audit-base deferred this per entry, so one bad
             // offset answered `can't read {name}` where miniz refuses the whole archive.
-            if comp != u32::MAX as u64 && local + 30 + comp > len as u64 {
+            // checked: `local + 30 + comp_size` past u64 is out of bounds, not a wrap past the
+            // bound. The operands are u32-sourced, so the sum fits — the check documents that.
+            let local_end = local.checked_add(30).and_then(|at| at.checked_add(comp));
+            if comp != u32::MAX as u64 && !local_end.is_some_and(|end| end <= len as u64) {
                 return Err(not_a_zip());
             }
 
@@ -611,8 +621,11 @@ impl ZipArchive {
             });
         }
         // The local header: miniz inflates from there, with the central sizes.
+        // checked: a header span that leaves `usize` is out of bounds, never a wrap past the
+        // bound — the zip64 `offset` file_stat returns is a u64 read from the record.
         let head = offset as usize;
-        if head + 30 > self.len {
+        let after_head = head.checked_add(30);
+        if !after_head.is_some_and(|at| at <= self.len) {
             return Err(cannot());
         }
         let header = read_at(&self.file, head as u64, 30).map_err(|_| cannot())?;
@@ -621,10 +634,13 @@ impl ZipArchive {
         }
         let name_len = u16_at(&header, 26) as usize;
         let extra_len = u16_at(&header, 28) as usize;
-        let data = head + 30 + name_len + extra_len;
-        if data > self.len {
+        let data = after_head
+            .and_then(|at| at.checked_add(name_len))
+            .and_then(|at| at.checked_add(extra_len));
+        if !data.is_some_and(|at| at <= self.len) {
             return Err(cannot());
         }
+        let data = data.expect("checked above");
         if entry.flags & 0x01 != 0 {
             return Err(cannot()); // encrypted: miniz has no key, the extract fails
         }

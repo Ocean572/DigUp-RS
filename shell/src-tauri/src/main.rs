@@ -2188,6 +2188,9 @@ fn measure_then_index(app: &AppHandle) {
             command.env("DIGUP_MODELS", models);
         }
         // Its reply goes to speed.log after what it said on the way (the model's own lines go to the index's worker.log).
+        // The engine's name for that file is `digup_core::paths::WORKER_LOG` ("worker.log", and
+        // `WORKER_QUERY_LOG` for the query encoder's); this shell spawns the helper, it never
+        // builds the path, so the literal in that sentence has nothing here to call.
         let log = std::fs::OpenOptions::new().create(true).append(true).open(shell.logs.join("speed.log")).ok();
         if let Some(log) = log.as_ref().and_then(|log| log.try_clone().ok()) {
             command.stderr(log);

@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Read;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use axum::body::Bytes;
 use std::pin::Pin;
@@ -233,13 +233,17 @@ pub enum Span {
     Range(i64, i64),
 }
 
+/// The `Range` grammar, compiled once per process: `parse_range` runs on EVERY ranged media
+/// request, and a fresh compile per request is a seeked clip's serving cost. The pattern text is
+/// the site's own, unchanged.
+static RANGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^bytes=(\d*)-(\d*)$").expect("range regex"));
+
 pub fn parse_range(header: Option<&str>, size: i64) -> Span {
     let Some(header) = header else {
         return Span::None;
     };
-    let caps = Regex::new(r"^bytes=(\d*)-(\d*)$")
-        .expect("range regex")
-        .captures(header.trim());
+    let caps = RANGE_RE.captures(header.trim());
     let Some(caps) = caps else {
         return Span::None; // a multi-range or an unknown unit: plain 200
     };

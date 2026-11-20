@@ -295,11 +295,9 @@ pub fn path_ranges(under: &str) -> Vec<(String, String)> {
     spellings
         .into_iter()
         .map(|path| {
-            let prefix = if path.ends_with('/') {
-                path
-            } else {
-                format!("{path}/")
-            };
+            // The same trailing-slash bound `FolderSelection.isInside` uses (paths::bound):
+            // the range starts at the folder's own prefix, slash form included.
+            let prefix = crate::paths::bound(&path);
             let to = format!("{}{}", prefix, char::MAX);
             (prefix, to)
         })

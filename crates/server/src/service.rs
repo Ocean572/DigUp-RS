@@ -215,21 +215,8 @@ impl SearchService {
         self.call(&op_fields("status"), None, true)
     }
 
-    pub fn summaries(&self, code: bool) -> Result<Value, CallError> {
-        let mut fields = op_fields("summaries");
-        fields.insert("code".into(), Value::Bool(code));
-        self.call(&fields, None, true)
-    }
-
     pub fn prewarm(&self) -> Result<Value, CallError> {
         self.call(&op_fields("prewarm"), Some(Duration::from_secs(60)), true)
-    }
-
-    /// An op this wrapper has no method for — passthrough, refusal replies
-    /// included: `ok:false` reaches the caller verbatim here (a Stage-3 contract
-    /// test pins exactly that). Typed ops raise `EngineRefused` instead.
-    pub fn raw(&self, fields: &Map<String, Value>) -> Result<Value, CallError> {
-        self.call(fields, None, false)
     }
 
     // ── the supervision ────────────────────────────────────────────────────────────────

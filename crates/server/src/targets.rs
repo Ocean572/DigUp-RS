@@ -283,34 +283,24 @@ pub fn resolve(path: &str) -> String {
     };
     match std::fs::canonicalize(&absolute) {
         Ok(real) => real.to_string_lossy().into_owned(),
-        Err(_) => clean(&lexical(&absolute)).to_string_lossy().into_owned(),
+        Err(_) => lexical(&absolute).to_string_lossy().into_owned(),
     }
 }
 
-/// Make the path absolute-lexical: drop `.` components, apply `..` lexically
-/// (Python's resolve() applies them against the resolved tree; on the
-/// missing-tail path this is the shape realpath produces for the existing part).
+/// Drop `.` components and apply `..` lexically from an absolute start (`..` above the
+/// root pops nothing — PathBuf::pop on "/" is a no-op, which is what `lexical` fed
+/// `clean` before; one spelling of the fold, Python's resolve() on the missing-tail
+/// path — the shape realpath produces for the existing part).
 fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::from("/");
-    for part in path.components() {
-        match part {
-            Component::RootDir => out = PathBuf::from("/"),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::Normal(part) => out.push(part),
-            Component::Prefix(_) => {}
-        }
-    }
+    fold(path, &mut out);
     out
 }
 
-fn clean(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
+fn fold(path: &Path, out: &mut PathBuf) {
     for part in path.components() {
         match part {
-            Component::RootDir => out = PathBuf::from("/"),
+            Component::RootDir => *out = PathBuf::from("/"),
             Component::CurDir => {}
             Component::ParentDir => {
                 out.pop();
@@ -319,5 +309,4 @@ fn clean(path: &Path) -> PathBuf {
             Component::Prefix(_) => {}
         }
     }
-    out
 }

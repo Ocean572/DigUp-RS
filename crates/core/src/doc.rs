@@ -3,7 +3,8 @@
 //! tags, rtf/docx/odt through the file's own XML, spreadsheets and presentations from their XML
 //! (`OfficeText`), and Apple Mail's `.emlx` through `MailMessage`.
 
-use std::sync::LazyLock;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 use regex::Regex;
 
@@ -92,6 +93,24 @@ fn decode_utf32(bytes: &[u8], big_endian: bool) -> Option<String> {
     Some(out)
 }
 
+/// The `<tag … />` strip patterns, compiled ONCE per tag for the process: `as_html` runs the
+/// same handful of tags on every docx/odt it reads, and building them per call is per-file work
+/// on the indexer's hot path. The pattern bytes are the site's own `format!`, unchanged.
+static TAG_PATTERNS: LazyLock<Mutex<HashMap<String, Regex>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The compiled pattern for one tag (the same `<{tag}\\b[^>]*/?>` the site built inline), taken
+/// from the cache; a tag seen for the first time compiles once and is inserted.
+fn tag_pattern(tag: &str) -> Regex {
+    let mut cache = TAG_PATTERNS.lock().expect("tag pattern cache");
+    if let Some(pattern) = cache.get(tag) {
+        return pattern.clone();
+    }
+    let pattern = Regex::new(&format!("<{tag}\\b[^>]*/?>")).expect("tag pattern");
+    cache.insert(tag.to_string(), pattern.clone());
+    pattern
+}
+
 /// Word-processing XML as the little HTML `plain_text_from_html` reads: paragraph ends become
 /// `</p>`, breaks `<br>`, tabs and spaces a space; every other tag is stripped there.
 fn as_html(xml: &str, paragraphs: &[&str], breaks: &[&str], spaces: &[&str]) -> String {
@@ -99,12 +118,12 @@ fn as_html(xml: &str, paragraphs: &[&str], breaks: &[&str], spaces: &[&str]) -> 
     for tag in paragraphs {
         text = text.replace(&format!("</{tag}>"), "</p>");
     }
-    for tag in breaks {
-        let pattern = Regex::new(&format!("<{tag}\\b[^>]*/?>")).expect("tag pattern");
+    for &tag in breaks {
+        let pattern = tag_pattern(tag);
         text = pattern.replace_all(&text, "<br>").into_owned();
     }
-    for tag in spaces {
-        let pattern = Regex::new(&format!("<{tag}\\b[^>]*/?>")).expect("tag pattern");
+    for &tag in spaces {
+        let pattern = tag_pattern(tag);
         text = pattern.replace_all(&text, " ").into_owned();
     }
     text

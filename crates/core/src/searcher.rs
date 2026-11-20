@@ -492,16 +492,19 @@ impl<'a> Searcher<'a> {
     /// engine scores `rowFile.count` rows, not the matrix's capacity rows.
     fn score(&self, query: &[f32]) -> Vec<f32> {
         let rows = self.row_file.len();
-        let mut scores = vec![0.0f32; rows];
         if rows == 0 {
-            return scores;
+            return Vec::new();
         }
         if let Some(matrix) = &self.matrix {
-            let all = matrix.score(query);
-            let n = rows.min(all.len());
-            scores[..n].copy_from_slice(&all[..n]);
+            // The matrix scores its capacity rows and the engine keeps the FIRST `rowFile.count`
+            // of them: a prefix of the one buffer it scored into, not a second `vec![0.0; rows]`
+            // beside it (a full-size allocation plus a copy per query). `load` never lets
+            // `row_file` outrun the matrix rows, so the prefix is the whole answer.
+            let mut all = matrix.score(query);
+            all.truncate(rows.min(all.len()));
+            return all;
         }
-        scores
+        vec![0.0f32; rows]
     }
 
     /// `text(ofSegment:)` (Searcher.swift:376): the text as it's written.

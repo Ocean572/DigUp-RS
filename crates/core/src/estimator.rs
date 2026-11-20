@@ -193,11 +193,7 @@ pub fn estimates_by_subfolder(
     options: &IndexOptions,
     costs: &Costs,
 ) -> BTreeMap<String, Estimate> {
-    let prefix = if folder.ends_with('/') {
-        folder.to_string()
-    } else {
-        format!("{folder}/")
-    };
+    let prefix = paths::bound(folder);
     let real = format!("{}/", paths::real_path(folder));
     let mut groups: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
     for file in candidates {

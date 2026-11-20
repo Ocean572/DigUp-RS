@@ -14,6 +14,8 @@ pub mod db;
 pub mod doc;
 pub mod estimator;
 pub mod extract;
+/// `pub` on purpose: `digup-services` filters code-search hits through it
+/// (`search_service.rs`'s `use digup_core::folder_selection`).
 pub mod folder_selection;
 pub mod index_store;
 pub mod jsonline;
@@ -31,6 +33,8 @@ pub mod searcher;
 pub mod uuid;
 pub mod vectors;
 pub mod xmlscan;
+/// `pub` on purpose: the core integration test `crates/core/tests/doc.rs` opens a zip through
+/// it (an integration test is a separate crate, so `pub(crate)` would not reach it).
 pub mod zipfile;
 
 pub use db::{Database, Error, Result, Sql};

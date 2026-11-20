@@ -5,7 +5,7 @@
 //!
 //! Protocol: one JSON request per line on stdin, one JSON response per line on
 //! stdout, carrying the request's `id` — the verbs, replies and events are as
-//! `SearchService.swift` documents them (SEARCH_OPS in lib.rs).
+//! `SearchService.swift:9-32` documents them (this module's `handle` is the compiled list).
 //!
 //! The encoder exits after `--encoder-idle` seconds without a query and the
 //! vectors are released; keyword search keeps working and the next query
@@ -445,7 +445,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let opts = SearchOptions {
                 kinds: kinds.as_ref(),
                 limit,
-                z_gate: 2.0,
+                z_gate: digup_core::scoring::Z_GATE,
                 word_weight: None,
                 prefix_last,
             };
@@ -749,7 +749,7 @@ fn run(config: SearchConfig) -> Result<i32, String> {
         vector_cache: HashMap::new(),
         last_query: Instant::now(),
         warned_about_source: false,
-        log: config.index.join("worker-query.log"),
+        log: config.index.join(digup_core::paths::WORKER_QUERY_LOG),
     };
     // `init` (SearchService.swift:61-73) in order: store, searcher, the
     // fields, then the previews folder is REBUILT — `try? removeItem` (the

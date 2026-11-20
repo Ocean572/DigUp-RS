@@ -115,6 +115,9 @@ impl EngineConfig {
     }
 
     /// `env()`: the inherited environment, with the model folder pinned.
+    /// The name is the runtime's `digup_runtime::models::MODELS_ENV` ("DIGUP_MODELS") — the
+    /// server has no `digup-runtime` dependency by design (it spawns the `digup` binary, it does
+    /// not link llama.cpp), so the literal stays here and the const is the twin to keep in step.
     pub fn env(&self) -> Vec<(String, OsString)> {
         std::env::vars_os()
             .map(|(k, v)| (k.to_string_lossy().into_owned(), v))
@@ -159,7 +162,9 @@ pub struct ServerConfig {
     pub excluded_extensions: Vec<String>,
     pub encoder_idle: f64,
     /// `DIGUP_SERVER_ESTIMATE_TIMEOUT_S` (120): the endpoint's honest ceiling
-    /// for one full-tree walk; the engine keeps walking past it.
+    /// for one full-tree walk; the engine keeps walking past it. The mirror only:
+    /// the estimate handler reads the knob per request through
+    /// `config::estimate_timeout()`, which is the knob's home.
     pub estimate_timeout_s: f64,
     /// `DIGUP_SERVER_JOB_TIMEOUT_S` (3600): a job's ceiling — an expired job
     /// records *interrupted* with its partial counters and the next resumes.
@@ -188,7 +193,7 @@ fn env_list(name: &str) -> Vec<String> {
 /// `int(s)` (measured on CPython 3.12, 2026-11-15): surrounding whitespace is
 /// stripped, an optional sign, underscores BETWEEN digits (leading/trailing and
 /// doubled runs are refused: `int("1__1")` raises), digits only.
-pub fn py_int(text: &str) -> Option<i64> {
+pub(crate) fn py_int(text: &str) -> Option<i64> {
     let t = text.trim();
     let (sign, digits) = match t.strip_prefix('+') {
         Some(rest) => (1i64, rest),
@@ -323,6 +328,15 @@ pub(crate) fn knob_int(name: &str, default: i64) -> Result<i64, String> {
     }
 }
 
+/// The ONE home of `DIGUP_SERVER_ESTIMATE_TIMEOUT_S` (the field `ServerConfig::estimate_timeout_s`
+/// mirrors it, the estimate handler reads it through this): `api.py:642` reads the knob **per
+/// request**, so the read belongs on the request path and not on the boot path — a knob the
+/// operator typo'd fails that request (Starlette's plain 500), it never rescues itself with the
+/// default and never kills the boot. `ServerConfig::from_env` keeps the mirror inert.
+pub(crate) fn estimate_timeout() -> Result<f64, String> {
+    knob_float("DIGUP_SERVER_ESTIMATE_TIMEOUT_S", 120.0)
+}
+
 impl ServerConfig {
     /// `.env.example` defaults: 127.0.0.1:8787, TTL 15 s, prewarm and backfill on.
     /// Startup dies on the facts the reference refuses on (`config_from_env`):
@@ -378,7 +392,7 @@ impl ServerConfig {
             // NOT a startup knob: the reference reads it per request (api.py:642), so a
             // typo must not kill the boot - the estimate call that reads it fails.
             // The value lives only as the mirror; the estimate handler parses the
-            // env per request like Python does.
+            // env per request like Python does, through `config::estimate_timeout()`.
             estimate_timeout_s: std::env::var("DIGUP_SERVER_ESTIMATE_TIMEOUT_S")
                 .ok()
                 .and_then(|value| py_float(&value))

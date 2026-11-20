@@ -6,7 +6,7 @@
 //! (`mark`, `setFolder`, `folders`, `effectiveSkips`, `searchedAs`) land with
 //! the shell port, which is what shows the checkboxes.
 
-use crate::paths::is_inside;
+use crate::paths::{bound, is_inside};
 use crate::rules::SKIPPED_FOLDER_NAMES;
 
 /// Whether `path` (a folder or a file) is searched by `folders` minus `skipped`
@@ -28,11 +28,10 @@ pub fn reaches(path: &str, from: &str) -> bool {
     if !is_inside(path, from) {
         return false;
     }
-    let cut = if from.ends_with('/') {
-        from.len()
-    } else {
-        from.len() + 1
-    };
+    // The cut is the bound's length: `paths::bound` is the engine's one spelling of the
+    // trailing-slash rule (FolderSelection.swift:107), and `is_inside` above already proved
+    // `path` starts with it — so the remaining components are exactly `path[cut..]`.
+    let cut = bound(from).len();
     !path[cut..].split('/').any(|part| {
         part.starts_with('.') || part.ends_with(".noindex") || SKIPPED_FOLDER_NAMES.contains(&part)
     })

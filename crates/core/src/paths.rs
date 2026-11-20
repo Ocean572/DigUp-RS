@@ -6,6 +6,15 @@
 
 use std::path::{Path, PathBuf};
 
+/// The llama.cpp log beside the index, by the name the app and the server read it under:
+/// `worker.log` for the indexing worker (`main.swift:519`'s `makeEmbedder(textOnly: false, log:)`,
+/// IndexService.swift), `worker-query.log` for the query encoder (`SearchService.swift`). The
+/// helpers write them, the shell shows their tails, so the names are the engine's, not a
+/// caller's: `digup_core::paths::WORKER_LOG` is their one home. The shell's own copy
+/// (`shell/src-tauri`, which links nothing) spells them as literals.
+pub const WORKER_LOG: &str = "worker.log";
+pub const WORKER_QUERY_LOG: &str = "worker-query.log";
+
 /// Windows spells every path the engine touches in ONE form: slashes. Foundation
 /// (`URL(fileURLWithPath:)`, `standardizedFileURL`) normalizes `\` to `/` there, so the
 /// Swift-era rows, scope bounds, and range comparisons were all slash-form, byte-wise.
@@ -79,6 +88,18 @@ pub fn parent(path: &str) -> String {
     }
 }
 
+/// The trailing-slash form of `folder` as a **prefix**: `folder` when it already ends with `/`,
+/// else `folder + "/"` — the bound `is_inside` builds. Callers that need the bound itself (a
+/// `strip_prefix` group, an index-range start, a cut offset) take it from here, so the engine
+/// spells the rule once (FolderSelection.swift:107).
+pub fn bound(folder: &str) -> String {
+    if folder.ends_with('/') {
+        folder.to_string()
+    } else {
+        format!("{folder}/")
+    }
+}
+
 /// `FolderSelection.isInside`: is `path` a path under `folder`? The workspace's ONE
 /// implementation (the engine spells it once, FolderSelection.swift:107): the prefix is the
 /// folder with its trailing slash kept, or one slash appended — so a folder is never inside
@@ -86,12 +107,7 @@ pub fn parent(path: &str) -> String {
 /// its own slash, and `files_under`'s covering rule uses that exactly as
 /// IndexStore.swift:607 does).
 pub fn is_inside(path: &str, folder: &str) -> bool {
-    let bound = if folder.ends_with('/') {
-        folder.to_string()
-    } else {
-        format!("{folder}/")
-    };
-    path.starts_with(&bound)
+    path.starts_with(&bound(folder))
 }
 
 /// `FolderSelection.realPath` (FolderSelection.swift:116-124): the realpath of a path, the

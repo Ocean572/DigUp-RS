@@ -127,6 +127,12 @@ pub struct LlamaModels {
     pub media: Option<PathBuf>,
 }
 
+/// `DIGUP_MODELS`: the environment name that pins the model folder — the ONE home for the
+/// string. The server publishes it on every helper spawn (`EngineConfig::env` in
+/// `server/src/config.rs`), the shell sets it for its helpers, and `folders()` below is the
+/// only reader.
+pub const MODELS_ENV: &str = "DIGUP_MODELS";
+
 impl LlamaModels {
     pub const REPOSITORY: &'static str = ModelFiles::REPOSITORY;
     pub const REVISION: &'static str = ModelFiles::REVISION;
@@ -137,7 +143,7 @@ impl LlamaModels {
     /// place it looks then: the developer's Hugging Face cache mustn't hide a missing download.
     /// Without it (the CLI): Application Support, then the Hugging Face cache.
     pub fn folders() -> Vec<PathBuf> {
-        if let Some(chosen) = env_dir("DIGUP_MODELS") {
+        if let Some(chosen) = env_dir(MODELS_ENV) {
             return vec![chosen];
         }
         vec![ModelFiles::installed(), ModelFiles::hugging_face_snapshot()]

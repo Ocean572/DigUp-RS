@@ -699,6 +699,9 @@ static LANGUAGES: LazyLock<std::collections::BTreeMap<&'static str, &'static str
     });
 
 /// The extension → language table, for tests that want it as the engine's dictionary.
+/// `pub` on purpose: the integration-test crate `crates/core/tests/code.rs` reads the table
+/// through this (an integration test is a separate crate — `pub(crate)` is invisible to it),
+/// and the engine's own callers use `languages()` directly.
 pub fn known_language(extension: &str) -> Option<&'static str> {
     languages().get(extension).copied()
 }

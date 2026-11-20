@@ -857,13 +857,18 @@ impl Inner {
     /// rides the sorted ids (a BTreeMap: deterministic, and the log's append order
     /// must not depend on a hash seed).
     fn recover(&self) {
+        use std::io::BufRead;
         let mut last: BTreeMap<String, String> = BTreeMap::new();
         for path in self.log_files() {
-            let Ok(content) = std::fs::read_to_string(&path) else {
+            // The replay streams: a long deployment's rotations are read line by line,
+            // not all at once (a 1.8 M-job log is megabytes per rotation; boot must not
+            // buffer them). A missing/unreadable rotation is skipped, exactly as before.
+            let Ok(file) = std::fs::File::open(&path) else {
                 continue;
             };
-            for line in content.lines() {
-                let Ok(Value::Object(record)) = serde_json::from_str::<Value>(line) else {
+            for line in BufReader::new(file).lines() {
+                let Ok(line) = line else { continue }; // a short read: half a line is not a record
+                let Ok(Value::Object(record)) = serde_json::from_str::<Value>(&line) else {
                     continue; // a torn tail: half a line is not a record
                 };
                 let Some(Value::String(id)) = record.get("id") else {

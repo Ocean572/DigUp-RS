@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use digup_services::costs::{MeasuredCosts, Speed};
+use digup_services::emit;
 use digup_services::speed as modelspeed;
 use digup_services::system_load;
 use unicode_segmentation::UnicodeSegmentation;
@@ -370,25 +371,6 @@ fn home() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
-/// `tilde(_:)`: a path under the home shown as `~/…`.
-fn tilde(path: &Path) -> String {
-    let text = path.to_string_lossy().into_owned();
-    let home = home().to_string_lossy().into_owned();
-    if text.starts_with(&home) {
-        "~".to_string() + &text[home.len()..]
-    } else {
-        text
-    }
-}
-
-/// Compact JSON on one line (`emit`, IndexService.swift:519): Foundation's `JSONSerialization`
-/// with `.sortedKeys`, written straight to the descriptor. `jsonline` reproduces its bytes.
-fn emit(fields: serde_json::Map<String, serde_json::Value>) {
-    if let Some(line) = digup_core::jsonline::to_line(&serde_json::Value::Object(fields)) {
-        println!("{line}");
-    }
-}
-
 /// `speed(_:)` (main.swift:476): the model-free check is Metal's (none here), then what
 /// indexing has measured on this machine.
 fn speed(args: &Arguments) -> Result<(), String> {
@@ -398,9 +380,10 @@ fn speed(args: &Arguments) -> Result<(), String> {
     println!("no speed check here (no Metal): the fixed costs stand in until indexing has measured this machine's");
     let folder = args.index_folder();
     let measured = MeasuredCosts::load(&folder);
+    let home = std::env::var("HOME").unwrap_or_default();
     let line = format!(
         "measured by indexing ({}):",
-        tilde(&MeasuredCosts::file(&folder))
+        formats::tilde(&MeasuredCosts::file(&folder).to_string_lossy(), &home)
     ) + if measured.tallies.is_empty() {
         " nothing yet"
     } else {
@@ -433,7 +416,7 @@ fn processor_alone(folder: &Path, tries: i64) -> Result<(modelspeed::Measurement
             "--index",
             &folder.to_string_lossy(),
         ])
-        .env("DIGUP_DEVICE", "cpu")
+        .env(digup_runtime::DEVICE_ENV, "cpu")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -516,7 +499,7 @@ fn model_speed(args: &Arguments) -> Result<(), String> {
         .value("--tries")
         .and_then(|value| value.parse().ok())
         .unwrap_or(3);
-    let log = folder.join("worker.log");
+    let log = folder.join(digup_core::paths::WORKER_LOG);
     let open_embedder = || -> Result<digup_runtime::LlamaEmbedder, String> {
         let models = digup_runtime::LlamaModels::locate().map_err(|e| e.to_string())?;
         digup_runtime::LlamaEmbedder::new(&models, false, None, Some(&log))
@@ -536,7 +519,7 @@ fn model_speed(args: &Arguments) -> Result<(), String> {
         fields.insert("tries".into(), serde_json::json!(measured.tries));
         fields.insert("steady".into(), serde_json::json!(measured.steady));
         fields.insert("others".into(), serde_json::json!(measured.others));
-        emit(fields);
+        emit::emit(&serde_json::Value::Object(fields));
         return Ok(());
     }
     let saved = MeasuredCosts::load(&folder);
@@ -562,7 +545,7 @@ fn model_speed(args: &Arguments) -> Result<(), String> {
                     fields.insert("event".into(), serde_json::json!("speed"));
                     fields.insert("kinds".into(), serde_json::json!(kinds));
                     fields.insert("measured".into(), serde_json::json!(false));
-                    emit(fields);
+                    emit::emit(&serde_json::Value::Object(fields));
                 }
                 return Ok(());
             }
@@ -664,7 +647,7 @@ fn model_speed(args: &Arguments) -> Result<(), String> {
         for (key, value) in compared {
             fields.insert(key, value);
         }
-        emit(fields);
+        emit::emit(&serde_json::Value::Object(fields));
         return Ok(());
     }
     if waited > 0.0 {
@@ -706,9 +689,10 @@ fn model_speed(args: &Arguments) -> Result<(), String> {
     if speed.doubtful == Some(true) {
         println!("in doubt (a busy moment): timed again at the next --if-needed");
     }
+    let home = std::env::var("HOME").unwrap_or_default();
     println!(
         "kept in {}: {}",
-        tilde(&MeasuredCosts::file(&folder)),
+        formats::tilde(&MeasuredCosts::file(&folder).to_string_lossy(), &home),
         speed
             .kinds
             .as_ref()
@@ -755,7 +739,7 @@ fn index(args: &Arguments) -> Result<(), String> {
         folders.push(folder);
     }
     let index_folder = args.index_folder();
-    let log = index_folder.join("worker.log");
+    let log = index_folder.join(digup_core::paths::WORKER_LOG);
     let store = IndexStore::open(&index_folder, args.store_file()).map_err(|e| e.to_string())?;
     if args.flag("--reindex") {
         store.reset_all().map_err(|e| e.to_string())?;
@@ -962,6 +946,7 @@ fn estimate(args: &Arguments) -> Result<(), String> {
     // returns nil here); the estimate runs on what's kept, whatever it is.
     let costs = measured.costs();
     let calibrated = measured.speed.is_some() || !measured.tallies.is_empty();
+    let home = std::env::var("HOME").unwrap_or_default();
     let mut total = 0.0;
     for folder_arg in &args.positional[1..] {
         let folder = folder_url(folder_arg);
@@ -980,11 +965,11 @@ fn estimate(args: &Arguments) -> Result<(), String> {
                 fields.insert("pdf_pages".into(), serde_json::json!(0));
                 fields.insert("audio_seconds".into(), serde_json::json!(0));
                 fields.insert("video_seconds".into(), serde_json::json!(0));
-                emit(fields);
+                emit::emit(&serde_json::Value::Object(fields));
             } else {
                 println!(
                     "{}    can't read it (not there, or not allowed in macOS privacy settings)",
-                    tilde(&folder)
+                    formats::tilde(&folder.to_string_lossy(), &home)
                 );
             }
             continue;
@@ -1078,7 +1063,7 @@ fn estimate(args: &Arguments) -> Result<(), String> {
                 "ms".into(),
                 serde_json::json!((started.elapsed().as_secs_f64() * 1000.0) as i64),
             );
-            emit(fields);
+            emit::emit(&serde_json::Value::Object(fields));
             continue;
         }
         let mut kinds: Vec<String> = Vec::new();
@@ -1100,29 +1085,29 @@ fn estimate(args: &Arguments) -> Result<(), String> {
             match kind {
                 digup_core::model::FileKind::Pdf => kinds.push(format!(
                     "{} PDFs ({} pages; {} in the first pass)",
-                    number(count),
-                    number(estimate.pdf_pages_total),
-                    number(estimate.pdf_pages)
+                    formats::number(count),
+                    formats::number(estimate.pdf_pages_total),
+                    formats::number(estimate.pdf_pages)
                 )),
                 digup_core::model::FileKind::Audio => kinds.push(format!(
                     "{} audio ({})",
-                    number(count),
-                    duration(estimate.audio_seconds)
+                    formats::number(count),
+                    formats::duration(estimate.audio_seconds)
                 )),
                 digup_core::model::FileKind::Video => kinds.push(format!(
                     "{} video ({})",
-                    number(count),
-                    duration(estimate.video_seconds)
+                    formats::number(count),
+                    formats::duration(estimate.video_seconds)
                 )),
                 digup_core::model::FileKind::Code => kinds.push(format!(
                     "{} code {} ({} stretches)",
-                    number(count),
+                    formats::number(count),
                     if count == 1 { "file" } else { "files" },
-                    number(estimate.code_stretches)
+                    formats::number(estimate.code_stretches)
                 )),
                 _ => kinds.push(format!(
                     "{} {}{}",
-                    number(count),
+                    formats::number(count),
                     kind.as_str(),
                     if count == 1 { "" } else { "s" }
                 )),
@@ -1130,8 +1115,8 @@ fn estimate(args: &Arguments) -> Result<(), String> {
         }
         println!(
             "{}    first index ≈ {}{}",
-            tilde(&folder),
-            duration(estimate.seconds),
+            formats::tilde(&folder.to_string_lossy(), &home),
+            formats::duration(estimate.seconds),
             if options.code {
                 format!(", index ≈ {}", byte_count(estimate.bytes as i64))
             } else {
@@ -1149,13 +1134,13 @@ fn estimate(args: &Arguments) -> Result<(), String> {
         if estimate.long_files > 0 {
             println!(
                 "  then the rest of {} long {} ≈ {}",
-                number(estimate.long_files),
+                formats::number(estimate.long_files),
                 if estimate.long_files == 1 {
                     "file"
                 } else {
                     "files"
                 },
-                duration(estimate.later_seconds)
+                formats::duration(estimate.later_seconds)
             );
         }
         if !subfolders.is_empty() {
@@ -1167,12 +1152,12 @@ fn estimate(args: &Arguments) -> Result<(), String> {
                     .map(|(key, value)| format!(
                         "{} ≈ {}",
                         digup_core::paths::last_component(key),
-                        duration(value.seconds)
+                        formats::duration(value.seconds)
                     ))
                     .collect::<Vec<_>>()
                     .join(" · "),
                 if subfolders.len() > 5 {
-                    format!(" · {} more", number((subfolders.len() - 5) as i64))
+                    format!(" · {} more", formats::number((subfolders.len() - 5) as i64))
                 } else {
                     String::new()
                 }
@@ -1196,8 +1181,8 @@ fn estimate(args: &Arguments) -> Result<(), String> {
         for (dataset_folder, count) in datasets {
             println!(
                 "  looks like a dataset (skipped): {} ({} files)",
-                tilde(std::path::Path::new(&dataset_folder)),
-                number(count)
+                formats::tilde(&dataset_folder, &home),
+                formats::number(count)
             );
         }
         println!(
@@ -1206,7 +1191,7 @@ fn estimate(args: &Arguments) -> Result<(), String> {
         );
     }
     if args.positional.len() > 2 && !json {
-        println!("all together ≈ {}", duration(total));
+        println!("all together ≈ {}", formats::duration(total));
     }
     Ok(())
 }
@@ -1254,34 +1239,6 @@ fn kind_seconds_json(estimate: &digup_core::estimator::Estimate) -> serde_json::
     serde_json::Value::Object(map)
 }
 
-/// `number(_:)`: `Int.formatted(.number)` — thousands groups.
-fn number(value: i64) -> String {
-    let digits = value.abs().to_string();
-    let mut grouped = String::new();
-    for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(ch);
-    }
-    if value < 0 {
-        format!("-{grouped}")
-    } else {
-        grouped
-    }
-}
-
-/// `duration(_:)`: seconds shown the way the engine's lines do.
-fn duration(seconds: f64) -> String {
-    if seconds < 90.0 {
-        format!("{} s", seconds.round() as i64)
-    } else if seconds < 5400.0 {
-        format!("{} min", (seconds / 60.0).round() as i64)
-    } else {
-        format!("{:.1} h", seconds / 3600.0)
-    }
-}
-
 /// `skippedLine`: reason → count, biggest first. Ties are the engine's dictionary order, which
 /// Swift seeds per process (the engine's own two runs of the same folder list the same counts
 /// in different orders), so they are ordered by name here; the counts are what is pinned.
@@ -1293,7 +1250,7 @@ fn skipped_line(skipped: &std::collections::HashMap<String, i64>) -> String {
     lines.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
     lines
         .iter()
-        .map(|(count, reason)| format!("{} {}", number(*count), reason))
+        .map(|(count, reason)| format!("{} {}", formats::number(*count), reason))
         .collect::<Vec<_>>()
         .join(" · ")
 }
@@ -1320,7 +1277,7 @@ fn byte_count(bytes: i64) -> String {
         bytes as f64 / 1000f64.powi(unit as i32)
     };
     let text = if DECIMALS[unit] == 0 {
-        number(value.round_ties_even() as i64)
+        formats::number(value.round_ties_even() as i64)
     } else {
         let rounded = format!("{:.*}", DECIMALS[unit], value);
         let rounded = rounded
@@ -1331,7 +1288,7 @@ fn byte_count(bytes: i64) -> String {
             Some(at) => (rounded[..at].to_string(), rounded[at..].to_string()),
             None => (rounded.clone(), String::new()),
         };
-        format!("{}{}", number(head.parse::<i64>().unwrap_or(0)), tail)
+        format!("{}{}", formats::number(head.parse::<i64>().unwrap_or(0)), tail)
     };
     let unit_name = match unit {
         0 if bytes == 1 => "byte",
@@ -1403,7 +1360,7 @@ fn query_vectors(
         return Ok(None);
     }
     let models = LlamaModels::locate().map_err(|e| e.to_string())?;
-    let log = store.directory.join("worker-query.log");
+    let log = store.directory.join(digup_core::paths::WORKER_QUERY_LOG);
     let embedder =
         LlamaEmbedder::new(&models, true, None, Some(&log)).map_err(|e| e.to_string())?;
     if let Some(source) = &searcher.vector_source {
@@ -1658,7 +1615,7 @@ fn search(args: &Arguments) -> Result<(), String> {
         z_gate: args
             .value("--zgate")
             .and_then(|v| v.parse().ok())
-            .unwrap_or(2.0),
+            .unwrap_or(digup_core::scoring::Z_GATE),
         word_weight: args.value("--word-weight").and_then(|v| v.parse().ok()),
         prefix_last: false,
     };
@@ -1782,7 +1739,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
     let z_gate = args
         .value("--zgate")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(2.0);
+        .unwrap_or(digup_core::scoring::Z_GATE);
     let word_weight = args.value("--word-weight").and_then(|v| v.parse().ok());
     let index = args.index_folder();
     let main_store = if is_code.iter().any(|code| !*code) {
@@ -2028,6 +1985,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
 }
 
 /// `emit` of DownloadModel.swift: the JSON lines, keys in the order each event lists them.
+/// The line itself is services' `emit` (the one writer: sorted keys straight to fd 1).
 fn emit_event(event: &str, fields: serde_json::Map<String, serde_json::Value>) {
     let mut row = serde_json::Map::new();
     row.insert(
@@ -2037,9 +1995,13 @@ fn emit_event(event: &str, fields: serde_json::Map<String, serde_json::Value>) {
     for (key, value) in fields {
         row.insert(key, value);
     }
-    emit(row);
+    emit::emit(&serde_json::Value::Object(row));
 }
 
+/// `json_object` / `json_str` / `json_int`: the `download-model` event rows' builders —
+/// they assemble the `Map` (the JSON values), they never spell a line. `core/jsonline.rs`
+/// is the authoritative emitter (Foundation's `.sortedKeys` bytes) and `services::emit` is
+/// the one writer; these three are used only by `download_model`'s progress/finish events.
 fn json_object<I: IntoIterator<Item = (String, serde_json::Value)>>(
     items: I,
 ) -> serde_json::Map<String, serde_json::Value> {

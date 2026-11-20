@@ -278,9 +278,11 @@ pub fn embed_ahead(body: &Value) -> Result<EmbedAheadReq, Vec<Value>> {
 pub fn check_pixels(value: &str) -> Result<i64, Vec<Value>> {
     let mut errors = Vec::new();
     let trimmed = value.trim();
-    let parsed: Option<i64> = match trimmed.parse::<i64>() {
-        Ok(number) => Some(number),
-        Err(_) => {
+    // The SAME Python `int(s)` rules the env knobs use (`config::py_int`, measured on CPython
+    // 3.12): whitespace, sign, underscores BETWEEN digits. It trims, so `trimmed` rides both.
+    let parsed: Option<i64> = match crate::config::py_int(trimmed) {
+        Some(number) => Some(number),
+        None => {
             // A huge integer literal is still an integer to Python (arbitrary
             // precision); it only trips the range check.
             let digits = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);

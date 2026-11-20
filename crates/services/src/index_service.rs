@@ -195,7 +195,7 @@ pub fn index_service(config: IndexServiceConfig) -> i32 {
 fn run(config: IndexServiceConfig) -> Result<i32, String> {
     // Issue #155's shape knob: text-only keeps the 2048-token document budget
     // (only the media encoders are left out), so #155 changes no stored vector.
-    let log = config.index.join("worker.log");
+    let log = config.index.join(digup_core::paths::WORKER_LOG);
     // The Arc is a SAME-THREAD lifetime handle: the embedder wraps FFI
     // contexts that belong to the thread that opened them (the engine's
     // serial-queue confinement, reproduced), and the model never crosses a
