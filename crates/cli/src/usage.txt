@@ -21,6 +21,10 @@ digup: search your files by meaning (DigUp developer CLI)
                                           see SearchService): for shells that can't link DigUpKit
   digup download-model [--to DIR]         the model files, from the Hugging Face cache or downloaded with
                                           resume, checked (JSON lines: see DownloadModel)
+  digup mcp [--allow-admin] [FOLDER]...   the Model Context Protocol server over stdio (JSON-RPC, one message
+                                          per line): search/status/show tools (+ estimate with --allow-admin),
+                                          the engine's answers relayed verbatim — for Claude Desktop and local
+                                          agents; the same folders and --index the search verb reads
 
 Options:
   --index DIR          index folder (default: DigUp's Application Support folder; see `digup status`)

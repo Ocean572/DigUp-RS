@@ -21,6 +21,8 @@ use unicode_segmentation::UnicodeSegmentation;
 /// 4-space strip is baked into the file; Swift prints it verbatim).
 const USAGE: &str = include_str!("usage.txt");
 
+mod mcp;
+
 /// `Arguments` (main.swift:59-95): known valued flags take exactly one value, repeated
 /// ones collect a list, `--*` are bare flags, everything else is positional.
 struct Arguments {
@@ -138,6 +140,14 @@ fn main() {
         }
         Some("search") => {
             if let Err(e) = search(&args) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("mcp") => {
+            // The Model Context Protocol front-end (stdio JSON-RPC): a thin client of
+            // the same daemon the app spawns, relaying the engine's answers verbatim.
+            if let Err(e) = mcp::mcp(&args, &argv) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }

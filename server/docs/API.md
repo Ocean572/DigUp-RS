@@ -482,6 +482,59 @@ data folder read-only and registers one target; bring-up needs the full chain an
 (see the file's header). `tests/test_targets.py` pins the registry, the minting rules, the
 binding table, and the end-to-end flow over the real engine.
 
+## Connect an AI agent (`POST /api/v1/mcp`, and `digup mcp` over stdio)
+
+The server speaks the **Model Context Protocol** (protocol version `2025-06-18`) in two
+shapes, and both are the same thin relay: a tool reply carries **the engine's answer
+verbatim** in `structuredContent` — the same rows, scores, counts and timings the web UI
+reads, with the transport id stripped exactly like REST strips it — beside a short
+skimming text block. Nothing in the MCP layer re-ranks, reformats a score, or invents a
+number, and the gate is the REST gate: bearer 401s, the read/admin split, the 403
+refusal in the gate's own words, target scoping, and the access log's `principal= …`
+line cover MCP calls like any other request.
+
+**Stdio** — for Claude Desktop and local agents. The `digup` binary on every desktop
+package runs `digup mcp [FOLDER]... [--index DIR] [--allow-admin]`: one JSON-RPC message
+per line on stdin, one per line on stdout, on the same folders the search verb reads.
+The `index` tool does not exist in this shape (a stdio run has no job runner to reach);
+`estimate` is advertised only with `--allow-admin`. Claude Desktop's config block:
+
+```json
+{ "mcpServers": { "digup": {
+    "command": "/usr/lib/DigUp/helper/digup",
+    "args": ["mcp", "--index", "/home/me/digup-index", "/data/photos"]
+} } }
+```
+
+**HTTP** — for remote and LAN agents: `POST /api/v1/mcp`, the stateless streamable shape
+(one JSON-RPC 2.0 message per POST, one JSON answer per POST, an `mcp-session-id` header
+echoed on every answer). A notification answers `202` with an empty body; a malformed
+body answers `400` with the JSON-RPC parse error. Send the bearer key like every other
+guarded endpoint — the **read** key answers `search`, `status` and `show`; the **admin**
+key adds `estimate` and `index` (a read key calling one lands on the gate's own words,
+quoted). An inert (tokenless) deployment answers the full tool set key-free, matching
+what its REST admin routes answer key-free.
+
+| tool | scope | what it relays |
+|---|---|---|
+| `search` | read | the `POST /api/v1/search` answer: `hits` (path, kind, segment, score, z, loc, excerpt…), `strong`, `meaning`. `limit` defaults to **10** (max 100 — the engine's own cap) to keep agent context small; `kinds`, `code` ride the REST model |
+| `status` | read | the `GET /api/v1/status` counts, verbatim |
+| `show` | read | one segment's stored full text by its `segment_id` (from a hit row) — the search daemon's `text` verb |
+| `estimate` | admin | the engine's crawl forecast, `{"folders": […]}` |
+| `index` | admin, HTTP only | queue one crawl: the job record (`202` shape); a running writer answers the `409` text, relayed as `isError` |
+
+```sh
+curl -s -X POST http://127.0.0.1:8787/api/v1/mcp \
+  -H 'content-type: application/json' -H "Authorization: Bearer $DIGUP_READ_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"search","arguments":{"q":"wakeboarding","limit":10}}}'
+```
+
+`tests/test_mcp.py` pins the gate shapes, the tool visibility per scope, the
+field-for-field equality of a tool reply with the same REST answer, and the 202/400
+transport shapes; the CLI suite pins the stdio loop (initialize, tools, a relayed
+search, daemon stop at EOF).
+
 ## Deploy shape (what a client can assume)
 
 `deploy/docker-compose.yml` (CPU-only, the default) → `http://127.0.0.1:8787/`: UI at `/`,

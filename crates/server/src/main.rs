@@ -41,6 +41,7 @@
 mod cli;
 mod config;
 mod jobs;
+mod mcp;
 mod media;
 mod openapi;
 mod protocol;
@@ -2600,6 +2601,11 @@ async fn main() -> ExitCode {
         .route("/api/v1/embed_ahead", post_only(embed_ahead))
         .route("/api/v1/estimate", post_only(estimate))
         .route("/api/v1/index", post_only(index))
+        // The Model Context Protocol peer (`mcp.rs`): JSON-RPC 2.0 per POST, riding
+        // this gate's bearer/target/audit machinery verbatim. Not an ADMIN_ROUTE:
+        // the gate admits a read key, and the peer's tool set is the gate's own
+        // visibility (mutating tools advertised and executed for admin principals only).
+        .route("/api/v1/mcp", post_only(mcp::mcp_post))
         .route("/api/v1/jobs", get_only(jobs_endpoint))
         .route("/api/v1/jobs/{job_id}", get_only(job_show))
         .route("/api/v1/media/{media_id}/preview", get_only(preview))

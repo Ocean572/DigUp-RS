@@ -14,6 +14,9 @@ path = "src/main.rs"
 [dependencies]
 axum = { workspace = true }
 chrono = { workspace = true }
+# The MCP peer core (search/status/estimate/index relay + JSON-RPC shapes) lives in
+# the services crate, shared verbatim with the stdio front-end.
+digup-services = { workspace = true }
 httpdate = { workspace = true }
 libc = { workspace = true }
 futures-util = { workspace = true }

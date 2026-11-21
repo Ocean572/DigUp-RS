@@ -129,6 +129,14 @@ fn paths() -> Value {
                 })
             )
         },
+        "/api/v1/mcp": {
+            "post": post_op(
+                "Model Context Protocol peer (JSON-RPC 2.0, one message per POST): tools search/status/show \
+                 for any valid key, + estimate/index for admin keys; every tool relays the engine's answer verbatim",
+                "mcp",
+                json!({ "type": "object", "properties": {} })
+            )
+        },
         "/api/v1/jobs": {
             "get": get_op("The target's job records, insertion order", "jobs")
         },
@@ -281,6 +289,7 @@ is self-contained: no scripts, no external URLs.</p>
 <tr><td class="m">POST</td><td><code>/api/v1/embed_ahead</code></td><td>Keyword-first typing preview for the search box.</td></tr>
 <tr><td class="m">POST</td><td><code>/api/v1/estimate</code></td><td>The engine's forecast (per-folder file counts). One full-tree crawl server-wide: a second request answers 409.</td></tr>
 <tr><td class="m">POST</td><td><code>/api/v1/index</code></td><td>Queue one crawl (<code>{"prune"}</code> optional): 202 accepted, 409 when a writer is running. One writer per index; a job never auto-starts from a boot.</td></tr>
+<tr><td class="m">POST</td><td><code>/api/v1/mcp</code></td><td>Model Context Protocol peer (JSON-RPC 2.0, one message per POST): tools <code>search</code>/<code>status</code>/<code>show</code> for any valid key, <code>estimate</code>/<code>index</code> for admin keys; every tool relays the engine's answer verbatim.</td></tr>
 <tr><td class="m">GET</td><td><code>/api/v1/jobs</code></td><td>The target's job records, insertion order (<code>queued/running/done/interrupted/busy</code>).</td></tr>
 <tr><td class="m">GET</td><td><code>/api/v1/jobs/{job_id}</code></td><td>One job record; 404 for an unknown id.</td></tr>
 <tr><td class="m">GET</td><td><code>/api/v1/media/{media_id}/preview?pixels=</code></td><td>Image/video/pdf preview as JPEG. Handles are issued per reply and name server-side files only — never client paths.</td></tr>
