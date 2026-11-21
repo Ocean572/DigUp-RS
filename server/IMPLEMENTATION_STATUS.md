@@ -2,6 +2,29 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-21 — desktop MCP toggle: Settings → General "Connect Claude Desktop" (`5ec621b`)
+
+The Tauri app (Windows/Linux/macOS) gained the desktop-side half of MCP. On: the app adds
+ONE `digup` entry to Claude Desktop's own `claude_desktop_config.json` (Application
+Support/Claude on the Mac, `%APPDATA%`/Claude on Windows, `$XDG_CONFIG_HOME`/`~/.config`
+Claude on Linux) — the helper exe with `["mcp", …]`, the tail verbatim from
+`search_arguments`, so the agent reads exactly the folders/index/code-roots the app
+indexes; `apply_folders` refreshes the entry when folders change. Off removes just that
+entry. The person's file is respected: atomic write, one `.digupbak` on first touch,
+unparseable file refused untouched, missing Claude folder named (never created). The
+**server needs no knob**: `POST /api/v1/mcp` rides every deployment (bearer scope decides
+which tools a key sees) — measured key-free by the contract suite.
+
+**Gates (ai-ubuntu-computer, `CARGO_BUILD_JOBS=2`, RAM era):** shell crate `cargo test`
+**TEST rc=0** twice, incl. six new `mcp.rs` unit tests (entry shape, add-only-ours,
+remove-only-ours, fresh-install/missing-install, unparseable-refused, empty-file);
+clippy bar measured by comparison — the shell crate is not clippy-gated by CI
+(ci.yml:123 runs `cargo test` only): current tree 7 lints, HEAD baseline 7 lints,
+identical sets (pre-existing `main.rs`/`status.rs` code), **zero lints added by this
+change**; fmt rc=1 on both trees (crate not fmt-clean at HEAD, CI does not gate it);
+host `node --test shell/tests`: 17 pass / 0 fail. Engine + contract-suite gates for the
+MCP surfaces themselves: `54038a6`'s section below.
+
 ## 2026-11-21 — MCP shipped on both surfaces: `digup mcp` (stdio) and `POST /api/v1/mcp` (`54038a6`)
 
 **What shipped.** The engine gained a Model Context Protocol peer (JSON-RPC 2.0, protocol
