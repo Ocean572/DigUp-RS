@@ -2,6 +2,48 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-21 — Stage 3: coding-agent CLI verbs on the Rust engine (`4c72f85`)
+
+The #178/#189 community PRs (the Swift-side coding-agent surface — the verbs exist only in
+those open PRs, `swift-reference` has none, so the PR texts are the behavioral contract)
+land on the Rust engine: `search --code | --all` (both stores, ONE query-encoder pass on
+the pair `Prompts.query` + `Prompts.codeQuery`, merged score-desc with segment id breaking
+ties), folder scopes `--in DIR` (repeatable) / `--here`/`-C` resolving through every
+canonical spelling — realpath, git worktree → main repository (a `.git` FILE's `gitdir:`,
+Git-for-Windows-absolute and `--relative-paths` alike: the code crawler skips worktrees, so
+`--here` must answer the MAIN checkout's rows), Windows case-insensitivity + drive-letter
+capitalization; `--keyword` (FTS5 + symbol lookup, no model, no vectors); `--strong`
+(engine `strongCount` 0.5× cutoff); `--text` (stored segment text, code lines numbered
+from `loc`); `show <segment-id | file>` (metadata + full stored text, model-free, main-then-
+code stores); `status --all / --in / --here / --json` (`statusFields`, `sortedKeys` shape;
+non-`--all` prints the dict itself). Human search lines carry `seg <id>`; the daemon's
+`hit_fields` keeps its pre-#178 bytes by construction. Tie order at equal fused scores is
+the keyword rank, then file id. Skills ship at `.agents/` + `.claude/` (byte-identical);
+`scripts/install-cli.sh` (cargo, Vendor rpath baked at link — the Swift `-Xlinker -rpath`
+shape) and `scripts/install-cli.ps1` (user-PATH, no admin; helper default
+`%LOCALAPPDATA%\DigUp\helper` = the Rust payload layout) put the CLI on PATH and copy the
+skill to Claude Code + Antigravity; `check-windows-package.sh` gained the CLI gate steps
+(small-drive-letter scope, backslash-path `show`, worktree `--here --code --keyword`,
+installer PATH check).
+
+**Gates (ai-ubuntu-computer, `CARGO_BUILD_JOBS=2`, RAM era):** engine gate in Docker
+(uid 1000 — DAC probe binds) **TEST rc=0 + CLIPPY rc=0** on the committed tree: 39 test
+targets, 0 FAILED, incl. `crates/runtime/tests/cli_scope.rs` (both #178/#189 `CodeTests`
+ports on a model-free `FakeEmbedder`) + 4 pure Windows-path unit tests + 2 new CLI-argument
+unit tests; host fmt `--check --all-targets` clean, host clippy `-D warnings` clean.
+**evals** on the Linux twin testbed (295 vectors / 440 segments, index built by the
+pre-Stage-3 binary `1d0921d` — the indexer is Stage-3-unchanged), answers old vs new on the
+SAME index: **code.json identical, multilingual.json identical**; synthetic.json differs on
+exactly 3 `name:`-query TIE rows (penguin.jpg|penguin copy.jpg ×2, Meeting notes|minutes
+.rtf) — each new top a member of the old top's tie set, landing on the eval's expected
+answer (name R@1 0.83→1.00, ALL R@1 0.91→0.93, MRR 0.94→0.95): the #189 word-rank
+tie-break doing exactly what it pins. **Contract suite 136 passed / 0 failed / 0 skipped**
+(1 deselected, 212.85 s) = the MCP-tip baseline; UI vitest + vite green in the image build.
+Host smoke on a real index: human `status` byte-shape unchanged (the server's anchored
+regexes + daemon verb see no new line — scopes are CLI-side, `scope:` prints only with
+`--in/--here`), `status --json` the pinned dict, scoped search hits / empty scope `[]`,
+`show` by id and file, `no segment <id>` → exit 1.
+
 ## 2026-11-21 — desktop MCP toggle: Settings → General "Connect Claude Desktop" (`5ec621b`)
 
 The Tauri app (Windows/Linux/macOS) gained the desktop-side half of MCP. On: the app adds
