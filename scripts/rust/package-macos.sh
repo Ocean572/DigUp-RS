@@ -88,7 +88,11 @@ done
 # the linker's own ad-hoc signature and are re-signed for the same reason (a copied byte
 # can lose it).
 codesign --force --sign - "$out/payload/libpdfium.dylib" "$out/payload/ffmpeg" "$out/payload/ffprobe"
-codesign --verify --strict "$out/payload/"*
+# Verify the code members only — the payload folder also carries LICENSE and the notices,
+# and codesign on a text file dies "code object is not signed at all" (measured on the
+# runner 2026-11-21: the folder glob failed the macos leg exactly there).
+codesign --verify --strict "$out/payload/digup" "$out/payload/digup-server" \
+    "$out/payload/libpdfium.dylib" "$out/payload/ffmpeg" "$out/payload/ffprobe"
 if [ "${#targets[@]}" = 2 ]; then
   for f in digup digup-server libpdfium.dylib; do
     archs=$(lipo -archs "$out/payload/$f")
