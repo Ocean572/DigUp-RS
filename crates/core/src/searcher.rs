@@ -310,6 +310,23 @@ pub struct SearchHit {
     pub focus: Option<f64>,
 }
 
+/// Metadata and full stored text of a single indexed segment (`SegmentDetail`,
+/// Searcher.swift #178: the `show` verb's rows).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentDetail {
+    pub segment_id: i64,
+    pub path: String,
+    pub kind: FileKind,
+    pub segment: SegmentKind,
+    pub loc: Option<f64>,
+    pub loc_end: Option<f64>,
+    pub excerpt: Option<String>,
+    pub text: Option<String>,
+    pub modified: f64,
+    pub size: i64,
+    pub info: HashMap<String, String>,
+}
+
 /// The knobs of `search` (Searcher.swift:115), the engine's defaults spelled out.
 #[derive(Debug, Clone)]
 pub struct SearchOptions<'a> {
@@ -318,6 +335,12 @@ pub struct SearchOptions<'a> {
     pub z_gate: f64,
     pub word_weight: Option<f64>,
     pub prefix_last: bool,
+    /// `under:` (#178/#189): scope the answer to files inside these folders or file paths
+    /// (CLI `--in`/`--here`, the agent skills). Nil: unscoped. Every canonical spelling of
+    /// each root joins the comparison — realpath and git-worktree→main-repo mappings are
+    /// resolved once by `search_targets`, and on Windows scoping ignores case, as Windows
+    /// file systems do. An empty scope answer is no hits, not an unscoped search.
+    pub under: Option<&'a [String]>,
 }
 
 impl Default for SearchOptions<'_> {
@@ -328,6 +351,7 @@ impl Default for SearchOptions<'_> {
             z_gate: Z_GATE,
             word_weight: None,
             prefix_last: false,
+            under: None,
         }
     }
 }
@@ -342,6 +366,9 @@ pub struct Searcher<'a> {
     row_modality: Vec<Modality>,
     row_sets_scale: Vec<bool>,
     file_kind: HashMap<i64, FileKind>,
+    /// `filePath` (#189): the folder scope and `segments(ofFile:)` match paths against
+    /// these, filled by `reloadFiles`.
+    file_path: HashMap<i64, String>,
     pub vector_source: Option<String>,
     pub vectors_loaded: bool,
 }
@@ -356,6 +383,7 @@ impl<'a> Searcher<'a> {
             row_modality: Vec::new(),
             row_sets_scale: Vec::new(),
             file_kind: HashMap::new(),
+            file_path: HashMap::new(),
             vector_source: None,
             vectors_loaded: false,
         };
@@ -469,20 +497,23 @@ impl<'a> Searcher<'a> {
         self.vectors_loaded = false;
     }
 
-    /// `reloadFiles` (Searcher.swift:92): the file-kind map and `vector_source`.
+    /// `reloadFiles` (Searcher.swift:92, #189): the file-kind and file-path maps, and
+    /// `vector_source`.
     pub fn reload_files(&mut self) -> Result<(), crate::db::Error> {
-        let mut rows: Vec<(i64, Option<String>)> = Vec::new();
+        let mut rows: Vec<(i64, Option<String>, Option<String>)> = Vec::new();
         self.store
             .db
-            .query("SELECT id, kind FROM files", [], |row| {
-                rows.push((row.int(0), row.text(1)));
+            .query("SELECT id, kind, path FROM files", [], |row| {
+                rows.push((row.int(0), row.text(1), row.text(2)));
                 Ok(())
             })?;
         self.file_kind.clear();
-        for (id, kind) in rows {
+        self.file_path.clear();
+        for (id, kind, path) in rows {
             if let Some(kind) = kind.and_then(|k| FileKind::parse(&k)) {
                 self.file_kind.insert(id, kind);
             }
+            self.file_path.insert(id, path.unwrap_or_default());
         }
         self.vector_source = self.store.meta("vector_source")?;
         Ok(())
@@ -519,6 +550,99 @@ impl<'a> Searcher<'a> {
             },
         )?;
         Ok(text)
+    }
+
+    /// Metadata and full stored text of segment `id`, or nil when no segment has that id
+    /// (`segment(id:)`, Searcher.swift #178: the `show` verb's lookup). The text is the
+    /// FTS row's, `original` winning over the tokenized `body`; a segment no FTS row
+    /// covers (a vector-only image) reports metadata with `text: nil`.
+    pub fn segment(&self, id: i64) -> Result<Option<SegmentDetail>, crate::db::Error> {
+        let mut detail: Option<SegmentDetail> = None;
+        self.store.db.query(
+            "SELECT s.id, f.path, f.kind, s.kind, s.loc, s.loc_end, s.excerpt, f.mtime, f.size, f.info, \
+             coalesce(fts.original, fts.body) \
+             FROM segments s JOIN files f ON f.id = s.file \
+             LEFT JOIN fts ON fts.rowid = s.id WHERE s.id = ?",
+            [Sql::Int(id)],
+            |row| {
+                // Swift casts the info JSON to [String: String]; any non-string value fails
+                // the cast, and the whole map falls back to empty (the hit loop's rule).
+                let mut info: HashMap<String, String> = HashMap::new();
+                if let Some(json) = row.text(9) {
+                    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&json) {
+                        let mut all_strings = true;
+                        let mut entries: HashMap<String, String> = HashMap::new();
+                        for (key, value) in map {
+                            match value {
+                                Value::String(text) => {
+                                    entries.insert(key, text);
+                                }
+                                _ => all_strings = false,
+                            }
+                        }
+                        if all_strings {
+                            info = entries;
+                        }
+                    }
+                }
+                detail = Some(SegmentDetail {
+                    segment_id: row.int(0),
+                    path: row.text(1).unwrap_or_default(),
+                    kind: FileKind::parse(&row.text(2).unwrap_or_default()).unwrap_or(FileKind::Doc),
+                    segment: SegmentKind::parse(&row.text(3).unwrap_or_default())
+                        .unwrap_or(SegmentKind::Name),
+                    loc: (!row.is_null(4)).then(|| row.double(4)),
+                    loc_end: (!row.is_null(5)).then(|| row.double(5)),
+                    excerpt: row.text(6),
+                    text: row.text(10),
+                    modified: row.double(7),
+                    size: row.int(8),
+                    info,
+                });
+                Ok(())
+            },
+        )?;
+        Ok(detail)
+    }
+
+    /// All content segments (excluding the synthetic 'name' segment) of the file at
+    /// `path`, ordered by location (`segments(ofFile:)`, Searcher.swift #178). The path
+    /// is tried under every canonical spelling — realpath, worktree→main-repo — and on
+    /// Windows the lookup ignores case, as `same_path` does.
+    pub fn segments_of_file(&self, path: &str) -> Result<Vec<SegmentDetail>, crate::db::Error> {
+        let targets = crate::folder_selection::search_targets(&[path.to_string()]);
+        let file_id = self
+            .file_path
+            .iter()
+            .find(|(_, stored)| {
+                targets.iter().any(|target| {
+                    crate::folder_selection::same_path(
+                        target,
+                        stored,
+                        crate::folder_selection::IS_WINDOWS,
+                    )
+                })
+            })
+            .map(|(id, _)| *id);
+        let Some(file_id) = file_id else {
+            return Ok(Vec::new());
+        };
+        let mut ids: Vec<i64> = Vec::new();
+        self.store.db.query(
+            "SELECT id FROM segments WHERE file = ? AND kind != 'name' ORDER BY loc, id",
+            [Sql::Int(file_id)],
+            |row| {
+                ids.push(row.int(0));
+                Ok(())
+            },
+        )?;
+        let mut out: Vec<SegmentDetail> = Vec::new();
+        for id in ids {
+            if let Some(detail) = self.segment(id)? {
+                out.push(detail);
+            }
+        }
+        Ok(out)
     }
 
     /// `isIndexed` (Searcher.swift:421): keyword search finds `pattern` in some file.
@@ -636,13 +760,54 @@ impl<'a> Searcher<'a> {
         if query_vector.is_some() && !self.vectors_loaded {
             self.reload()?;
         }
+        // `under:` (#178/#189): the scope's canonical spellings are resolved once —
+        // realpath and worktree→main-repo mappings included — then every indexed file is
+        // tested against them (kind filter folded in), so the vector loop, the FTS scan
+        // and the coverage pass all answer for the scope only. Windows scoping ignores
+        // case: the targets are lowered once here, each file's path as it's checked.
+        let ignore_case = crate::folder_selection::IS_WINDOWS;
+        let targets: Option<Vec<String>> = opts.under.map(|roots| {
+            let targets = crate::folder_selection::search_targets(roots);
+            if ignore_case {
+                targets.iter().map(|t| t.to_lowercase()).collect()
+            } else {
+                targets
+            }
+        });
+        let allowed_ids: Option<std::collections::HashSet<i64>> = targets.map(|targets| {
+            self.file_path
+                .iter()
+                .filter(|(id, path)| {
+                    let kind_ok = match opts.kinds {
+                        None => true,
+                        Some(kinds) => self
+                            .file_kind
+                            .get(id)
+                            .is_some_and(|kind| kinds.contains(kind)),
+                    };
+                    let checked = if ignore_case {
+                        path.to_lowercase()
+                    } else {
+                        path.to_string()
+                    };
+                    kind_ok && crate::folder_selection::matches(&checked, &targets, false)
+                })
+                .map(|(id, _)| *id)
+                .collect()
+        });
+        if allowed_ids.as_ref().is_some_and(|set| set.is_empty()) {
+            return Ok(Vec::new());
+        }
         let allowed = |file: i64| -> bool {
-            match opts.kinds {
-                None => true,
-                Some(kinds) => self
-                    .file_kind
-                    .get(&file)
-                    .is_some_and(|kind| kinds.contains(kind)),
+            match &allowed_ids {
+                Some(ids) => ids.contains(&file),
+                None => match opts.kinds {
+                    None => true,
+                    Some(kinds) => self
+                        .file_kind
+                        .get(&file)
+                        .is_some_and(|kind| kinds.contains(kind)),
+                },
             }
         };
 
@@ -701,13 +866,29 @@ impl<'a> Searcher<'a> {
         }
         if !patterns.is_empty() {
             let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+            // The scope rides into the FTS scan before bm25/LIMIT 1000 (#178): the 1000-row
+            // window is the scope's 1000 best, not the whole index's. Swift's
+            // `" AND s.file IN (\(ids))"` — one paren each side: the interpolation's parens
+            // are syntax, not characters (the doubled paren was rejected by SQLite, AGENTS.md).
+            let file_filter = match &allowed_ids {
+                None => String::new(),
+                Some(ids) => {
+                    let files: String = ids
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<String>>()
+                        .join(",");
+                    format!(" AND s.file IN ({files})")
+                }
+            };
             let sql =
                 format!(
                 "SELECT s.file, s.id, snippet(fts, {}, '«', '»', '…', 12), fts.original FROM fts \
-                 JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?{} \
+                 JOIN segments s ON s.id = fts.rowid WHERE fts MATCH ?{}{} \
                  ORDER BY bm25(fts, 3.0, 1.0) LIMIT 1000",
                 if names_only { 0 } else { 1 },
-                if names_only { " AND s.kind = 'name'" } else { "" }
+                if names_only { " AND s.kind = 'name'" } else { "" },
+                file_filter
             );
             let mut rows: Vec<(i64, i64, Option<String>, Option<String>)> = Vec::new();
             self.store
@@ -793,20 +974,26 @@ impl<'a> Searcher<'a> {
             }
             scored.push((*file, score));
         }
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(Ordering::Equal)
-                .then(a.0.cmp(&b.0))
-        });
-
         // The keyword rank per file is its first sighting; meaning wins the pointer when it
-        // stands out, else the segment the words matched.
+        // stands out, else the segment the words matched. Built before the sort (#189):
+        // at equal fused scores the better keyword rank wins, and file id breaks the rest.
         let mut word_rank: HashMap<i64, (usize, i64, Option<String>)> = HashMap::new();
         for (index, word) in words.iter().enumerate() {
             word_rank
                 .entry(word.0)
                 .or_insert((index + 1, word.1, word.2.clone()));
         }
+        scored.sort_by(|a, b| {
+            match b.1.partial_cmp(&a.1) {
+                Some(Ordering::Equal) => {}
+                Some(order) => return order,
+                None => return Ordering::Equal,
+            }
+            let rank_a = word_rank.get(&a.0).map(|w| w.0).unwrap_or(usize::MAX);
+            let rank_b = word_rank.get(&b.0).map(|w| w.0).unwrap_or(usize::MAX);
+            rank_a.cmp(&rank_b).then_with(|| a.0.cmp(&b.0))
+        });
+
         let mut hits: Vec<SearchHit> = Vec::new();
         for (file, score) in scored.into_iter().take(opts.limit) {
             let rank = hits.len();

@@ -315,6 +315,13 @@ PRAGMA user_version = 5;"
     fn scope_active(&self) -> bool {
         self.scope.borrow().is_some()
     }
+
+    /// `store.scope` (#178): the folders a scoped `counts()` answers for, nil when
+    /// unscoped — the `status --json`/scope line's rows.
+    pub fn scope(&self) -> Option<Vec<String>> {
+        self.scope.borrow().clone()
+    }
+
     fn scope_sql(&self) -> String {
         self.scope_sql.borrow().clone()
     }

@@ -33,12 +33,13 @@ struct Arguments {
 }
 
 /// `Arguments.valued`: flags that need a value.
-const VALUED: [&str; 16] = [
+const VALUED: [&str; 17] = [
     "--index",
     "--limit",
     "--kind",
     "-n",
     "--zgate",
+    "--z-gate",
     "--word-weight",
     "--new-limit",
     "--linger",
@@ -53,11 +54,12 @@ const VALUED: [&str; 16] = [
 ];
 
 /// `Arguments.repeated`: flags that collect a list.
-const REPEATED: [&str; 4] = [
+const REPEATED: [&str; 5] = [
     "--exclude",
     "--exclude-ext",
     "--code-root",
     "--code-exclude",
+    "--in",
 ];
 
 fn main() {
@@ -140,6 +142,13 @@ fn main() {
         }
         Some("search") => {
             if let Err(e) = search(&args) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("show") => {
+            // `show(...)` (main.swift #178): the stored segment text, no model.
+            if let Err(e) = show(&args) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -282,7 +291,7 @@ fn parse(argv: &[String]) -> Result<Arguments, String> {
                 values.insert(argument.clone(), value.clone());
             }
             index += 2;
-        } else if argument.starts_with("--") || argument == "-h" {
+        } else if argument.starts_with("--") || argument == "-h" || argument == "-C" {
             flags.push(argument.clone());
             index += 1;
         } else {
@@ -309,6 +318,64 @@ impl Arguments {
 
     fn list(&self, name: &str) -> Vec<String> {
         self.lists.get(name).cloned().unwrap_or_default()
+    }
+
+    /// #178/#189's search flags, as Swift's `Arguments.all/keyword/wantText/strongOnly`.
+    fn all(&self) -> bool {
+        self.flag("--all")
+    }
+
+    fn keyword(&self) -> bool {
+        self.flag("--keyword")
+    }
+
+    fn want_text(&self) -> bool {
+        self.flag("--text")
+    }
+
+    fn strong_only(&self) -> bool {
+        self.flag("--strong")
+    }
+
+    /// `Arguments.zGate` (#178): `--zgate`, with `--z-gate` accepted beside it.
+    fn z_gate(&self) -> f64 {
+        self.value("--zgate")
+            .or(self.value("--z-gate"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(digup_core::scoring::Z_GATE)
+    }
+
+    /// `Arguments.scopePaths` (#178/#189): the folder or file paths `--in` names, plus
+    /// the working folder for `--here`/`-C`; nil when unscoped. The paths ride the
+    /// verb's URL shape (tilde, cwd, standardize), and on Windows their drive letters
+    /// are capitalized the way the crawler's rows have them, so a shell reporting
+    /// `c:\…` still finds the index's `C:/…`.
+    fn scope_paths(&self) -> Option<Vec<String>> {
+        let mut paths: Vec<String> = self
+            .list("--in")
+            .iter()
+            .map(|p| folder_url(p).to_string_lossy().into_owned())
+            .collect();
+        if self.flag("--here") || self.flag("-C") {
+            paths.push(
+                url_path(
+                    &std::env::current_dir()
+                        .unwrap_or_default()
+                        .to_string_lossy(),
+                )
+                .to_string_lossy()
+                .into_owned(),
+            );
+        }
+        if paths.is_empty() {
+            return None;
+        }
+        Some(
+            paths
+                .iter()
+                .map(|p| digup_core::folder_selection::upper_drive(p, cfg!(windows)))
+                .collect(),
+        )
     }
 
     /// `Arguments.options` (main.swift:104-114): what the crawl and the estimate run under.
@@ -878,15 +945,135 @@ fn index(args: &Arguments) -> Result<(), String> {
 /// tag, the bytes on disk. `formats.rs` pins the exact shapes; the server
 /// parses these lines and shows the engine's words, so a line this port
 /// cannot produce is a line the server must not fake.
-fn status(args: &Arguments) -> digup_core::db::Result<()> {
-    use digup_core::model::FileKind;
-    let store = digup_core::IndexStore::open(&args.index_folder(), args.store_file())?;
-    let counts = store.counts()?;
+/// `status(_:)` (main.swift:398, #178/#189): the engine's own words — the server
+/// parses these lines, so the shape is the contract. `--all` reports both stores;
+/// `--in`/`--here` scope the counts to files under the given folders (the store's
+/// scope, resolved through every canonical spelling); `--json` answers
+/// `statusFields` — the same counts, machine-readable.
+fn status(args: &Arguments) -> Result<(), String> {
+    use digup_core::IndexStore;
+    let scope = args
+        .scope_paths()
+        .map(|paths| digup_core::folder_selection::search_targets(&paths));
     let home = std::env::var("HOME").unwrap_or_default();
+    if args.all() {
+        let index = args.index_folder();
+        let mut stores =
+            vec![IndexStore::open(&index, digup_core::MAIN_FILE).map_err(|e| e.to_string())?];
+        let code_path = std::path::PathBuf::from(format!(
+            "{}/{}",
+            index.to_string_lossy(),
+            digup_core::CODE_FILE
+        ));
+        if code_path.exists() {
+            stores
+                .push(IndexStore::open(&index, digup_core::CODE_FILE).map_err(|e| e.to_string())?);
+        }
+        for store in &stores {
+            store.set_scope(scope.clone()).map_err(|e| e.to_string())?;
+        }
+        if args.flag("--json") {
+            let rows: Vec<serde_json::Value> = stores
+                .iter()
+                .map(|store| status_fields(store, &home))
+                .collect::<Result<Vec<_>, _>>()?;
+            println!("{}", swift_json(&rows));
+            return Ok(());
+        }
+        for (idx, store) in stores.iter().enumerate() {
+            if idx > 0 {
+                println!();
+            }
+            print_store_status(store, &home).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    let store =
+        IndexStore::open(&args.index_folder(), args.store_file()).map_err(|e| e.to_string())?;
+    store.set_scope(scope).map_err(|e| e.to_string())?;
+    if args.flag("--json") {
+        // Swift prints the dict itself here (JSONSerialization on a single dict),
+        // not a one-row array.
+        println!("{}", swift_json_value(&status_fields(&store, &home)?));
+        return Ok(());
+    }
+    print_store_status(&store, &home).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// `statusFields` (main.swift #178): the counts keyed as Swift's sorted-key JSON
+/// writes them (`swift_json` sorts), with the store's scope and fingerprint riding
+/// in only when they are set.
+fn status_fields(store: &digup_core::IndexStore, home: &str) -> Result<serde_json::Value, String> {
+    use serde_json::{Map, Value};
+    let counts = store.counts().map_err(|e| e.to_string())?;
+    let mut row = Map::new();
+    row.insert(
+        "index".into(),
+        Value::String(store.file.to_string_lossy().into_owned()),
+    );
+    row.insert("vectors".into(), serde_json::json!(counts.vectors));
+    row.insert("segments".into(), serde_json::json!(counts.segments));
+    let mut by_kind = Map::new();
+    for (kind, states) in &counts.by_kind_and_state {
+        let mut states_row = Map::new();
+        for (state, count) in states {
+            states_row.insert(state.clone(), serde_json::json!(count));
+        }
+        by_kind.insert(kind.clone(), Value::Object(states_row));
+    }
+    row.insert("by_kind".into(), Value::Object(by_kind));
+    row.insert(
+        "unfinished_files".into(),
+        serde_json::json!(counts.unfinished),
+    );
+    row.insert("unfinished_units".into(), serde_json::json!(counts.left));
+    row.insert("size_bytes".into(), serde_json::json!(index_size(store)));
+    row.insert(
+        "build_tag".into(),
+        Value::String(digup_runtime::build_tag().to_string()),
+    );
+    row.insert(
+        "vector_version".into(),
+        serde_json::json!(digup_runtime::VECTOR_VERSION),
+    );
+    if let Some(scope) = store.scope() {
+        row.insert(
+            "scope".into(),
+            Value::Array(scope.iter().map(|p| Value::String(p.clone())).collect()),
+        );
+    }
+    if let Some(fingerprint) = store.meta("fingerprint").map_err(|e| e.to_string())? {
+        row.insert("fingerprint".into(), Value::String(fingerprint));
+    }
+    let _ = home;
+    Ok(Value::Object(row))
+}
+
+/// `IndexStore.size(of:)`: the database and its write-ahead log.
+fn index_size(store: &digup_core::IndexStore) -> i64 {
+    [
+        store.file.clone(),
+        std::path::PathBuf::from(format!("{}-wal", store.file.to_string_lossy())),
+    ]
+    .iter()
+    .map(|path| std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0))
+    .sum()
+}
+
+/// `printStoreStatus` (main.swift #178): the human block — the store, its scope when
+/// one is set, and the counts.
+fn print_store_status(store: &digup_core::IndexStore, home: &str) -> digup_core::db::Result<()> {
+    use digup_core::model::FileKind;
+    let counts = store.counts()?;
     println!(
         "index: {}",
-        formats::tilde(&store.file.to_string_lossy(), &home)
+        formats::tilde(&store.file.to_string_lossy(), home)
     );
+    if let Some(scope) = store.scope() {
+        let spelled: Vec<String> = scope.iter().map(|p| formats::tilde(p, home)).collect();
+        println!("scope: {}", spelled.join(", "));
+    }
     println!(
         "vectors: {} in {} segments",
         formats::number(counts.vectors),
@@ -1343,14 +1530,21 @@ fn search_kinds(
         Some(list) => {
             let mut set = std::collections::HashSet::new();
             for item in list.split(',') {
-                match FileKind::parse(item.trim()) {
+                // #178/#189: kinds are spelled case-insensitively, "document/documents/docs"
+                // mean the doc kind, and code joins the list.
+                let raw = item.trim().to_lowercase();
+                let mapped = match raw.as_str() {
+                    "document" | "documents" | "docs" => "doc",
+                    _ => raw.as_str(),
+                };
+                match FileKind::parse(mapped) {
                     Some(kind) => {
                         set.insert(kind);
                     }
                     None => {
                         return Err(format!(
-                            "unknown kind {item}; use screenshot, image, pdf, doc, audio, video"
-                        ))
+                        "unknown kind {item}; use screenshot, image, pdf, doc, audio, video, code"
+                    ))
                     }
                 }
             }
@@ -1393,41 +1587,45 @@ fn query_vectors(
 
 /// `location(_:)` (main.swift:178): the place a hit points at, in the CLI's words.
 fn location(hit: &digup_core::searcher::SearchHit) -> String {
+    location_kind(hit.segment, hit.loc, hit.loc_end, hit.focus)
+}
+
+/// `location(_:loc:locEnd:focus:)` (main.swift #178): the same words for a `show`
+/// row, whose segment the search never ranked.
+fn location_kind(
+    segment: digup_core::model::SegmentKind,
+    loc: Option<f64>,
+    loc_end: Option<f64>,
+    focus: Option<f64>,
+) -> String {
     use digup_core::model::SegmentKind;
-    match hit.segment {
-        SegmentKind::Page | SegmentKind::PageImage => hit
-            .loc
+    match segment {
+        SegmentKind::Page | SegmentKind::PageImage => loc
             .map(|loc| format!("p. {}", loc as i64))
             .unwrap_or_default(),
-        SegmentKind::Audio => hit
-            .loc
+        SegmentKind::Audio => loc
             .map(|loc| format!("at {} (sound)", formats::clock(loc)))
             .unwrap_or_default(),
-        SegmentKind::Frame => hit
-            .loc
+        SegmentKind::Frame => loc
             .map(|loc| format!("at {}", formats::clock(loc)))
             .unwrap_or_default(),
-        SegmentKind::Chunk => hit
-            .loc
+        SegmentKind::Chunk => loc
             .map(|loc| format!("part {}", loc as i64))
             .unwrap_or_default(),
-        SegmentKind::Lines => hit
-            .loc
+        SegmentKind::Lines => loc
             .map(|loc| {
-                format!("lines {}–{}", loc as i64, hit.loc_end.unwrap_or(loc) as i64)
-                    + &hit
-                        .focus
+                format!("lines {}–{}", loc as i64, loc_end.unwrap_or(loc) as i64)
+                    + &focus
                         .map(|focus| format!(", opens at {}", focus as i64))
                         .unwrap_or_default()
             })
             .unwrap_or_default(),
-        SegmentKind::Cells => hit
-            .loc
+        SegmentKind::Cells => loc
             .map(|loc| {
-                if hit.loc_end == Some(loc) {
+                if loc_end == Some(loc) {
                     format!("cell {}", loc as i64)
                 } else {
-                    format!("cells {}–{}", loc as i64, hit.loc_end.unwrap_or(loc) as i64)
+                    format!("cells {}–{}", loc as i64, loc_end.unwrap_or(loc) as i64)
                 }
             })
             .unwrap_or_default(),
@@ -1501,6 +1699,12 @@ fn swift_number(value: &serde_json::Number) -> String {
 /// `\uXXXX` for the rest, empty containers printed as `[`, a blank line, the
 /// closing indent — serde's Map is a BTreeMap, so `hit_fields` rows arrive sorted.
 fn swift_json(rows: &[serde_json::Value]) -> String {
+    swift_json_value(&serde_json::Value::Array(rows.to_vec()))
+}
+
+/// `JSONSerialization.data(withJSONObject:, [.prettyPrinted, .sortedKeys])` for any
+/// value — `status --json` without `--all` prints the dict itself (main.swift #178).
+fn swift_json_value(value: &serde_json::Value) -> String {
     fn esc(s: &str) -> String {
         let mut out = String::with_capacity(s.len() + 2);
         for c in s.chars() {
@@ -1582,74 +1786,311 @@ fn swift_json(rows: &[serde_json::Value]) -> String {
         }
     }
     let mut out = String::new();
-    write(&serde_json::Value::Array(rows.to_vec()), 0, &mut out);
+    write(value, 0, &mut out);
     out
 }
 
-/// `search(_:)` (main.swift:362): one query, the store's ranking relayed verbatim.
-/// The human lines and the `--json` rows are the CLI's own contract; the hits'
+/// `search(_:)` (main.swift:362, #178/#189): one query, the store's ranking relayed
+/// verbatim. The human lines and the `--json` rows are the CLI's own contract; the hits'
 /// numbers come from the engine (the daemon's `hit_fields` — the same rows).
+/// `--code`/`code:` pick the code index, `--all` searches both stores with ONE query
+/// encoder pass (the pair `Prompts.query` + `Prompts.codeQuery` embedded together),
+/// `--in`/`--here` scope the answer, `--keyword` skips the model, `--strong` cuts the
+/// weak tail, `--text` prints each matched segment's stored text.
 fn search(args: &Arguments) -> Result<(), String> {
-    use digup_core::searcher::{SearchOptions, Searcher};
-    use digup_core::{IndexStore, CODE_FILE, MAIN_FILE};
+    use digup_core::searcher::SearchHit;
+    use digup_core::IndexStore;
     let mut query = args.positional[1..].join(" ");
     if query.is_empty() {
         return Err("search for what?".to_string());
     }
-    let code = code_query_text(&query);
-    if let Some(text) = code.clone() {
+    let prefixed_code = code_query_text(&query);
+    if let Some(text) = prefixed_code.clone() {
         query = text;
     }
+    let use_code = args.flag("--code") || prefixed_code.is_some();
     if query.is_empty() {
         return Err("search the code for what?".to_string());
     }
-    let store = IndexStore::open(
-        &args.index_folder(),
-        if code.is_none() { MAIN_FILE } else { CODE_FILE },
-    )
-    .map_err(|e| e.to_string())?;
-    let mut searcher = Searcher::new(&store, true).map_err(|e| e.to_string())?;
-    let prompt: fn(&str) -> String = if code.is_none() {
-        digup_runtime::prompts::query
-    } else {
-        digup_runtime::prompts::code_query
-    };
-    let started = Instant::now();
-    let vector = query_vectors(&[query.clone()], &store, &searcher, prompt)?
-        .and_then(|mut groups| groups.pop());
-    let encoded = started.elapsed().as_secs_f64();
+    let limit = args
+        .value("-n")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|n| n.max(0) as usize)
+        .unwrap_or(10);
     let kinds = search_kinds(args)?;
-    let opts = SearchOptions {
+    let scope = args.scope_paths();
+    let keyword = args.keyword();
+    let word_weight = args.value("--word-weight").and_then(|v| v.parse().ok());
+    let z_gate = args.z_gate();
+    let started = Instant::now();
+
+    /// `search_all`/`search_one`'s answer: the hits paired with the store that
+    /// found them (0 = main, 1 = code, 2 = the single store; so `--text` reads the
+    /// text from the right database), the opened stores, the engine's vector count,
+    /// and the encoder's seconds (`encoded - started`).
+    struct SearchFlow {
+        paired: Vec<(usize, SearchHit)>,
+        main_store: Option<IndexStore>,
+        code_store: Option<IndexStore>,
+        store: Option<IndexStore>,
+        total_vectors: i64,
+        encoded_ms: f64,
+    }
+
+    /// `scope.as_deref()` as a named higher-order fn: the same helper serves both
+    /// shapes' options with their different lifetimes.
+    fn scope_of<'a, 'b>(scope: &'a Option<Vec<String>>) -> Option<&'b [String]>
+    where
+        'a: 'b,
+    {
+        scope.as_deref()
+    }
+
+    /// The knobs the two branches share (clippy's 7-argument ceiling is why they ride
+    /// in a struct: the Swift original reads the same knobs straight off `args`).
+    struct FlowParams<'a> {
+        query: &'a str,
+        keyword: bool,
+        limit: usize,
+        kinds: Option<&'a std::collections::HashSet<digup_core::model::FileKind>>,
+        scope: &'a Option<Vec<String>>,
+        word_weight: Option<f64>,
+        z_gate: f64,
+        started: Instant,
+    }
+
+    /// `search(_:)`'s `--all` branch (#178): both stores, ONE text-only encoder pass
+    /// embedding the pair `Prompts.query` + `Prompts.codeQuery`, the merged ranking
+    /// (score desc, segment id breaking ties) cut to `limit`.
+    fn run_all(index: &std::path::Path, p: &FlowParams<'_>) -> Result<SearchFlow, String> {
+        use digup_core::index_store::{CODE_FILE, MAIN_FILE};
+        use digup_core::searcher::{SearchOptions, Searcher};
+        use digup_core::IndexStore;
+        use digup_runtime::worker::Embedder;
+        use std::path::PathBuf;
+        let main_store = IndexStore::open(index, MAIN_FILE).map_err(|e| e.to_string())?;
+        // The code index is optional in this shape: an index folder with no code.sqlite
+        // searches the main store alone.
+        let code_path = PathBuf::from(format!("{}/{}", index.to_string_lossy(), CODE_FILE));
+        let code_store = if code_path.exists() {
+            Some(IndexStore::open(index, CODE_FILE).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        let mut searchers: Vec<Searcher<'_>> = Vec::new();
+        searchers.push(Searcher::new(&main_store, !p.keyword).map_err(|e| e.to_string())?);
+        if let Some(code_store) = &code_store {
+            searchers.push(Searcher::new(code_store, !p.keyword).map_err(|e| e.to_string())?);
+        }
+        let vectors_present = searchers.iter().any(|s| s.vector_count() > 0);
+
+        let mut main_vector: Option<Vec<f32>> = None;
+        let mut code_vector: Option<Vec<f32>> = None;
+        if !p.keyword && vectors_present {
+            let log = PathBuf::from(format!(
+                "{}/{}",
+                main_store.directory.to_string_lossy(),
+                "worker-query.log"
+            ));
+            let models = digup_runtime::LlamaModels::locate().map_err(|e| e.to_string())?;
+            let embedder = digup_runtime::LlamaEmbedder::new(&models, true, None, Some(&log))
+                .map_err(|e| e.to_string())?;
+            for searcher in &searchers {
+                if let Some(source) = &searcher.vector_source {
+                    let mine = embedder.info().vector_source();
+                    if *source != mine {
+                        return Err(format!(
+                            "index vectors come from {source} but the query encoder is {mine}"
+                        ));
+                    }
+                }
+            }
+            let pair = embedder
+                .embed_texts(&[
+                    digup_runtime::prompts::query(p.query),
+                    digup_runtime::prompts::code_query(p.query),
+                ])
+                .map_err(|e| e.to_string())?;
+            // Swift's indices verbatim: `pair.first` for main, `pair[1]` when the
+            // pair has a second row — the shape the batch guarantees.
+            main_vector = pair.first().cloned();
+            if pair.len() > 1 {
+                code_vector = pair[1].clone().into();
+            }
+            drop(embedder);
+        }
+        let encoded_ms = p.started.elapsed().as_secs_f64();
+
+        let base = SearchOptions {
+            kinds: p.kinds,
+            limit: p.limit,
+            z_gate: p.z_gate,
+            word_weight: p.word_weight,
+            prefix_last: false,
+            under: scope_of(p.scope),
+        };
+        let mut paired: Vec<(usize, SearchHit)> = Vec::new();
+        let main_hits = searchers[0]
+            .search(p.query, main_vector.as_deref(), &base)
+            .map_err(|e| e.to_string())?;
+        paired.extend(main_hits.into_iter().map(|hit| (0usize, hit)));
+        if searchers.len() > 1 {
+            let code_hits = searchers[1]
+                .search(p.query, code_vector.as_deref(), &base)
+                .map_err(|e| e.to_string())?;
+            paired.extend(code_hits.into_iter().map(|hit| (1usize, hit)));
+        }
+        // The merged ranking (#178): score desc, segment id breaking ties.
+        paired.sort_by(|a, b| {
+            b.1.score
+                .partial_cmp(&a.1.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.1.segment_id.cmp(&b.1.segment_id))
+        });
+        paired.truncate(p.limit);
+        let total_vectors: i64 = searchers.iter().map(|s| s.vector_count() as i64).sum();
+        Ok(SearchFlow {
+            paired,
+            main_store: Some(main_store),
+            code_store,
+            store: None,
+            total_vectors,
+            encoded_ms,
+        })
+    }
+
+    /// `search(_:)`'s single-store branch: the main store, or `--code`/`code:` the
+    /// code one; `--keyword` answers off the FTS5 scan with no model and no vectors.
+    fn run_one(
+        index: &std::path::Path,
+        store_file: &str,
+        p: &FlowParams<'_>,
+    ) -> Result<SearchFlow, String> {
+        use digup_core::searcher::{SearchOptions, Searcher};
+        use digup_core::IndexStore;
+        let store = IndexStore::open(index, store_file).map_err(|e| e.to_string())?;
+        let mut searchers: Vec<Searcher<'_>> =
+            vec![Searcher::new(&store, !p.keyword).map_err(|e| e.to_string())?];
+        let prompt: fn(&str) -> String = if store_file == digup_core::CODE_FILE {
+            digup_runtime::prompts::code_query
+        } else {
+            digup_runtime::prompts::query
+        };
+        let vector = if p.keyword {
+            None
+        } else {
+            query_vectors(&[p.query.to_string()], &store, &searchers[0], prompt)?
+                .and_then(|mut groups| groups.pop())
+        };
+        let encoded_ms = p.started.elapsed().as_secs_f64();
+        let opts = SearchOptions {
+            kinds: p.kinds,
+            limit: p.limit,
+            z_gate: p.z_gate,
+            word_weight: p.word_weight,
+            prefix_last: false,
+            under: scope_of(p.scope),
+        };
+        let hits = searchers[0]
+            .search(p.query, vector.as_deref(), &opts)
+            .map_err(|e| e.to_string())?;
+        let paired: Vec<(usize, SearchHit)> = hits.into_iter().map(|hit| (2usize, hit)).collect();
+        let total_vectors: i64 = searchers.iter().map(|s| s.vector_count() as i64).sum();
+        Ok(SearchFlow {
+            paired,
+            main_store: None,
+            code_store: None,
+            store: Some(store),
+            total_vectors,
+            encoded_ms,
+        })
+    }
+
+    let index = args.index_folder();
+    let params = FlowParams {
+        query: &query,
+        keyword,
+        limit,
         kinds: kinds.as_ref(),
-        limit: args
-            .value("-n")
-            .and_then(|v| v.parse::<i64>().ok())
-            .map(|n| n.max(0) as usize)
-            .unwrap_or(10),
-        z_gate: args
-            .value("--zgate")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(digup_core::scoring::Z_GATE),
-        word_weight: args.value("--word-weight").and_then(|v| v.parse().ok()),
-        prefix_last: false,
+        scope: &scope,
+        word_weight,
+        z_gate,
+        started,
     };
-    let hits = searcher
-        .search(&query, vector.as_deref(), &opts)
-        .map_err(|e| e.to_string())?;
-    let searched_ms = (started.elapsed().as_secs_f64() - encoded) * 1000.0;
+    let flow = if args.all() && !use_code {
+        run_all(&index, &params)?
+    } else {
+        run_one(&index, args.store_file(), &params)?
+    };
+    let SearchFlow {
+        mut paired,
+        main_store,
+        code_store,
+        store,
+        total_vectors,
+        encoded_ms,
+    } = flow;
+    // The store each paired hit rode: 0 main, 1 code, 2 the single one. `--text`
+    // reads segment text straight off the store — `Searcher::new(_, false)` is the
+    // file-map-only shape: no vectors, no model.
+    let mut text_searchers: Vec<digup_core::searcher::Searcher<'_>> = Vec::new();
+    for store in [&main_store, &code_store, &store]
+        .into_iter()
+        .filter_map(|store| store.as_ref())
+    {
+        text_searchers
+            .push(digup_core::searcher::Searcher::new(store, false).map_err(|e| e.to_string())?);
+    }
+    let text_searcher_of = |which: usize| -> &digup_core::searcher::Searcher<'_> {
+        match which {
+            0 => &text_searchers[0],
+            1 => &text_searchers[1],
+            _ => &text_searchers[text_searchers.len() - 1],
+        }
+    };
+    let search_ms = (started.elapsed().as_secs_f64() - encoded_ms) * 1000.0;
+
+    // `--strong`: the engine's own cutoff — the hits that score at least 0.5× the top.
+    let scores: Vec<f64> = paired.iter().map(|(_, hit)| hit.score).collect();
+    let strong_cutoff = digup_core::scoring::strong_count(&scores, 0.5);
+    if args.strong_only() {
+        let keep = strong_cutoff.min(paired.len());
+        paired.truncate(keep);
+    }
+
     if args.flag("--json") {
-        let rows: Vec<serde_json::Value> = hits
+        let texts: Vec<Option<String>> = if args.want_text() {
+            paired
+                .iter()
+                .map(|(which, hit)| {
+                    text_searcher_of(*which)
+                        .text_of_segment(hit.segment_id)
+                        .ok()
+                        .flatten()
+                })
+                .collect()
+        } else {
+            paired.iter().map(|_| None).collect()
+        };
+        let rows: Vec<serde_json::Value> = paired
             .iter()
-            .map(digup_services::search_service::hit_fields)
+            .enumerate()
+            .map(|(index, (_, hit))| {
+                digup_services::search_service::hit_fields_text(
+                    hit,
+                    Some(index < strong_cutoff),
+                    texts[index].as_deref(),
+                )
+            })
             .collect();
         println!("{}", swift_json(&rows));
         return Ok(());
     }
-    if hits.is_empty() {
+    if paired.is_empty() {
         println!("no good matches");
     }
     let home = std::env::var("HOME").unwrap_or_default();
-    for (rank, hit) in hits.iter().enumerate() {
+    for (rank, (which, hit)) in paired.iter().enumerate() {
         let mut why: Vec<String> = Vec::new();
         if let Some(z) = hit.z {
             why.push(format!("z {:.1}", z));
@@ -1657,6 +2098,8 @@ fn search(args: &Arguments) -> Result<(), String> {
         if let Some(words) = hit.keyword_rank {
             why.push(format!("words #{words}"));
         }
+        // `seg <id>` (#178): the number `digup show` reads back.
+        why.push(format!("seg {}", hit.segment_id));
         let place = location(hit);
         let name = Path::new(&hit.path)
             .file_name()
@@ -1679,19 +2122,194 @@ fn search(args: &Arguments) -> Result<(), String> {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
         println!("      {}", formats::tilde(&folder, &home));
-        if let Some(excerpt) = &hit.excerpt {
+        let full_text = if args.want_text() {
+            // Swift's `try? entry.searcher.text(ofSegment:)`: a read failure prints
+            // the excerpt, never a crash.
+            text_searcher_of(*which)
+                .text_of_segment(hit.segment_id)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        if let Some(text) = &full_text {
+            if !text.is_empty() {
+                print_segment_text(text, hit.segment, hit.loc, "      ");
+            }
+        } else if let Some(excerpt) = &hit.excerpt {
             if !excerpt.is_empty() {
                 let cut: String = excerpt.graphemes(true).take(160).collect();
                 println!("      “{cut}”");
             }
         }
     }
-    println!(
-        "({} vectors · query encoder {:.2} s incl. start-up · search {:.0} ms)",
-        searcher.vector_count(),
-        encoded,
-        searched_ms
-    );
+    if keyword {
+        println!("(keyword search · {:.0} ms)", search_ms.max(0.0));
+    } else {
+        println!(
+            "({} vectors · query encoder {:.2} s incl. start-up · search {:.0} ms)",
+            total_vectors,
+            encoded_ms,
+            search_ms.max(0.0)
+        );
+    }
+    Ok(())
+}
+
+/// `printSegmentText` (main.swift #178): the stored text of a segment, source lines
+/// numbered from `loc` for a code stretch, plain for page/chunk/transcript text.
+fn print_segment_text(
+    text: &str,
+    segment: digup_core::model::SegmentKind,
+    loc: Option<f64>,
+    indent: &str,
+) {
+    use digup_core::model::SegmentKind;
+    // Swift's split: `omittingEmptySubsequences: false` over `"\n"` and `"\r\n"` —
+    // empty lines kept, CRLF consumed whole (no stray `\r` left on the line).
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    if segment == SegmentKind::Lines {
+        let first = loc.unwrap_or(1.0) as i64;
+        let width = formats::number(first + (lines.len() as i64 - 1).max(0))
+            .chars()
+            .count();
+        for (offset, line) in lines.iter().enumerate() {
+            println!(
+                "{}{} | {}",
+                indent,
+                formats::lpad(&formats::number(first + offset as i64), width),
+                line
+            );
+        }
+    } else {
+        for line in &lines {
+            println!("{indent}{line}");
+        }
+    }
+}
+
+/// `show(_:)` (main.swift #178): the full stored text behind a segment id (`seg <id>`
+/// from search output) or a file path, with no model and no vectors. A bare number is
+/// an id (Swift's `Int64(raw)`, when that name is not a file on disk); everything
+/// else is a path, tried under every canonical spelling — realpath and worktree→main.
+/// Unflagged, it checks `index.sqlite` then `code.sqlite`; `--code` reads the code
+/// store alone; `--all` collects from every store it opens.
+fn show(args: &Arguments) -> Result<(), String> {
+    use digup_core::searcher::{Searcher, SegmentDetail};
+    use digup_core::{IndexStore, CODE_FILE, MAIN_FILE};
+    use std::path::PathBuf;
+    if args.positional.len() < 2 {
+        return Err("show which segment ID or file path?".to_string());
+    }
+    let index = args.index_folder();
+    let main_path = PathBuf::from(format!("{}/{}", index.to_string_lossy(), MAIN_FILE));
+    let code_path = PathBuf::from(format!("{}/{}", index.to_string_lossy(), CODE_FILE));
+    let mut stores: Vec<IndexStore> = Vec::new();
+    if args.flag("--code") {
+        stores.push(IndexStore::open(&index, CODE_FILE).map_err(|e| e.to_string())?);
+    } else {
+        if main_path.exists() {
+            stores.push(IndexStore::open(&index, MAIN_FILE).map_err(|e| e.to_string())?);
+        }
+        if code_path.exists() {
+            stores.push(IndexStore::open(&index, CODE_FILE).map_err(|e| e.to_string())?);
+        }
+        if stores.is_empty() {
+            stores.push(IndexStore::open(&index, MAIN_FILE).map_err(|e| e.to_string())?);
+        }
+    }
+    let mut searchers: Vec<Searcher<'_>> = Vec::new();
+    for store in &stores {
+        searchers.push(Searcher::new(store, false).map_err(|e| e.to_string())?);
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut results: Vec<SegmentDetail> = Vec::new();
+    for raw in &args.positional[1..] {
+        let expanded = expand_tilde(raw);
+        // Swift's `Int64(raw)` + `FileManager.fileExists(atPath:)`: a bare number is a
+        // segment id unless that name exists on disk (fileExists counts a directory too).
+        let id = raw
+            .parse::<i64>()
+            .ok()
+            .filter(|_| !std::fs::metadata(&expanded).is_ok());
+        if let Some(id) = id {
+            let mut matched = false;
+            for searcher in &searchers {
+                if let Some(detail) = searcher.segment(id).map_err(|e| e.to_string())? {
+                    results.push(detail);
+                    matched = true;
+                    if !args.all() {
+                        break;
+                    }
+                }
+            }
+            if !matched {
+                return Err(format!("no segment {id}"));
+            }
+        } else {
+            let abs_path = url_path(&expanded.to_string_lossy());
+            let candidates = digup_core::folder_selection::search_targets(&[abs_path
+                .to_string_lossy()
+                .into_owned()]);
+            let mut matched = false;
+            for searcher in &searchers {
+                for candidate in &candidates {
+                    let segs = searcher
+                        .segments_of_file(candidate)
+                        .map_err(|e| e.to_string())?;
+                    if !segs.is_empty() {
+                        results.extend(segs);
+                        matched = true;
+                        break;
+                    }
+                }
+                if matched && !args.all() {
+                    break;
+                }
+            }
+            if !matched {
+                return Err(format!("file not in index: {raw}"));
+            }
+        }
+    }
+
+    if args.flag("--json") {
+        let rows: Vec<serde_json::Value> = results
+            .iter()
+            .map(digup_services::search_service::segment_fields)
+            .collect();
+        println!("{}", swift_json(&rows));
+        return Ok(());
+    }
+    for (idx, detail) in results.iter().enumerate() {
+        if idx > 0 {
+            println!();
+        }
+        let place = location_kind(detail.segment, detail.loc, detail.loc_end, None);
+        println!(
+            "{}  {}{}   (seg {}, {})",
+            detail.kind.as_str(),
+            formats::tilde(&detail.path, &home),
+            if place.is_empty() {
+                String::new()
+            } else {
+                format!("  [{place}]")
+            },
+            detail.segment_id,
+            detail.segment.as_str()
+        );
+        if let Some(text) = &detail.text {
+            if !text.is_empty() {
+                print_segment_text(text, detail.segment, detail.loc, "  ");
+            }
+        } else {
+            println!("  (no stored text)");
+        }
+    }
     Ok(())
 }
 
@@ -1750,10 +2368,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
         .and_then(|v| v.parse::<i64>().ok())
         .map(|n| n.max(0) as usize)
         .unwrap_or(10);
-    let z_gate = args
-        .value("--zgate")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(digup_core::scoring::Z_GATE);
+    let z_gate = args.z_gate();
     let word_weight = args.value("--word-weight").and_then(|v| v.parse().ok());
     let index = args.index_folder();
     let main_store = if is_code.iter().any(|code| !*code) {
@@ -1825,6 +2440,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
             z_gate,
             word_weight,
             prefix_last: false,
+            under: None,
         };
         let hits = searcher
             .search(&texts[i], vectors[i].as_deref(), &opts)
@@ -2315,6 +2931,7 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
 mod tests {
     use super::byte_count;
     use super::parse;
+    use super::search_kinds;
 
     /// `Arguments.store()` (main.swift:101-103): `--code` names `code.sqlite` — the store a
     /// code run answers its fingerprint to. The port opened `index.sqlite` for `index --code`
@@ -2474,5 +3091,79 @@ mod tests {
         for (bytes, expected) in cases {
             assert_eq!(byte_count(bytes), expected, "{bytes}");
         }
+    }
+
+    /// The #178/#189 argument shapes: `--in` collects (REPEATED), `-C` and the new
+    /// bare flags parse as flags, `--z-gate` takes its value (VALUED), and
+    /// `scopePaths` is the folder_url + upper_drive shape — nil when unscoped.
+    #[test]
+    fn the_scope_flags_parse_the_pr_shape() {
+        let args = parse(
+            &[
+                "search",
+                "retry",
+                "--in",
+                "/data/photos",
+                "--in",
+                "/home/me/repo",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            args.scope_paths(),
+            Some(vec![
+                "/data/photos".to_string(),
+                "/home/me/repo".to_string()
+            ])
+        );
+        assert!(args.list("--in").len() == 2);
+
+        let unscoped = parse(&["search", "retry"].map(String::from)).unwrap();
+        assert_eq!(unscoped.scope_paths(), None);
+
+        // `-C` is a bare flag (not valued: the next token stays positional).
+        let here = parse(&["search", "-C", "retry"].map(String::from)).unwrap();
+        assert!(here.flag("-C"));
+        let scoped = here.scope_paths().expect("--here scopes to the cwd");
+        assert_eq!(scoped.len(), 1, "the cwd is the one scope");
+
+        let flags =
+            parse(&["search", "x", "--all", "--keyword", "--text", "--strong"].map(String::from))
+                .unwrap();
+        assert!(flags.all() && flags.keyword() && flags.want_text() && flags.strong_only());
+
+        // --z-gate beside --zgate (Swift's zGate accessor).
+        let gate = parse(&["search", "x", "--z-gate", "1.5"].map(String::from)).unwrap();
+        assert_eq!(gate.z_gate(), 1.5);
+        let gate = parse(&["search", "x", "--zgate", "2.5"].map(String::from)).unwrap();
+        assert_eq!(gate.z_gate(), 2.5);
+        let gate = parse(&["search", "x"].map(String::from)).unwrap();
+        assert_eq!(gate.z_gate(), 2.0);
+    }
+
+    /// `kinds()` (#178/#189): case-insensitive, "document/documents/docs" map to doc,
+    /// code joins the list, and the refusal names the full list.
+    #[test]
+    fn kinds_accept_the_agent_spellings() {
+        use digup_core::model::FileKind;
+        let kinds_of = |argv: &[&str]| {
+            let owned: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
+            let args = parse(&owned).expect("the arguments parse");
+            search_kinds(&args).map(|kinds| kinds.expect("a --kind list answers a set"))
+        };
+        let set = kinds_of(&["search", "x", "--kind", "Docs, PDF,CODE "]).expect("accepted");
+        assert!(
+            set.contains(&FileKind::Doc)
+                && set.contains(&FileKind::Pdf)
+                && set.contains(&FileKind::Code)
+        );
+        assert_eq!(set.len(), 3);
+
+        let err = kinds_of(&["search", "x", "--kind", "screenshot,spreadsheet"]).unwrap_err();
+        assert_eq!(
+            err,
+            "unknown kind spreadsheet; use screenshot, image, pdf, doc, audio, video, code"
+        );
     }
 }

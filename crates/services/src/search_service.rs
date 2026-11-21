@@ -200,9 +200,21 @@ fn vector_for(state: &mut State, text: &str, code: bool) -> Option<Vec<f32>> {
     }
 }
 
-/// `hitFields` (SearchService.swift:365): a hit as JSON — what `digup search
-/// --json` prints, plus segment_id, modified, size and info.
+/// `hitFields` (SearchService.swift:365, #178): a hit as JSON — what `digup search
+/// `--json` prints, plus segment_id, modified, size and info. `strong` and `text` ride
+/// in only when the caller knows them (the CLI's `--json` with `--strong`/`--text`);
+/// the daemon's replies keep the pre-#178 bytes by passing nil.
 pub fn hit_fields(hit: &SearchHit) -> Value {
+    hit_fields_strong_text(hit, None, None)
+}
+
+/// The #178 shape: `strong` (`--strong`'s cutoff, per row) and `text` (`--text`'s
+/// stored segment text) ride in only when the caller knows them.
+pub fn hit_fields_text(hit: &SearchHit, strong: Option<bool>, text: Option<&str>) -> Value {
+    hit_fields_strong_text(hit, strong, text)
+}
+
+fn hit_fields_strong_text(hit: &SearchHit, strong: Option<bool>, text: Option<&str>) -> Value {
     let mut row = Map::new();
     row.insert("path".into(), Value::String(hit.path.clone()));
     row.insert("kind".into(), Value::String(hit.kind.as_str().to_string()));
@@ -239,6 +251,48 @@ pub fn hit_fields(hit: &SearchHit) -> Value {
     }
     if let Some(excerpt) = &hit.excerpt {
         row.insert("excerpt".into(), Value::String(excerpt.clone()));
+    }
+    if let Some(strong) = strong {
+        row.insert("strong".into(), Value::Bool(strong));
+    }
+    if let Some(text) = text {
+        row.insert("text".into(), Value::String(text.to_string()));
+    }
+    Value::Object(row)
+}
+
+/// `segmentFields` (SearchService.swift #178): a `show` row — the segment's metadata
+/// and its full stored text (nil for a segment no FTS row covers).
+pub fn segment_fields(detail: &digup_core::searcher::SegmentDetail) -> Value {
+    let mut row = Map::new();
+    row.insert("path".into(), Value::String(detail.path.clone()));
+    row.insert(
+        "kind".into(),
+        Value::String(detail.kind.as_str().to_string()),
+    );
+    row.insert(
+        "segment".into(),
+        Value::String(detail.segment.as_str().to_string()),
+    );
+    row.insert("segment_id".into(), serde_json::json!(detail.segment_id));
+    row.insert("modified".into(), serde_json::json!(detail.modified));
+    row.insert("size".into(), serde_json::json!(detail.size));
+    let mut info = Map::new();
+    for (key, value) in &detail.info {
+        info.insert(key.clone(), Value::String(value.clone()));
+    }
+    row.insert("info".into(), Value::Object(info));
+    if let Some(loc) = detail.loc {
+        row.insert("loc".into(), serde_json::json!(loc));
+    }
+    if let Some(end) = detail.loc_end {
+        row.insert("loc_end".into(), serde_json::json!(end));
+    }
+    if let Some(excerpt) = &detail.excerpt {
+        row.insert("excerpt".into(), Value::String(excerpt.clone()));
+    }
+    if let Some(text) = &detail.text {
+        row.insert("text".into(), Value::String(text.clone()));
     }
     Value::Object(row)
 }
@@ -448,6 +502,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 z_gate: digup_core::scoring::Z_GATE,
                 word_weight: None,
                 prefix_last,
+                under: None,
             };
             let hits: Vec<SearchHit> = if code {
                 let Some(code_searcher) = state.code_searcher.as_mut() else {
