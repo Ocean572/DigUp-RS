@@ -11,6 +11,19 @@
 #   docker compose -f docker-compose.nextcloud.yml up -d
 #   → Nextcloud on http://127.0.0.1:8081/, DigUp on http://127.0.0.1:8787/
 #
+# Completing the headless install (measured 2026-11-21, the Rust-era pilot re-run): the
+# official image prepares the instance and prints "Next step: Access your instance" —
+# env vars alone leave status.php installed:false (autoconfig completes it on the FIRST
+# PAGE LOAD, not on /status.php: GET /index.php/ until installed:true). Then the dav
+# shape's provisioning chain, in order: users via
+# `docker exec --user www-data -e OC_PASS=<pw> <nc> php occ user:add --password-from-env <uid>`
+# (host env does NOT ride docker exec — the -e is required), app passwords via
+# `occ user:auth-tokens:add` (Nextcloud GENERATES the string; feed the pairs to DAV_APPPW
+# and `up -d dav`), and `nextcloud` in trusted_domains (the davfs OPTIONS carries
+# Host: nextcloud; an untrusted host answers 400 Bad Request — the exact mount failure
+# signature; the DIGUP_NEXTCLOUD_TRUSTED_DOMAINS env applies at FIRST INSTALL only, on
+# an installed stack add it: `php occ config:system:set trusted_domains 2 --value=nextcloud`).
+#
 # The design (stage-12 §11.1): Nextcloud owns its files, users, ACLs and previews; the
 # DigUp server reads the same data directory, mounted READ-ONLY at /media/photos, and the
 # DigUp Nextcloud app (its own repository) queries the API server-to-server inside this
