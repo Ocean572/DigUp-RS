@@ -53,6 +53,18 @@
         </span>
       </label>
 
+      <label class="option">
+        <input type="checkbox" id="mcp-claude">
+        <span class="text">
+          <span class="name">Connect Claude Desktop</span>
+          <span class="info">Adds DigUp to Claude Desktop's own settings, so Claude can search your indexed folders
+            through the Model Context Protocol — the answers are the engine's own rows and scores, and your files
+            stay on this computer. Folders you add later are picked up. The protocol server is built into DigUp's
+            helper (`digup mcp`), so any agent on this machine can use it without this switch, which only writes
+            DigUp's line in Claude Desktop's file.</span>
+        </span>
+      </label>
+
       <h3>The shortcut</h3>
       <div class="keys" id="keys"></div>
       <button class="link" id="change-shortcut" hidden>Change Shortcut…</button>

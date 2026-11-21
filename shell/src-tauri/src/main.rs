@@ -12,6 +12,7 @@ mod helper;
 mod hotkey;
 mod hours;
 mod launch;
+mod mcp;
 mod moments;
 mod options;
 mod settings;
@@ -790,7 +791,7 @@ fn main() {
             app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, relative_path_text, copy_text, drag_out, set_hotkey, hold_hotkey,
-            set_tray_click, check_for_updates, offer_update, set_update_checks, open_licenses
+            set_tray_click, check_for_updates, offer_update, set_update_checks, set_mcp_claude, open_licenses
         ])
         .build(tauri::generate_context!())
         .expect("DigUp couldn't start");
@@ -994,6 +995,16 @@ fn apply_folders(app: &AppHandle) {
     }
     send_folders_request(&shell);
     watch_folders(app);
+    // Connect Claude Desktop (Settings → General): the entry names the folders, so a folder
+    // change rewrites it — an agent searching a stale folder list is worse than a silent
+    // rewrite of our own entry (the rest of the person's file is left where it is).
+    let settings = shell.settings.lock().unwrap().clone();
+    if settings.mcp_claude {
+        let args = search_arguments(shell.options.index.as_deref(), &settings, &shell.code_folders(), &folders);
+        if let Some(path) = mcp::config_file() {
+            let _ = mcp::enable(&path, &shell.options.helper, &args);
+        }
+    }
 }
 
 /// Tell the running search helper the current folders, and save the same list as the launch
@@ -1378,6 +1389,7 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         "canOpenAtLogin": shell.opens_at_login(),
         "centered": shell.settings.lock().unwrap().center_panel,
         "processorOnly": settings.processor_only,
+        "mcpClaude": settings.mcp_claude,
         // Windows' tray reports clicks (Linux's open the menu, a Mac's too).
         "canChooseTrayClick": cfg!(windows),
         "trayClick": if settings.tray_click == "panel" { "panel" } else { "window" },
@@ -1735,6 +1747,25 @@ fn set_processor_only(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) ->
     shell.index.stop();
     later(&app, run_index);
     Ok(())
+}
+
+/// Settings → General: Connect Claude Desktop (mcp.rs). The entry carries the app's own
+/// daemon arguments — the folders, exclusions, code folders and index exactly as
+/// `search_arguments` builds them for the helper — so Claude answers what this app
+/// indexes. Turning off removes just our entry from the person's file.
+#[tauri::command]
+fn set_mcp_claude(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
+    let settings = shell.settings.lock().unwrap().clone();
+    let args = search_arguments(shell.options.index.as_deref(), &settings, &shell.code_folders(), &shell.folders());
+    let path = mcp::config_file().ok_or("this computer names no user settings folder")?;
+    if on {
+        mcp::enable(&path, &shell.options.helper, &args)?;
+    } else {
+        mcp::disable(&path)?;
+    }
+    let mut settings = shell.settings.lock().unwrap();
+    settings.mcp_claude = on;
+    settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
 }
 
 #[tauri::command]

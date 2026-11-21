@@ -48,6 +48,7 @@ function renderGeneral() {
   $("center-option").hidden = !info.canCenter;
   $("center").checked = info.centered;
   $("processor").checked = info.processorOnly;
+  $("mcp-claude").checked = !!info.mcpClaude;
   $("keys").replaceChildren(...info.hotkey.split("+").filter(Boolean).map((key) => element("span", "key", key)));
   const note = notes[info.shortcut.method];
   $("shortcut-note").hidden = !note;
@@ -105,6 +106,7 @@ function wire(box, command) {
 wire($("login"), "set_open_at_login");
 wire($("center"), "set_center_panel");
 wire($("processor"), "set_processor_only");
+wire($("mcp-claude"), "set_mcp_claude");
 wire($("update-checks"), "set_update_checks");
 for (const choice of document.querySelectorAll('input[name="tray-click"]')) {
   choice.addEventListener("change", () => {
