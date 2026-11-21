@@ -1,6 +1,6 @@
 [project]
 name = "digup-server"
-version = "0.8.0"
+version = "0.8.1"
 description = "DigUp as a self-hosted search server: the contract suite's harness around the Rust server (`digup-server`), speaking only DigUp's own JSON-lines protocol"
 requires-python = ">=3.12,<3.13"
 # Plan P3 (docs/implementation/python-free-plan.md): the product's server is Rust

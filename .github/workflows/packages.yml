@@ -377,3 +377,59 @@ jobs:
             shell/src-tauri/target/release/bundle/dmg/*.dmg
             dist/*.tar.gz
           if-no-files-found: error
+
+  feeds:
+    # The Tauri update feeds the installed apps read (plugins.updater.endpoints in
+    # shell/src-tauri/tauri.conf.json: raw.githubusercontent.com/…/main/updates/<target>-<arch>.json).
+    # Runs on a tag dispatch only — a branch run publishes nothing people should update to. The
+    # three app jobs above build the signed artifacts (the .sig files need TAURI_SIGNING_PRIVATE_KEY);
+    # scripts/update-feed.py turns them into one feed per platform, and the feeds ride the
+    # repository's main branch, which is where every installed copy reads them from. The download
+    # URLs point at THIS repository's release (DOWNLOAD_BASE — the script's default names the
+    # Swift-era upstream), and the notes are the release page's own text.
+    # A tag's raw artifacts (the .exe, the .AppImage, the .app.tar.gz + .sig) must be attached to
+    # the release before the feeds go out — an app that reads a feed pointing at an unattached
+    # asset fails the download (see the release checklist in AGENTS.md).
+    name: Update feeds (tag)
+    needs: [linux, windows, macos]
+    if: ${{ startsWith(inputs.ref, 'v') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: DigUp-*
+          path: packages
+          merge-multiple: true
+      - name: The feeds (scripts/update-feed.py)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.ref }}
+        run: |
+          set -eu
+          notes="$RUNNER_TEMP/notes.txt"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" -q '.body // ""' > "$notes" 2>/dev/null || : > "$notes"
+          DOWNLOAD_BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" \
+            python3 scripts/update-feed.py packages updates --tag "$TAG" --notes "$notes" --also-latest
+      - name: The feeds onto main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git add updates
+          git diff --staged --quiet && { echo "no feed changes"; exit 0; }
+          git -c user.name=github-actions\[bot\] -c user.email=41898282+github-actions\[bot\]@users.noreply.github.com \
+            commit -m "update feeds: $TAG"
+          tries=0
+          until git push "https://x-access-token:${GH_TOKEN}@github.com/$GITHUB_REPOSITORY.git" HEAD:main; do
+            tries=$((tries+1))
+            [ "$tries" -ge 4 ] && exit 1
+            echo "push: main moved under us, rebasing (attempt $tries)"
+            git -c rebase.autoStash=true pull --rebase "https://x-access-token:${GH_TOKEN}@github.com/$GITHUB_REPOSITORY.git" main
+            sleep 15
+          done

@@ -36,9 +36,14 @@ T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 mkdir -p Vendor
 # Verify bytes before extracting an archive or installing a header. curl errors also fail closed.
+# Bounded retries: GitHub's release-asset CDN answers 403 (abuse detection) to runners at random
+# (measured on the Packages run 2026-11-21: miniz 403 mid-build, the same URL 200 from the box
+# minutes later; the Vulkan SDK download is wrapped the same way in packages.yml). The pin check
+# runs on the final bytes — a retried download is verified exactly like a first-attempt one.
 download() {
   local name="$1" url="$2"
-  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' -o "$T/$name" "$url"
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --retry 6 --retry-delay 15 --retry-all-errors -o "$T/$name" "$url"
   "$PYTHON" - "$name" "$T/$name" <<'PY'
 import hashlib, json, sys
 name, path = sys.argv[1:]
