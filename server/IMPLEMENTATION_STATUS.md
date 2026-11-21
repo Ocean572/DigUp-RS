@@ -2,6 +2,42 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-21 — MCP shipped on both surfaces: `digup mcp` (stdio) and `POST /api/v1/mcp` (`54038a6`)
+
+**What shipped.** The engine gained a Model Context Protocol peer (JSON-RPC 2.0, protocol
+`2025-06-18`) on both shipping surfaces: `digup mcp [FOLDER]... [--allow-admin]` over stdio
+— Claude Desktop's command-block shape, riding the `search-service` daemon (lazy spawn,
+idle-exit = restart, quit+reap at EOF) — and `POST /api/v1/mcp` on the server (stateless
+streamable HTTP: one message per POST, `mcp-session-id` echoed, notifications answer 202
+with an empty body). The relay law is structural, not a promise: the server's tools ARE the
+REST handlers called in-process, so a `tools/call` reply carries the engine's answer
+verbatim in `structuredContent` (fields/numbers/order as the UI reads them, transport id
+stripped like REST strips it) beside a short skimming text; refusals land `isError` with
+the engine's own words. Tool visibility mirrors the bearer gate: read keys advertise
+`search`/`status`/`show`, admin principals add `estimate`/`index` (a read key on one of
+those gets the REST gate's 403 words quoted verbatim); the stdio surface has no gate, so
+its missing tools answer plain unknown-tool errors, and an inert (tokenless) deployment
+advertises the full set key-free — matching what its REST admin routes answer key-free.
+`limit` defaults to 10 (max 100, the engine's own cap). API.md gained the "Connect an AI
+agent" section; the openapi table and the docs page carry the row.
+
+**Gates (ai-ubuntu-computer, box at 56 Gi used by other work — cargo ran at
+`CARGO_BUILD_JOBS=2`, Vendor cache warm):** engine gate as uid 1000 with DAC probe
+refused: `cargo test --workspace --all-targets` **TEST rc=0**, `cargo clippy --workspace
+--all-targets -- -D warnings` **CLIPPY rc=0**, fmt clean. Contract suite with the four
+mounts, full pytest path, `-rs`: **136 passed / 0 failed / 0 skipped / 1 deselected in
+211.74 s** — the new `server/tests/test_mcp.py` (13 tests) pins the bearer 401s, the
+read/admin tool split, the relay field-for-field against the same REST answer (per-call
+`ms`/`warning`/`media_id` handles normalized — the handles are issued per reply by the
+media contract), admin `estimate`+`index` through to a `GET /jobs` record, and the
+202/400/405/404 transport shapes. The CLI suite gained a model-free stdio test
+(`initialize`, tools list, a relayed `name:`-query search, `status`, `ping`, the
+stdio-invisible `index`).
+
+**Flagged per the port-precedent rule:** README §1–2 "the engine is not rewritten" — this
+is an additive user-directed front-end; verbs, schema v6, the 768-f16 layout and the CLI's
+human output are untouched; `mcp.rs` authors shapes, never numbers.
+
 ## 2026-11-21 — v0.8.0 released (tag `277449a`); the Nextcloud pilot re-run on the Rust server (ai-ubuntu-computer)
 
 **v0.8.0.** Tag chain `6664e8b → 0a5df08 → b77d9b1 → 277449a` (each move fast-forwarded
