@@ -217,10 +217,17 @@ def test_the_people_tool_relays_the_consent_wall_exactly_as_the_rest_gate(mcp_sc
     # (the bearer gate's 403 body carries `status` — the estimate/index pin above
     # proves that shape; the faces wall's body does not invent one).
     assert result["structuredContent"] == direct.json(), (result, direct.json())
-    # A read key asking the scan lands on the REST admin gate, whose words relay.
+    # A read key asking the scan lands on the REST admin gate, whose answer relays
+    # field-for-field — pinned by equality with the same REST POST, because the
+    # gate's body shape is the gate's own (the faces guard is not the estimate
+    # guard: its 403 body carries `detail`, the estimate/index body carries
+    # `status` — pin what the gate answers, not a guess).
     refused = call(mcp_scoped, READ, "people", {"action": "scan"})
     assert refused["isError"] is True
-    assert refused["structuredContent"]["status"] == 403, refused["structuredContent"]
+    rest_scan = mcp_scoped.post("/api/v1/faces/scan", json={},
+                                headers={"Authorization": f"Bearer {READ}"})
+    assert rest_scan.status_code == 403, rest_scan.text
+    assert refused["structuredContent"] == rest_scan.json(), (refused, rest_scan.json())
     # An unknown action is the tool's own 422-shape refusal, not a wall.
     bad = call(mcp_scoped, READ, "people", {"action": "reboot"})
     assert bad["isError"] is True
@@ -244,11 +251,15 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     scanned = mcp_open.post("/api/v1/mcp", json=body, timeout=900.0).json()["result"]
     assert scanned["isError"] is False, scanned
     scan = scanned["structuredContent"]["scan"]
-    # The faces suite's measured rows for these 12 corpus photos (FACES.md): files
-    # scanned = the photos, faces = the planted ones, nothing queued.
-    assert scan["files"] == 12, scan
-    assert scan["faces"] == scan["assigned"] >= 1, scan
+    # The law, not one run's numbers: the 12 corpus photos are walked whole —
+    # first run decodes them (files 12, fresh 0), a suite rerun on the same
+    # faces.sqlite skips every one as recorded (files 0, fresh 12; schema 2's
+    # piggyback freshness). And the scan's own arithmetic: every face assigned.
+    assert scan["files"] + scan["fresh"] == 12, scan
+    assert scan["assigned"] == scan["faces"], scan
+    assert scan["faces"] >= 0, scan
 
+    counts = mcp_open.get("/api/v1/faces/status").json()["counts"]
     rest = mcp_open.get("/api/v1/faces/persons").json()
     relayed = call(mcp_open, None, "people", {"action": "persons"})
     assert relayed["isError"] is False
@@ -261,8 +272,12 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
         row["cover_face"].pop("media_id")
     assert relayed["structuredContent"] == rest, "the tool answers what REST answers"
     persons = rest["persons"]
-    assert 1 <= len(persons) <= scan["faces"]
-    assert sum(p["count"] for p in persons) == scan["faces"]   # every face landed
+    # Person law (the suite's law for centroid geometry, FACES.md): every stored
+    # face lands in a person, nothing queued, 1 <= persons <= faces.
+    assert counts["assigned"] == counts["faces"], counts
+    assert counts["pending"] == 0, counts
+    assert 1 <= len(persons) <= counts["faces"], (persons, counts)
+    assert sum(p["count"] for p in persons) == counts["assigned"]   # every face landed
     assert all(p["cover_face"]["width"] > 0 for p in persons)  # the crop map rides the relay
     one = call(mcp_open, None, "people", {"action": "person", "person": persons[0]["id"]})
     assert one["isError"] is False
