@@ -131,8 +131,11 @@ def test_the_route_rides_the_deployment_method_shapes(mcp_scoped):
 # ── the tool set mirrors the REST gate ─────────────────────────────────────────
 
 def test_the_read_key_sees_the_read_tools_the_admin_sees_the_mutating_pair(mcp_scoped):
-    assert tool_names(mcp_scoped, READ) == ["search", "status", "show"]
-    assert tool_names(mcp_scoped, ADMIN) == ["search", "status", "show", "estimate", "index"]
+    # `people` is a read tool for the manifest (the faces GETs ride the ordinary
+    # bearer gate, so a read key may call it — the consent wall then answers 400
+    # through the relay, pinned below); `scan` inside it rides the REST admin gate.
+    assert tool_names(mcp_scoped, READ) == ["search", "status", "show", "people"]
+    assert tool_names(mcp_scoped, ADMIN) == ["search", "status", "show", "people", "estimate", "index"]
 
 
 def test_the_inert_gate_advertises_the_full_tool_set_key_free(mcp_open):
@@ -140,7 +143,7 @@ def test_the_inert_gate_advertises_the_full_tool_set_key_free(mcp_open):
     # (test_security pins that). The MCP tools ride the SAME openness: an inert box is
     # the user's own localhost, and hiding tools the same key-free HTTP answers plainly
     # would invent a gate the deployment does not have.
-    assert tool_names(mcp_open, None) == ["search", "status", "show", "estimate", "index"]
+    assert tool_names(mcp_open, None) == ["search", "status", "show", "people", "estimate", "index"]
 
 
 def test_a_read_key_calling_the_mutating_tools_lands_on_the_rest_gate_words(mcp_scoped):
@@ -201,6 +204,62 @@ def test_the_status_tool_counts_match_the_rest_status(mcp_scoped):
     counts = result["structuredContent"]
     for key in ("files", "searchable", "pending", "unfinished", "vectors"):
         assert counts[key] == rest[key], key
+
+
+def test_the_people_tool_relays_the_consent_wall_exactly_as_the_rest_gate(mcp_scoped):
+    # The faces wall on the tool reply: the same handler the browser calls, so the
+    # 400 sentence is the gate's own words, verbatim (the peer core authors none).
+    result = call(mcp_scoped, READ, "people", {"action": "persons"})
+    assert result["isError"] is True
+    direct = mcp_scoped.get("/api/v1/faces/persons", headers={"Authorization": f"Bearer {READ}"})
+    assert direct.status_code == 400, direct.text
+    assert result["structuredContent"]["detail"] == direct.json()["detail"]
+    assert result["structuredContent"]["status"] == 400
+    # A read key asking the scan lands on the REST admin gate, whose words relay.
+    refused = call(mcp_scoped, READ, "people", {"action": "scan"})
+    assert refused["isError"] is True
+    assert refused["structuredContent"]["status"] == 403, refused["structuredContent"]
+    # An unknown action is the tool's own 422-shape refusal, not a wall.
+    bad = call(mcp_scoped, READ, "people", {"action": "reboot"})
+    assert bad["isError"] is True
+    assert "no such action" in bad["content"][0]["text"], bad["content"][0]["text"]
+    # action=person without a person id is refused as bad params.
+    missing = rpc(mcp_scoped, READ, "tools/call",
+                  {"name": "people", "arguments": {"action": "person"}}, msg_id=42).json()
+    assert missing["error"]["code"] == -32602, missing
+
+
+def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
+    # The inert box is the user's own localhost: the key-free consent act, the key-free
+    # scan (synchronous on the engine's clock — the 12 corpus photos, seconds per
+    # photo), and the rows relay field-for-field from the same REST answers.
+    status = call(mcp_open, None, "people")
+    assert status["isError"] is False and status["structuredContent"]["consented"] is False
+    assert mcp_open.post("/api/v1/faces/consent", json={"accept": True}).json()["consented"] is True
+
+    body = {"jsonrpc": "2.0", "id": 50, "method": "tools/call",
+            "params": {"name": "people", "arguments": {"action": "scan"}}}
+    scanned = mcp_open.post("/api/v1/mcp", json=body, timeout=900.0).json()["result"]
+    assert scanned["isError"] is False, scanned
+    scan = scanned["structuredContent"]["scan"]
+    # The faces suite's measured rows for these 12 corpus photos (FACES.md): files
+    # scanned = the photos, faces = the planted ones, nothing queued.
+    assert scan["files"] == 12, scan
+    assert scan["faces"] == scan["assigned"] >= 1, scan
+
+    rest = mcp_open.get("/api/v1/faces/persons").json()
+    relayed = call(mcp_open, None, "people", {"action": "persons"})
+    assert relayed["isError"] is False
+    assert relayed["structuredContent"] == rest, "the tool answers what REST answers"
+    persons = rest["persons"]
+    assert 1 <= len(persons) <= scan["faces"]
+    assert sum(p["count"] for p in persons) == scan["faces"]   # every face landed
+    cover = persons[0]["cover_face"]
+    one = call(mcp_open, None, "people", {"action": "person", "person": persons[0]["id"]})
+    assert one["isError"] is False
+    assert [f["id"] for f in one["structuredContent"]["faces"]] == \
+           [f["id"] for f in mcp_open.get(f"/api/v1/faces/person/{persons[0]['id']}").json()["faces"]]
+    assert cover["width"] > 0 and cover["media_id"]      # the crop map rides the relay
 
 
 def test_the_show_tool_reads_a_segments_stored_text(mcp_scoped):

@@ -16,8 +16,9 @@
 //! unchanged. `show` is the search daemon's `text` verb through the target's own
 //! service window (the blocking pool rule, in_scope — never on a tokio worker).
 //!
-//! Tool visibility mirrors the REST gate: a read-scope key sees search/status/show;
-//! the mutating pair (estimate/index) exists only for the admin principal, and
+//! Tool visibility mirrors the REST gate: a read-scope key sees search/status/show
+//! (+ people — the faces reads ride the ordinary bearer gate); the mutating pair
+//! (estimate/index) exists only for the admin principal, and
 //! calling them with a read key answers the gate's own words (the peer core quotes
 //! them, this layer authors no new refusals).
 
@@ -175,6 +176,49 @@ async fn execute(
             .await,
         )
         .await),
+        "people" => {
+            // The faces surface (FACES.md Phase 3): the tool IS the REST routes —
+            // every wall (consent 400, busy 409, admin 403 on scan) answers through
+            // the same handlers the browser calls, and relay() carries their words.
+            let action = args
+                .get("action")
+                .and_then(Value::as_str)
+                .unwrap_or("status");
+            let response = match action {
+                "status" => crate::faces_status(State(app.clone()), Extension(ctx.clone())).await,
+                "persons" => crate::faces_persons(State(app.clone()), Extension(ctx.clone())).await,
+                "pending" => crate::faces_pending(State(app.clone()), Extension(ctx.clone())).await,
+                "person" => {
+                    let Some(person) = args.get("person").and_then(Value::as_i64) else {
+                        return Err((
+                            mcp::INVALID_PARAMS,
+                            "action=person needs person".to_string(),
+                        ));
+                    };
+                    crate::faces_person_show(
+                        State(app.clone()),
+                        Extension(ctx.clone()),
+                        axum::extract::Path(person.to_string()),
+                    )
+                    .await
+                }
+                "scan" => {
+                    crate::faces_scan(
+                        State(app.clone()),
+                        Extension(ctx.clone()),
+                        Bytes::from(b"{}".to_vec()),
+                    )
+                    .await
+                }
+                other => {
+                    return Err((
+                        mcp::INVALID_PARAMS,
+                        format!("people: no such action: {other}"),
+                    ));
+                }
+            };
+            Ok(relay(response).await)
+        }
         "show" => {
             let Some(segment) = args.get("segment_id").and_then(Value::as_i64) else {
                 return Err((mcp::INVALID_PARAMS, "show needs segment_id".to_string()));

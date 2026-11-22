@@ -46,7 +46,11 @@ class DigupPeople extends LitElement {
       display: flex; flex-direction: column; gap: 0; padding: 0.9rem 0.95rem 1rem;
       background: var(--panel); border: 1px solid var(--edge); border-radius: var(--radius-lg);
       box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
-      max-height: calc(100vh - 3rem); overflow-x: clip; overflow-y: auto; }
+      /* Round-7 law (pinned by test_media_ui on the served bundle): the panel NEVER
+         scrolls — a scroll box is a clipping box (controls cut at the edges, the
+         scrollbar steals width). No max-height, no overflow-y: a long queue grows
+         the panel and the PAGE scrolls, the gear panel's own discipline. */
+      overflow-x: clip; }
     .set-head { display: flex; justify-content: space-between; align-items: center;
       font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--soft); }
     #people-close { padding: 0.1rem 0.55rem; font-size: 0.8rem; line-height: 1.2; }

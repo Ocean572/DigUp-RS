@@ -631,9 +631,9 @@ The `index` tool does not exist in this shape (a stdio run has no job runner to 
 (one JSON-RPC 2.0 message per POST, one JSON answer per POST, an `mcp-session-id` header
 echoed on every answer). A notification answers `202` with an empty body; a malformed
 body answers `400` with the JSON-RPC parse error. Send the bearer key like every other
-guarded endpoint — the **read** key answers `search`, `status` and `show`; the **admin**
-key adds `estimate` and `index` (a read key calling one lands on the gate's own words,
-quoted). An inert (tokenless) deployment answers the full tool set key-free, matching
+guarded endpoint — the **read** key answers `search`, `status`, `show` and `people`; the
+**admin** key adds `estimate` and `index` (a read key calling one lands on the gate's own
+words, quoted). An inert (tokenless) deployment answers the full tool set key-free, matching
 what its REST admin routes answer key-free.
 
 | tool | scope | what it relays |
@@ -641,6 +641,7 @@ what its REST admin routes answer key-free.
 | `search` | read | the `POST /api/v1/search` answer: `hits` (path, kind, segment, score, z, loc, excerpt…), `strong`, `meaning`. `limit` defaults to **10** (max 100 — the engine's own cap) to keep agent context small; `kinds`, `code` ride the REST model |
 | `status` | read | the `GET /api/v1/status` counts, verbatim |
 | `show` | read | one segment's stored full text by its `segment_id` (from a hit row) — the search daemon's `text` verb |
+| `people` | read (HTTP only) | the faces surface (FACES.md): `action` = `status` (the default) / `persons` / `pending` / `person` (needs `person`) / `scan`. The reads relay the `GET /api/v1/faces/…` answers verbatim; `scan` rides the REST admin wall (a read key lands on 403 words) and runs synchronously on the engine's clock, busy answers the `409` text; every action answers the consent wall's `400` words until the deployment records the acceptance. Stdio has no faces seam (the consent record lives in the server's config), so the tool is invisible there |
 | `estimate` | admin | the engine's crawl forecast, `{"folders": […]}` |
 | `index` | admin, HTTP only | queue one crawl: the job record (`202` shape); a running writer answers the `409` text, relayed as `isError` |
 

@@ -83,7 +83,9 @@ fn object(props: Vec<(&str, Value)>, required: &[&str]) -> Value {
 /// carry path/kind/segment/z/loc/excerpt exactly as the UI reads them); `limit` caps the
 /// reply's rows (the engine caps at 100); `show` is the daemon's `text` verb — the stored
 /// segment text the hit rows name by `segment_id`; the mutating pair rides the API's
-/// admin principal only (stdio: `estimate` behind `--allow-admin`, `index` stdio-invisible).
+/// admin principal only (stdio: `estimate` behind `--allow-admin`, `index`
+/// stdio-invisible); `people` is the faces surface (API-only, consent-gated — the
+/// REST gate answers its walls on the tool reply, see the push below).
 pub fn tool_defs(surface: Surface, allow_admin: bool) -> Vec<Value> {
     let mut defs = vec![
         tool(
@@ -118,6 +120,31 @@ pub fn tool_defs(surface: Surface, allow_admin: bool) -> Vec<Value> {
             ),
         ),
     ];
+    if surface == Surface::Api {
+        // The People tab (faces, FACES.md Phase 3). API surface only: the faces
+        // verbs ride the server's own config (the consent record lives in the
+        // server's config folder, the scan serializes on the server's faces writer
+        // lock) — stdio has no consent seam, so the tool is invisible there. The
+        // reads ride the ordinary bearer gate like the REST GETs; `scan` rides the
+        // admin wall, and the REST gate itself answers a read key (403-shape text
+        // quoted on the tool reply — the peer core authors no new refusals).
+        defs.push(tool(
+            "people",
+            "The People tab (face recognition, consent-gated): status/persons/pending \
+             read the surface's state, person reads one person's face rows, scan starts \
+             a face scan (synchronous on the engine's clock — seconds per photo; \
+             serialized behind the faces writer lock, busy answers 409-shape text). \
+             Every action answers 400-shape text until the deployment records the \
+             user's face-recognition acceptance; the counts and rows relay verbatim.",
+            object(
+                vec![
+                    ("action", serde_json::json!({"type": "string", "enum": ["status", "persons", "pending", "person", "scan"], "default": "status", "description": "what to ask the faces surface"})),
+                    ("person", serde_json::json!({"type": "integer", "description": "the person id (action=person)"})),
+                ],
+                &[],
+            ),
+        ));
+    }
     if allow_admin {
         defs.push(tool(
             "estimate",
@@ -404,21 +431,25 @@ mod tests {
     }
 
     #[test]
-    fn the_read_key_sees_the_three_read_tools_the_admin_sees_the_mutating_pair() {
+    fn the_read_key_sees_the_read_tools_the_admin_sees_the_mutating_pair() {
         let read = tool_defs(Surface::Api, false);
         let read: Vec<&str> = read
             .iter()
             .map(|def| def["name"].as_str().expect("a name"))
             .collect();
-        assert_eq!(read, vec!["search", "status", "show"]);
+        assert_eq!(read, vec!["search", "status", "show", "people"]);
         let admin = tool_defs(Surface::Api, true);
         let admin: Vec<&str> = admin
             .iter()
             .map(|def| def["name"].as_str().expect("a name"))
             .collect();
-        assert_eq!(admin, vec!["search", "status", "show", "estimate", "index"]);
+        assert_eq!(
+            admin,
+            vec!["search", "status", "show", "people", "estimate", "index"]
+        );
         // The stdio surface has no job runner to reach: index is invisible there,
-        // estimate rides --allow-admin.
+        // estimate rides --allow-admin. Faces is server config (the consent record
+        // lives in the server's config folder) — people is API-surface-only.
         let stdio_defs = tool_defs(Surface::Stdio, false);
         let stdio: Vec<&str> = stdio_defs
             .iter()
