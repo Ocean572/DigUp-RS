@@ -268,6 +268,20 @@ and the chain only adds. Gates: `crates/core/tests/face_store.rs` (freshness row
 dims row, a schema-1 store landing at 3 with its face kept) and the suite's person-rows
 assertions (`width > 0`).
 
+### MCP `people` — the tool IS the REST routes (shipped 2026-11-22)
+
+The peer core advertises `people` on the **API surface only** (the faces verbs ride the
+server's own config — the consent record lives in the server's config folder, the scan
+serializes on the server's faces writer lock; stdio has no consent seam, so the tool is
+invisible there, manifest-pinned). `action` = status/persons/pending/person/scan; the
+front-end calls the same handlers the browser calls, so the consent 400, busy 409 and
+admin 403 all land on the tool reply relayed verbatim — the peer core authors no new
+refusals. Two measured relay laws from the container run: the faces consent wall's 400
+body carries `detail` **only** (the `status` field belongs to the bearer gate's 403 —
+the estimate/index pin proves that shape); a persons relay equality must strip the
+**per-call minted `media_id`** row-by-row on both sides (the search relay test's law:
+a fresh handle per answer).
+
 ### Consent record — the f64 round-trip row (measured 2026-11-22, this box)
 
 The record's `accepted_at` is an f64, and its file round trip is **not value-exact**:
