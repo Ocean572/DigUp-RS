@@ -2703,10 +2703,24 @@ fn json_int(value: i64) -> serde_json::Value {
 /// the events, the resume (curl's `-C -` sends the Range and keeps it across the
 /// redirect, as FileFetcher does), the ≤5-a-second progress with one final event
 /// when the transfer ends, and the sha256 gate before a file gets its name.
+/// One pinned file seen whole — the uniform view `download_model` and `fetch`
+/// work on: the two EmbeddingGemma files, or the user-supplied face weights
+/// (`--faces`, FACES.md Phase 0 #1: no cached-copy path, the packs have no
+/// pinned HF snapshot — the sha256 IS the pin).
+struct Pin<'a> {
+    name: &'a str,
+    bytes: i64,
+    sha256: &'a str,
+    url: String,
+    /// The HF-cache copy candidate (embed models only; face packs: None).
+    cache: Option<&'a digup_runtime::models::ModelFile>,
+}
+
 fn download_model(args: &Arguments) -> i32 {
-    use digup_runtime::models::ModelFiles;
+    use digup_runtime::models::{FaceModelFiles, ModelFiles};
     use std::time::Duration;
 
+    let faces = args.flag("--faces");
     let folder = match args.value("--to") {
         Some(dir) => folder_url(dir),
         None => ModelFiles::installed(),
@@ -2715,12 +2729,41 @@ fn download_model(args: &Arguments) -> i32 {
         eprintln!("error: {e}");
         return 1;
     }
-    let missing = ModelFiles::missing(&folder);
-    let mut done = ModelFiles::total_bytes() - missing.iter().map(|file| file.bytes).sum::<i64>();
-    for file in missing {
+    let pins: Vec<Pin> = if faces {
+        FaceModelFiles::missing(&folder)
+            .into_iter()
+            .map(|file| Pin {
+                name: file.name,
+                bytes: file.bytes,
+                sha256: file.sha256,
+                url: file.url.to_string(),
+                cache: None,
+            })
+            .collect()
+    } else {
+        ModelFiles::missing(&folder)
+            .into_iter()
+            .map(|file| Pin {
+                name: file.name,
+                bytes: file.bytes,
+                sha256: file.sha256,
+                url: ModelFiles::url(file),
+                cache: Some(file),
+            })
+            .collect()
+    };
+    let all_total = if faces {
+        FaceModelFiles::total_bytes()
+    } else {
+        ModelFiles::total_bytes()
+    };
+    let mut done = all_total - pins.iter().map(|file| file.bytes).sum::<i64>();
+    for file in &pins {
         let final_path = folder.join(file.name);
         // A checksum-matched file in the Hugging Face cache is copied, not fetched.
-        let cached_ok = ModelFiles::cached_copy(file)
+        let cached_ok = file
+            .cache
+            .and_then(|f| ModelFiles::cached_copy(f))
             .map(|cached| {
                 ModelFiles::sha256(&cached)
                     .map(|hash| hash == file.sha256)
@@ -2738,7 +2781,9 @@ fn download_model(args: &Arguments) -> i32 {
             );
             let partial = folder.join(format!("{}.partial", file.name));
             let _ = std::fs::remove_file(&partial);
-            let cached = ModelFiles::cached_copy(file).expect("the cache copy, checked just now");
+            let cached =
+                ModelFiles::cached_copy(file.cache.expect("the cache copy, checked just now"))
+                    .expect("the cache copy, checked just now");
             if let Err(e) = std::fs::copy(&cached, &partial)
                 .and_then(|_| std::fs::rename(&partial, &final_path))
             {
@@ -2758,7 +2803,7 @@ fn download_model(args: &Arguments) -> i32 {
         );
         let mut failures = 0i32;
         loop {
-            match fetch(file, &folder, done) {
+            match fetch(file, &folder, done, all_total) {
                 Outcome::Downloaded(partial) => {
                     emit_event(
                         "verifying",
@@ -2845,7 +2890,7 @@ enum Outcome {
 /// disk as `<name>.partial`, curl resumes it with a Range, the progress events are
 /// read off the file at FileFetcher's pace (≥0.2 s apart), and one last event tells
 /// how far it got when the transfer ends — as Swift's `didCompleteWithError` does.
-fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) -> Outcome {
+fn fetch(file: &Pin, folder: &Path, before: i64, all_total: i64) -> Outcome {
     use std::time::{Duration, Instant};
 
     let partial = folder.join(format!("{}.partial", file.name));
@@ -2878,7 +2923,7 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
         .arg(&partial)
         .arg("-w")
         .arg("%{http_code}")
-        .arg(digup_runtime::models::ModelFiles::url(file))
+        .arg(&file.url)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -2901,10 +2946,7 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
                     ("bytes".to_string(), json_int(written)),
                     ("total".to_string(), json_int(file.bytes)),
                     ("all_bytes".to_string(), json_int(before + written)),
-                    (
-                        "all_total".to_string(),
-                        json_int(digup_runtime::models::ModelFiles::total_bytes()),
-                    ),
+                    ("all_total".to_string(), json_int(all_total)),
                 ]),
             );
         }
@@ -2933,10 +2975,7 @@ fn fetch(file: &digup_runtime::models::ModelFile, folder: &Path, before: i64) ->
             ("bytes".to_string(), json_int(written)),
             ("total".to_string(), json_int(file.bytes)),
             ("all_bytes".to_string(), json_int(before + written)),
-            (
-                "all_total".to_string(),
-                json_int(digup_runtime::models::ModelFiles::total_bytes()),
-            ),
+            ("all_total".to_string(), json_int(all_total)),
         ]),
     );
     match output.status.code() {

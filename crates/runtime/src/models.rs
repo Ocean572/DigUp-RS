@@ -119,6 +119,96 @@ impl ModelFiles {
     }
 }
 
+/// One user-supplied face weight (FACES.md Phase 0 #1): the pin carries its own
+/// URL because the packs live in three different Hugging Face repositories, and
+/// the **sha256 is the pin** — `resolve/main/` is a moving branch, so a fetch
+/// that arrives with a different hash is refused (the download loop's
+/// "arrived damaged, three times"), never accepted under a renamed name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaceModelFile {
+    pub name: &'static str,
+    pub bytes: i64,
+    pub sha256: &'static str,
+    pub url: &'static str,
+}
+
+/// `FaceModelFiles`: the user-supplied tier packs (FACES.md §3 Model Tiers).
+/// **None of these ships in a payload tile** — they enter a machine only
+/// through the consent gate's user-initiated `download-model --faces`, and the
+/// hashes below are the ones measured on this box 2026-11-21 (`/tmp/opencode/
+/// face-models/SHA256SUMS`) against the same URLs the reference harness used.
+pub struct FaceModelFiles;
+
+impl FaceModelFiles {
+    /// The SCRFD-10G detector (WIDER FACE lineage, non-commercial research
+    /// terms) — the parity tier with Immich's detection.
+    pub const DET: FaceModelFile = FaceModelFile {
+        name: "scrfd_10g_bnkps.onnx",
+        bytes: 16_923_827,
+        sha256: "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+        url: "https://huggingface.co/fal/AuraFace-v1/resolve/main/scrfd_10g_bnkps.onnx",
+    };
+    /// The balanced embedder (buffalo_s recognition, ArcFace w600k).
+    pub const W600K_MBF: FaceModelFile = FaceModelFile {
+        name: "w600k_mbf.onnx",
+        bytes: 13_616_099,
+        sha256: "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
+        url: "https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx",
+    };
+    /// The parity embedder (buffalo_l recognition — Immich's default).
+    pub const W600K_R50: FaceModelFile = FaceModelFile {
+        name: "w600k_r50.onnx",
+        bytes: 174_383_860,
+        sha256: "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+        url: "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx",
+    };
+    /// AdaFace IR-18 (MIT repo weights, WebFace4M lineage).
+    pub const ADAFACE_IR18: FaceModelFile = FaceModelFile {
+        name: "adaface_ir_18.onnx",
+        bytes: 96_105_345,
+        sha256: "6b6a35772fb636cdd4fa86520c1a259d0c41472a76f70f802b351837a00d9870",
+        url: "https://huggingface.co/yakhyo/uniface-weights/resolve/main/adaface_ir_18.onnx",
+    };
+    /// AdaFace IR-50 (MIT repo weights, WebFace600K lineage).
+    pub const ADAFACE_IR50: FaceModelFile = FaceModelFile {
+        name: "adaface_ir_50.onnx",
+        bytes: 174_396_180,
+        sha256: "9c0ae385d7362323c92d218de598d32e52a9130b78faac6a8a924091aca62c0b",
+        url: "https://huggingface.co/yakhyo/uniface-weights/resolve/main/adaface_ir_50.onnx",
+    };
+    /// AdaFace IR-101 — the accuracy tier (FACES.md §3: beats Immich's
+    /// `w600k_r50` on cross-pose/low-quality; WebFace12M lineage).
+    pub const ADAFACE_IR101: FaceModelFile = FaceModelFile {
+        name: "adaface_ir_101.onnx",
+        bytes: 260_704_652,
+        sha256: "f2eb07d03de0af560a82e1214df799fec5e09375d43521e2868f9dc387e5a43e",
+        url: "https://huggingface.co/yakhyo/uniface-weights/resolve/main/adaface_ir_101.onnx",
+    };
+    /// In download order: the detector first (a scan needs it before any embed).
+    pub const ALL: [FaceModelFile; 6] = [
+        Self::DET,
+        Self::W600K_MBF,
+        Self::W600K_R50,
+        Self::ADAFACE_IR18,
+        Self::ADAFACE_IR50,
+        Self::ADAFACE_IR101,
+    ];
+
+    /// The files that aren't in `folder` yet (the same law as `ModelFiles`:
+    /// only a checksum-verified file ever gets its final name).
+    pub fn missing(folder: &Path) -> Vec<&'static FaceModelFile> {
+        Self::ALL
+            .iter()
+            .filter(|file| !folder.join(file.name).exists())
+            .collect()
+    }
+
+    /// `FaceModelFiles.totalBytes`.
+    pub fn total_bytes() -> i64 {
+        Self::ALL.iter().map(|file| file.bytes).sum()
+    }
+}
+
 /// Where the EmbeddingGemma 2 files for llama.cpp are (`LlamaModels`, LlamaModels.swift).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LlamaModels {

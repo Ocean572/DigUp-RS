@@ -23,8 +23,10 @@ digup: search your files by meaning (DigUp developer CLI)
   digup search-service <folder>... [--code-root DIR]... [--encoder-idle S]
                                           the searcher as a process, index open and encoder warm (JSON lines;
                                           see SearchService): for shells that can't link DigUpKit
-  digup download-model [--to DIR]         the model files, from the Hugging Face cache or downloaded with
-                                          resume, checked (JSON lines: see DownloadModel)
+  digup download-model [--to DIR] [--faces]  the model files, from the Hugging Face cache or downloaded with
+                                          resume, checked (JSON lines: see DownloadModel); --faces fetches
+                                          the user-supplied face weights (FACES.md: consent-gated tier
+                                          packs, pinned by sha256, never in payloads)
   digup faces-service [--faces-consent FILE] [--faces-models DIR] [--det-model NAME] --emb-model NAME
                                           the face verbs daemon, face.sqlite beside the index (JSON lines;
                                           see FACES.md): scan / cluster / persons / name / merge / delete /
