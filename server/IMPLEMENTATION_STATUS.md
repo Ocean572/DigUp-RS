@@ -142,6 +142,23 @@ park) + probes, fixed by hoisting one guard. CI law: the face examples now carry
 `required-features = ["faces"]` (the feature-less `--all-targets` CI shape skips them; the
 faces shape compiles them).
 
+**Round two — the user's scan law (`3adfbf4`, 2026-11-22):** the app's Scan press runs the WHOLE
+folder (the shell's 3600 s scan clock was the server's HTTP ceiling relayed where no request
+exists → a 30-day watchdog; the server keeps its ceiling, press-resume). The Folders-tab skips
+now reach faces: `settings.skipped` rides the scan argv as `--exclude` (the search daemons' own
+pairs), `FaceServiceConfig.excluded_folders` feeds the scan crawl — the live gate
+`faces_service_scan_never_opens_excluded_folders` pins the FolderSelection shape (parent chosen,
+folder excluded inside → files 0). Measured on the bench folder: the face scan DOES crawl the
+Nextcloud preview cache (thumbnail JPEGs → real detections; one group-photo thumbnail recorded 10
+faces) — the skip list is the cure for preview-duplicate faces. The pool exposed a latent order
+bug: `pending_faces` keyed on recording time while online clustering is order-sensitive → the
+round-trip gate's cluster shape flipped (3 passes by luck, 1 flip under load); the queue is
+keyed on stable identity (`ORDER BY f.path, f.id`) — the same store clusters identically every
+run. Gates: plain 255/0, faces 0-failed with daemon gates **5/5 live**, shell cargo **34/0**,
+node **20/20**, clippy zero both shapes. Machine-side fact: the sharedembedder info() gate hit
+ONCE in a whole-suite run (debug 200k-loop RSS measurement racing suite threads; 3/3 green solo
+×3 — seam untouched).
+
 ## 2026-11-21 — v0.8.1 recut at the Stage-3 tip; the apps' update feed moves to this repo (`792f1d1`)
 
 v0.8.1 now carries the coding-agent CLI verbs (the `4c72f85` #178/#189 contract) alongside
