@@ -260,7 +260,13 @@ server's config folder — `faces-consent.json` for the main media index,
 `faces-consent-<name>.json` for a named target, mode `0600` — and every faces endpoint
 (including the reads) answers `400 {"detail": "face recognition is not consented for target
 'media' …"}` until it exists. The engine enforces the same file daemon-side
-(`faces-service --faces-consent`): what the UI gates, the engine gates. All face facts come
+(`faces-service --faces-consent`): the bearer admin check fires **before** the consent
+guard on the mutating routes (measured 2026-11-22, pinned by `test_mcp.py`): a
+read-scope key on `/faces/scan` answers the bearer `403` SCOPE body even on an
+unconsented deployment; the consent `400` is what admin/inert paths see. The MCP
+front-end enforces the same principal rule at the tool edge (a tool call skips the
+middleware — the front-end quotes the gate's sentence for the same principal).
+All face facts come
 from `digup faces-service` (`scan/cluster/persons/name/merge/delete/confirm/pending/similar`
 over JSON-lines, FACES.md); the server relays them and invents nothing. Face rows carry the
 engine's `box`/`kps` and a minted `media_id` for their photo — the frontend crops the face out

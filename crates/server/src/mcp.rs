@@ -203,6 +203,20 @@ async fn execute(
                     .await
                 }
                 "scan" => {
+                    // The scan rides the REST admin wall (FACES.md: scans are
+                    // ADMIN_ROUTES). A browser call passes through the bearer
+                    // middleware, which enforces it; tool calls skip the middleware
+                    // (the gate admitted the principal for /mcp), so the front-end
+                    // enforces the SAME principal rule — quoting the gate's sentence
+                    // in the relay's exact body shape, refusing only what the
+                    // middleware refuses (a read key; app tokens stay target-scoped
+                    // like the middleware leaves them, inert/admin pass).
+                    if ctx.principal == "read" {
+                        return Ok(CallOutcome {
+                            is_error: true,
+                            value: json!({"detail": mcp::READ_SCOPE_WORDS}),
+                        });
+                    }
                     crate::faces_scan(
                         State(app.clone()),
                         Extension(ctx.clone()),
