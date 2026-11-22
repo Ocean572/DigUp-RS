@@ -76,6 +76,11 @@ half = "2"
 sha2 = "0.11"
 hex = "0.4"
 bindgen = { version = "0.73", features = ["runtime"] }
+# Faces (feature `faces`, docs/implementation/FACES.md): the pure-Rust ONNX inference the face
+# pass runs on — tract 0.23.10 (MIT/Apache-2.0 dual, the Sonos-born engine; GridSample/NMS/
+# PReLU/depthwise-conv/Resize-antialias all in-tree per the Phase-0 op audit). Opted out of the
+# `transformers` default feature: face graphs are conv nets, no LLM machinery in the payload.
+tract-onnx = { version = "0.23.10", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # Phase 4 (the axum server): the HTTP layer the FastAPI wrapper is replaced by. tokio is the

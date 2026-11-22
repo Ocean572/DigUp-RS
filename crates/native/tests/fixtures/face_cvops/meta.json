@@ -1,0 +1,182 @@
+{
+ "resize": [
+  {
+   "i": 0,
+   "w": 160,
+   "h": 120,
+   "dw": 64,
+   "dh": 64,
+   "src": "resize0_src.bin",
+   "dst": "resize0_dst.bin",
+   "model": "resize0_model.bin",
+   "tail_rows": [],
+   "cv2_diffs": 0,
+   "cv2_max_delta": 0
+  },
+  {
+   "i": 1,
+   "w": 160,
+   "h": 120,
+   "dw": 141,
+   "dh": 97,
+   "src": "resize1_src.bin",
+   "dst": "resize1_dst.bin",
+   "model": "resize1_model.bin",
+   "tail_rows": [],
+   "cv2_diffs": 0,
+   "cv2_max_delta": 0
+  },
+  {
+   "i": 2,
+   "w": 200,
+   "h": 160,
+   "dw": 640,
+   "dh": 640,
+   "src": "resize2_src.bin",
+   "dst": "resize2_dst.bin",
+   "model": "resize2_model.bin",
+   "tail_rows": [
+    638,
+    639
+   ],
+   "cv2_diffs": 614,
+   "cv2_max_delta": 1
+  },
+  {
+   "i": 3,
+   "w": 640,
+   "h": 480,
+   "dw": 640,
+   "dh": 300,
+   "src": "resize3_src.bin",
+   "dst": "resize3_dst.bin",
+   "model": "resize3_model.bin",
+   "tail_rows": [],
+   "cv2_diffs": 0,
+   "cv2_max_delta": 0
+  },
+  {
+   "i": 4,
+   "w": 300,
+   "h": 640,
+   "dw": 97,
+   "dh": 640,
+   "src": "resize4_src.bin",
+   "dst": "resize4_dst.bin",
+   "model": "resize4_model.bin",
+   "tail_rows": [
+    639
+   ],
+   "cv2_diffs": 0,
+   "cv2_max_delta": 0
+  },
+  {
+   "i": 5,
+   "w": 40,
+   "h": 40,
+   "dw": 112,
+   "dh": 112,
+   "src": "resize5_src.bin",
+   "dst": "resize5_dst.bin",
+   "model": "resize5_model.bin",
+   "tail_rows": [
+    111
+   ],
+   "cv2_diffs": 53,
+   "cv2_max_delta": 1
+  },
+  {
+   "i": 6,
+   "w": 233,
+   "h": 119,
+   "dw": 111,
+   "dh": 57,
+   "src": "resize6_src.bin",
+   "dst": "resize6_dst.bin",
+   "model": "resize6_model.bin",
+   "tail_rows": [],
+   "cv2_diffs": 0,
+   "cv2_max_delta": 0
+  }
+ ],
+ "warp": [
+  {
+   "i": 0,
+   "w": 200,
+   "h": 160,
+   "src": "warp0_src.bin",
+   "dst": "warp0_dst.bin",
+   "model": "warp0_model.bin",
+   "mapx": "warp0_mapx.bin",
+   "mapy": "warp0_mapy.bin",
+   "m": "warp0_m.json",
+   "cv2_diffs": 6533,
+   "cv2_max_delta": 3
+  },
+  {
+   "i": 1,
+   "w": 200,
+   "h": 160,
+   "src": "warp1_src.bin",
+   "dst": "warp1_dst.bin",
+   "model": "warp1_model.bin",
+   "mapx": "warp1_mapx.bin",
+   "mapy": "warp1_mapy.bin",
+   "m": "warp1_m.json",
+   "cv2_diffs": 6295,
+   "cv2_max_delta": 4
+  },
+  {
+   "i": 2,
+   "w": 160,
+   "h": 120,
+   "src": "warp2_src.bin",
+   "dst": "warp2_dst.bin",
+   "model": "warp2_model.bin",
+   "mapx": "warp2_mapx.bin",
+   "mapy": "warp2_mapy.bin",
+   "m": "warp2_m.json",
+   "cv2_diffs": 0,
+   "cv2_max_delta": 0
+  },
+  {
+   "i": 3,
+   "w": 320,
+   "h": 240,
+   "src": "warp3_src.bin",
+   "dst": "warp3_dst.bin",
+   "model": "warp3_model.bin",
+   "mapx": "warp3_mapx.bin",
+   "mapy": "warp3_mapy.bin",
+   "m": "warp3_m.json",
+   "cv2_diffs": 362,
+   "cv2_max_delta": 3
+  }
+ ],
+ "fit": [
+  {
+   "i": 0,
+   "fit": "fit0.json"
+  },
+  {
+   "i": 1,
+   "fit": "fit1.json"
+  },
+  {
+   "i": 2,
+   "fit": "fit2.json"
+  },
+  {
+   "i": 3,
+   "fit": "fit3.json"
+  },
+  {
+   "i": 4,
+   "fit": "fit4.json"
+  },
+  {
+   "i": 5,
+   "fit": "fit5.json"
+  }
+ ]
+}

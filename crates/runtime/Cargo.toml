@@ -18,6 +18,12 @@ hex = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 unicode-segmentation = { workspace = true }
+# Faces (FACES.md): the tract ONNX engine behind the `faces` feature — CPU-only inference,
+# zero C runtime binaries (the payload stays lean). Default payload builds never enable it.
+tract-onnx = { workspace = true, optional = true }
+
+[features]
+faces = ["dep:tract-onnx"]
 
 [build-dependencies]
 bindgen = { workspace = true }

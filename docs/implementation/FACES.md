@@ -126,3 +126,26 @@ Open item: Immich's 2025+ "new face backend / more models" direction (minivision
 5. **Revocation.** "Disable face recognition" purges `face.sqlite` entirely (vectors, clusters, person names) plus the consent record; gate-downloaded model files are removed by a local op (a `delete-model` verb line — Phase-1 decision). `delete-person` semantics unchanged (one person's vectors/clusters, indexes untouched).
 6. **Legal separation (the gate's purpose).** The AGPL distribution ships zero NC-lineage weights; restricted weights exist on a machine only by the user's affirmative, logged act under the dataset publishers' own terms; the Phase-0 license matrix ships with the payload. Consent record, model files, and face stores are local-only — the privacy audit covers them like index files.
 
+
+### Phase 0 #3 — cv-pixel parity (measured 2026-11-22, this box)
+
+Fixtures: `crates/native/tests/fixtures/face_cvops` (self-made smooth-RGB images,
+seeds pinned; cv2 4.12 + scikit-image under `OPENCV_IPP=disabled` — the wheel's IPP
+warp path diverges from OpenCV's built-in, and the port transcribes the built-in).
+Suite: `cargo test -p digup-native --test cvops_parity` — 3 tests, green.
+
+- `resize` (INTER_LINEAR 8u): byte-exact vs the pinned model; cv2 divergence
+  (counted outside the recorded `tail_rows` — cv2's upscale last row reads
+  `src.ptr(h)` past the Mat buffer, an allocator-dependent value):
+  diffs 0/0/614/0/0/53/0, max Δ 1 (fixtures 0-6).
+- `warp` (INTER_LINEAR, BORDER_CONSTANT 0): byte-exact vs the pinned model;
+  cv2 divergence 6533/6295/0/362 of 37632 bytes, max Δ ≤ 4 — all at the
+  AB_BITS=10 map quantization boundary (the fixtures record cv2's measured maps
+  via 16U ramp warps; the mask = model map ≠ cv2 map). The 8u cast is
+  round-half-to-even of Σ/32768 (measured: 202.5→202, 199.5→200).
+- `fit`: Umeyama closed form vs scikit-image `SimilarityTransform`, rel < 1e-5.
+
+Law: the engine ships the pinned model's numbers (byte-deterministic across
+platforms); the divergence from the Python cv2 wheel is recorded as measured
+facts, not hidden. The pipeline-level gate is embedding agreement vs the
+insightface reference (§Phase 0 #4).
