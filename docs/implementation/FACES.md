@@ -324,3 +324,45 @@ compile the verbs in (`--features digup-cli/faces` in every packaging script, bo
 scripts and the shell installers); a faces-less helper answers `faces-service` with usage text
 and exit 2, which lands as the relayed refusal "the helper is built without face recognition",
 not dressed up.
+
+### Scan worker pool — parallel FILES (2026-11-22, this box, ai-ubuntu-computer)
+
+The desktop trial found the bottleneck by eye ("is adaface using all cpu cores?"), and pidstat
+confirmed it: on the pinned fixtures `face_spike` runs **1 thread at 100 % CPU pinned on CPU 0
+— 19 cores idle** (20-core box). The cores the utilization graph lights are the multithreaded
+ffmpeg decode children, not the models: tract's `into_runnable()` executor is single-thread
+per session, and for these op sizes (SCRFD 640×640 convs, ~1 MB feature maps) widening ONE
+photo across 20 threads loses to sync overhead. The measured release cost row the pool aims
+at (34-photo fixture, 171 faces, 1 core): decode 112 ms/photo · detect 993 ms/photo · embed
+51.3 ms/face · **1363.7 ms/photo** · VmHWM 282 MB. Full pass at 106,385 photos: ~40 h (mbf),
+~47 h (ir_101) single-thread.
+
+The design the measurement picks is **parallel FILES, not per-op threading**:
+
+- Each worker owns one file's decode → detect → embed. Store writes serialize on the store
+  lock (`Arc<Mutex<FaceStore>>`): per-file `record_scan` was already the transaction, so the
+  pool changes nothing about freshness law — a `(path, size, mtime)` row recorded by any
+  worker keeps the fresh-skip resume identical.
+- **Sessions are shared, models load once.** tract plans run from a shared `Arc`:
+  `SimplePlan::run(self: &Arc<Self>, ...)` (tract-core `plan.rs`) builds a fresh turn with
+  per-call scratch, and tract's own suite asserts the plan types are `Send + Sync`. Eight
+  workers do NOT mean eight copies of the 248 MB pack.
+- **Events keep their shape.** Workers send `face-scan` / `face-skip` replies over an mpsc
+  channel; the scan thread drains them and writes whole lines — stdout stays one writer. The
+  crawl lines are untouched (cumulative per root, the faces.js counter law).
+- The daemon's state lock stays held across the scan, so the idle watch cannot unload the
+  models mid-scan; clustering runs once, after the pool joins, exactly as before.
+- `workers_for`: `0` = auto = **min(8, cores/2)** — each worker's decode spawns multithreaded
+  ffmpeg, so half the cores cover the parallel files and leave the machine responsive
+  (measured practice, not a guess). An explicit number names the pool; files cap it.
+- Knobs: CLI `--faces-workers`; the server names it from `DIGUP_SERVER_FACE_WORKERS`
+  (0 → flag not named, the daemon's default rules); the shell names no flag — same rule as
+  the thresholds, the daemon's default IS the app's default.
+- CI law the pool exposed: the face examples are declared `required-features = ["faces"]` in
+  `crates/runtime` — a feature-less `--all-targets` gate (the engine CI shape) skips them
+  cleanly; a `--features faces` build compiles them. Auto-discovery had them compiling
+  against the feature-gated `face` module, which the feature-less clippy/test jobs cannot see.
+
+Pool speedup on this box: measured by the live daemon gate and the desktop scan, recorded in
+IMPLEMENTATION_STATUS.md with the wall numbers (the suite pins reply fields
+files/faces/skipped/fresh/assigned and the event multiset, so the pool changes timing only).

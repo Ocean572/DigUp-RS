@@ -121,6 +121,27 @@ shell/tests/*.test.cjs` **20/20** (3 new: the server's COVER crop numbers `cw 82
 edge clamps, width-0 fallback, the render-verb request + calc() style values); `cargo check
 --all-targets` clean; `node --check` green on the touched JS.
 
+**Scan worker pool (2026-11-22, the desktop trial's "is adaface using all cores?"):** the
+trial found it and pidstat proved it — the scan ran **1 thread of 20** (face_spike 100 % CPU
+on CPU 0; the lit cores are ffmpeg decode children, tract's executor is single-thread per
+session). The pool parallelizes FILES: shared sessions via `Arc` (tract `SimplePlan::run(self:
+&Arc<Self>)`, per-call scratch — the packs load once for the whole pool), store behind
+`Arc<Mutex<FaceStore>>` (per-file writes serialize), events over mpsc drained whole-line by
+the scan thread, `workers_for` = min(8, cores/2) auto (0), CLI `--faces-workers`, server knob
+`DIGUP_SERVER_FACE_WORKERS` (0 → flag unnamed), shell names nothing (daemon defaults = app
+defaults). Baseline row for the speed math (release, 34-photo fixtures, 1 core): decode 112
+ms/photo · detect 993 ms/photo · embed 51.3 ms/face · 1363.7 ms/photo. **Gates:** workspace
+`cargo test --workspace --all-targets` **255/0** plain (CI env shape: LD_LIBRARY_PATH +
+backends + ffmpeg + cpu/8 threads); faces shape **61/0** with the live daemon gates **4/4** —
+the round trip in 6 s and the new named-`--faces-workers 4` pin in 18 s (reply fields pinned,
+face-scan events pinned as a SET: pool order is a timing artifact). Clippy `-D warnings` 0 in
+both shapes; `cargo fmt --all` clean. The live gates caught a real deadlock the store-Arc
+introduced: `stamp_models`' match-scrutinee guard re-locked the same mutex on a FRESH store —
+the daemon froze before its `ready` line, every new face store, found by strace (futex
+park) + probes, fixed by hoisting one guard. CI law: the face examples now carry
+`required-features = ["faces"]` (the feature-less `--all-targets` CI shape skips them; the
+faces shape compiles them).
+
 ## 2026-11-21 — v0.8.1 recut at the Stage-3 tip; the apps' update feed moves to this repo (`792f1d1`)
 
 v0.8.1 now carries the coding-agent CLI verbs (the `4c72f85` #178/#189 contract) alongside

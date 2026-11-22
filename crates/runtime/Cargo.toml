@@ -44,3 +44,15 @@ rusqlite = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
 half = { workspace = true }
+
+# Face examples (FACES.md): auto-discovery compiles them under a bare `--all-targets`
+# gate, and tract lives behind the `faces` feature — `required-features` makes a
+# feature-less CI run skip them cleanly ("Skipping the target"), and a
+# `--features faces` build compiles them as before.
+[[example]]
+name = "face_spike"
+required-features = ["faces"]
+
+[[example]]
+name = "face_embed_crops"
+required-features = ["faces"]

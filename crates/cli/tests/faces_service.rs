@@ -40,22 +40,30 @@ struct Daemon {
 
 impl Daemon {
     fn start(index: &Path, models: &Path, consent: &Path) -> Self {
+        Self::start_with(index, models, consent, &[])
+    }
+
+    fn start_with(index: &Path, models: &Path, consent: &Path, extra: &[&str]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_digup"))
-            .args([
-                "faces-service".to_string(),
-                "--index".to_string(),
-                index.to_string_lossy().into_owned(),
-                "--faces-models".to_string(),
-                models.to_string_lossy().into_owned(),
-                "--faces-consent".to_string(),
-                consent.to_string_lossy().into_owned(),
-                "--emb-model".to_string(),
-                "w600k_mbf.onnx".to_string(),
-                "--merge-threshold".to_string(),
-                "0.45".to_string(),
-                "--model-idle".to_string(),
-                "3600".to_string(),
-            ])
+            .args(
+                [
+                    "faces-service".to_string(),
+                    "--index".to_string(),
+                    index.to_string_lossy().into_owned(),
+                    "--faces-models".to_string(),
+                    models.to_string_lossy().into_owned(),
+                    "--faces-consent".to_string(),
+                    consent.to_string_lossy().into_owned(),
+                    "--emb-model".to_string(),
+                    "w600k_mbf.onnx".to_string(),
+                    "--merge-threshold".to_string(),
+                    "0.45".to_string(),
+                    "--model-idle".to_string(),
+                    "3600".to_string(),
+                ]
+                .into_iter()
+                .chain(extra.iter().map(|s| s.to_string())),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -305,6 +313,53 @@ fn faces_service_verbs_round_trip_on_the_public_fixtures() {
     );
 
     // 9. quit answers, then the process exits clean.
+    daemon.quit();
+}
+
+#[test]
+fn faces_service_scan_with_named_workers_answers_the_same_fields() {
+    // The worker pool (FACES.md 2026-11-22): the scan replies under a NAMED
+    // `--faces-workers 4` answer exactly what the default daemon answers —
+    // same files/faces/skipped/assigned, one face-scan event per fixture.
+    // The events are pinned as a SET of paths: parallel workers make event
+    // ORDER a timing artifact (the tie-order law of AGENTS.md), the identity
+    // of the recorded files is the contract.
+    let Some(models) = face_models_dir() else {
+        eprintln!("SKIP: the pinned face models are absent (faces_service gate)");
+        return;
+    };
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/faces");
+    let work = tempfile::tempdir().expect("a work folder");
+    let index = work.path().join("index");
+    std::fs::create_dir_all(&index).expect("the index folder");
+    let consent = consent_file(work.path());
+    let mut daemon = Daemon::start_with(&index, &models, &consent, &["--faces-workers", "4"]);
+    let reply = daemon.request("scan", json!({"roots": [fixtures.to_string_lossy()]}), 600);
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["files"], 5, "five photos scanned: {reply}");
+    assert_eq!(reply["faces"], 5, "one face each: {reply}");
+    assert_eq!(reply["skipped"], 0, "every fixture decodes: {reply}");
+    assert_eq!(reply["assigned"], 5, "every face joins a person: {reply}");
+    let mut paths: Vec<String> = daemon
+        .events
+        .iter()
+        .filter(|e| e["event"] == "face-scan")
+        .map(|e| e["path"].as_str().unwrap_or_default().to_string())
+        .collect();
+    paths.sort();
+    let mut want: Vec<String> = std::fs::read_dir(&fixtures)
+        .expect("the fixtures folder")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|x| x.to_string_lossy() == "jpg")
+                .unwrap_or(false)
+        })
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+    want.sort();
+    assert_eq!(paths, want, "one face-scan event per fixture, as a set");
     daemon.quit();
 }
 

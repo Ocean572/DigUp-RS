@@ -31,6 +31,7 @@ use crate::emit::emit;
 /// The daemon's start shape. `index` is the index folder (face.sqlite rides
 /// beside index.sqlite, its own file — FACES.md §2); `models` carries the ONNX
 /// pins; the thresholds are the clustering knobs from the config.
+#[derive(Clone)]
 pub struct FaceServiceConfig {
     pub index: PathBuf,
     pub models: PathBuf,
@@ -43,13 +44,24 @@ pub struct FaceServiceConfig {
     /// without it — "what the UI gates, the engine gates". The server checks
     /// the same record server-side; the file is the deployment's fact.
     pub consent: Option<PathBuf>,
+    /// The scan's worker pool (FACES.md 2026-11-22): parallel FILES, one shared
+    /// session set per daemon — not per-op threading. 0 = auto (see `workers_for`).
+    /// The daemon's own default; the shell and the server name no flag and inherit it.
+    pub workers: usize,
 }
 
 struct State {
-    store: FaceStore,
+    /// The store behind its own lock (the scan runs its workers against it —
+    /// FACES.md worker pool): per-file writes serialize on this mutex, the
+    /// daemon state lock stays held for the whole scan, so the idle watch
+    /// cannot unload models mid-scan.
+    store: Arc<Mutex<FaceStore>>,
     config: FaceServiceConfig,
-    scrfd: Option<Scrfd>,
-    embedder: Option<Embedder>,
+    /// Sessions shared with the scan workers: tract plans run from a shared
+    /// `Arc` (tract-core `SimplePlan::run(self: &Arc<Self>)`, per-call scratch),
+    /// so the models load once, not once per worker.
+    scrfd: Option<Arc<Scrfd>>,
+    embedder: Option<Arc<Embedder>>,
     last_use: Instant,
 }
 
@@ -95,7 +107,9 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             }
         }
     }
-    let store = FaceStore::open(&config.index).map_err(|e| e.to_string())?;
+    let store = Arc::new(Mutex::new(
+        FaceStore::open(&config.index).map_err(|e| e.to_string())?,
+    ));
     let state = State {
         store,
         config: FaceServiceConfig {
@@ -107,6 +121,7 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             collision_margin: config.collision_margin,
             model_idle: config.model_idle,
             consent: config.consent.clone(),
+            workers: config.workers,
         },
         scrfd: None,
         embedder: None,
@@ -189,17 +204,15 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
 /// The model stamps ride in the store's meta (FACES.md §3 "dimension from the
 /// pin"): the first scan writes them, every later scan must agree.
 fn stamp_models(state: &State) -> Result<(), String> {
+    // ONE guard for the whole stamping (the store is an Arc<Mutex<..>> since the
+    // worker pool): a `match` on `lock().meta()` keeps the guard alive across the
+    // arms, and the write arm would re-lock the same mutex from the same thread —
+    // a fresh store deadlocked there (measured 2026-11-22: the daemon hung before
+    // `ready`, strace futex-waiting).
+    let store = state.store.lock().unwrap();
     let stamp = |key: &str, want: &str| -> Result<(), String> {
-        match state
-            .store
-            .meta(key)
-            .map_err(|e| e.to_string())?
-            .as_deref()
-        {
-            None => state
-                .store
-                .set_meta(key, want)
-                .map_err(|e| e.to_string()),
+        match store.meta(key).map_err(|e| e.to_string())?.as_deref() {
+            None => store.set_meta(key, want).map_err(|e| e.to_string()),
             Some(found) if found == want => Ok(()),
             Some(found) => Err(format!(
                 "this face store was made by {found}; {want} would mix incomparable vectors (a tier switch is a full re-scan)"
@@ -217,16 +230,18 @@ fn use_models(state: &mut State) -> Result<(bool, bool), String> {
     if need_det {
         let path = state.config.models.join(&state.config.det_model);
         let scrfd = Scrfd::load(&path, (640, 640)).map_err(|e| e.to_string())?;
-        state.scrfd = Some(scrfd);
+        state.scrfd = Some(Arc::new(scrfd));
     }
     if need_emb {
         let path = state.config.models.join(&state.config.emb_model);
         let embedder = Embedder::load(&path).map_err(|e| e.to_string())?;
         state
             .store
+            .lock()
+            .unwrap()
             .set_meta("embed_dim", &embedder.output_dim().to_string())
             .map_err(|e| e.to_string())?;
-        state.embedder = Some(embedder);
+        state.embedder = Some(Arc::new(embedder));
     }
     if need_det || need_emb {
         write_out(serde_json::json!({
@@ -287,6 +302,8 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
         "cluster" => {
             let assigned = state
                 .store
+                .lock()
+                .unwrap()
                 .run_clustering(
                     state.config.merge_threshold,
                     state.config.collision_margin,
@@ -304,17 +321,13 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .get("covers")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let persons: Vec<Value> = state
-                .store
-                .list_persons()
+            let persons: Vec<Value> = state.store.lock().unwrap().list_persons()
                 .map_err(|e| e.to_string())?
                 .iter()
                 .map(|p| {
                     let mut row = serde_json::json!({"id": p.id, "name": p.name, "count": p.count, "cover": p.cover});
                     if covers {
-                        let face = state
-                            .store
-                            .person_faces(p.id)
+                        let face = state.store.lock().unwrap().person_faces(p.id)
                             .map_err(|e| e.to_string())?
                             .into_iter()
                             .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -329,6 +342,8 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let id = need_num(request, "person")?;
             let faces: Vec<Value> = state
                 .store
+                .lock()
+                .unwrap()
                 .person_faces(id)
                 .map_err(|e| e.to_string())?
                 .iter()
@@ -340,6 +355,8 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let path = need_str(request, "path")?;
             let faces: Vec<Value> = state
                 .store
+                .lock()
+                .unwrap()
                 .faces_of(&path)
                 .map_err(|e| e.to_string())?
                 .iter()
@@ -355,6 +372,8 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let now = now();
             state
                 .store
+                .lock()
+                .unwrap()
                 .name_person(id, &name, now)
                 .map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"ok": true}))
@@ -364,13 +383,20 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let from = need_num(request, "from")?;
             state
                 .store
+                .lock()
+                .unwrap()
                 .merge_persons(into, from)
                 .map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"ok": true}))
         }
         "delete" => {
             let id = need_num(request, "person")?;
-            state.store.delete_person(id).map_err(|e| e.to_string())?;
+            state
+                .store
+                .lock()
+                .unwrap()
+                .delete_person(id)
+                .map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"ok": true}))
         }
         "confirm" => {
@@ -379,6 +405,8 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             let now = now();
             state
                 .store
+                .lock()
+                .unwrap()
                 .confirm_face(face, person, now)
                 .map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"ok": true}))
@@ -387,9 +415,24 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             // The collision guard's review queue: each queued face with its top
             // candidates (the engine's own cosine against the centroids — the
             // evidence, not a score invented here).
-            let queue = state.store.pending_faces(500).map_err(|e| e.to_string())?;
-            let centroids = state.store.centroids().map_err(|e| e.to_string())?;
-            let persons = state.store.list_persons().map_err(|e| e.to_string())?;
+            let queue = state
+                .store
+                .lock()
+                .unwrap()
+                .pending_faces(500)
+                .map_err(|e| e.to_string())?;
+            let centroids = state
+                .store
+                .lock()
+                .unwrap()
+                .centroids()
+                .map_err(|e| e.to_string())?;
+            let persons = state
+                .store
+                .lock()
+                .unwrap()
+                .list_persons()
+                .map_err(|e| e.to_string())?;
             let mut out = Vec::new();
             for (face, vector) in queue {
                 let mut candidates: Vec<(i64, f64)> = centroids
@@ -424,11 +467,15 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .clamp(1, 200) as usize;
             let vector = state
                 .store
+                .lock()
+                .unwrap()
                 .face_vector(face)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("no face {face}"))?;
             let mut hits = state
                 .store
+                .lock()
+                .unwrap()
                 .find_similar(&vector, limit + 1)
                 .map_err(|e| e.to_string())?;
             hits.retain(|(row, _)| row.id != face);
@@ -458,12 +505,19 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .unwrap_or_default();
             let pruned = state
                 .store
+                .lock()
+                .unwrap()
                 .prune_outside(&|p: &str| roots.iter().any(|r| paths::is_inside(p, r)))
                 .map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"ok": true, "pruned": pruned}))
         }
         "counts" => {
-            let c = state.store.counts().map_err(|e| e.to_string())?;
+            let c = state
+                .store
+                .lock()
+                .unwrap()
+                .counts()
+                .map_err(|e| e.to_string())?;
             Ok(serde_json::json!({
                 "ok": true,
                 "faces": c.faces,
@@ -474,7 +528,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 "models": {
                     "det": state.config.det_model,
                     "emb": state.config.emb_model,
-                    "dim": state.store.meta("embed_dim").map_err(|e| e.to_string())?,
+                    "dim": state.store.lock().unwrap().meta("embed_dim").map_err(|e| e.to_string())?,
                 },
             }))
         }
@@ -531,6 +585,8 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
         .filter(|c| {
             !state
                 .store
+                .lock()
+                .unwrap()
                 .is_fresh(&c.path, c.size, c.mtime)
                 .unwrap_or(false)
         })
@@ -538,42 +594,97 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
         .cloned()
         .collect();
     let fresh = candidates.len() - photos.len();
-    let mut scanned = 0usize;
-    let mut faces_total = 0usize;
-    let mut skipped = 0usize;
-    for candidate in &photos {
-        let now = now();
-        match decode_and_scan(
-            state,
-            candidate.path.as_str(),
-            candidate.size,
-            candidate.mtime,
-            now,
-        ) {
-            Ok(n) => {
-                scanned += 1;
-                faces_total += n;
-                write_out(serde_json::json!({
-                    "event": "face-scan", "path": candidate.path, "faces": n,
-                }));
-            }
-            Err(why) => {
-                skipped += 1;
-                write_out(serde_json::json!({
-                    "event": "face-skip", "path": candidate.path, "why": why,
-                }));
-            }
+    // The worker pool (FACES.md 2026-11-22, measured on this box: the scan ran ONE
+    // thread of 20 — pidstat 100 % on a single core — with detect 993 ms/photo + embed
+    // on the critical path). Files are the unit of parallelism: each worker owns a
+    // file's decode → detect → embed, and store writes serialize on the store lock.
+    // The sessions are shared, not per-worker: tract plans run from `&Arc<Self>`
+    // (tract-core plan.rs — per-call scratch), so the models load once. The daemon's
+    // state lock stays held across the scan, so the idle watch cannot unload models
+    // mid-scan. Events ride a channel to this thread — whole lines, streamed live.
+    use_models(state)?;
+    let det = Arc::clone(state.scrfd.as_ref().expect("the detector is loaded"));
+    let emb = Arc::clone(state.embedder.as_ref().expect("the embedder is loaded"));
+    let store = Arc::clone(&state.store);
+    let config = state.config.clone();
+    let workers = workers_for(state.config.workers, photos.len());
+    let chunk = photos.len().div_ceil(workers).max(1);
+    let sums = Arc::new(Mutex::new((0usize, 0usize, 0usize)));
+    let (tx, rx) = std::sync::mpsc::channel::<Value>();
+    std::thread::scope(|scope| {
+        for candidates in photos.chunks(chunk) {
+            let (det, emb, store, tx, sums, config) = (
+                Arc::clone(&det),
+                Arc::clone(&emb),
+                Arc::clone(&store),
+                tx.clone(),
+                Arc::clone(&sums),
+                config.clone(),
+            );
+            scope.spawn(move || {
+                let pool = Pool {
+                    det: &det,
+                    emb: &emb,
+                    store: &store,
+                    config: &config,
+                };
+                let mut scanned = 0usize;
+                let mut faces_total = 0usize;
+                let mut skipped = 0usize;
+                for candidate in candidates {
+                    match decode_and_scan(
+                        &pool,
+                        candidate.path.as_str(),
+                        candidate.size,
+                        candidate.mtime,
+                        now(),
+                    ) {
+                        Ok(n) => {
+                            scanned += 1;
+                            faces_total += n;
+                            let _ = tx.send(serde_json::json!({
+                                "event": "face-scan", "path": candidate.path, "faces": n,
+                            }));
+                        }
+                        Err(why) => {
+                            skipped += 1;
+                            let _ = tx.send(serde_json::json!({
+                                "event": "face-skip", "path": candidate.path, "why": why,
+                            }));
+                        }
+                    }
+                }
+                let mut total = sums.lock().expect("the sums lock");
+                total.0 += scanned;
+                total.1 += faces_total;
+                total.2 += skipped;
+            });
         }
-    }
+        // This thread streams events as they arrive; the stream ends when every
+        // worker's sender is dropped, and `scope` joins them on the way out.
+        drop(tx);
+        for event in rx {
+            write_out(event);
+        }
+    });
+    let (scanned, faces_total, skipped) = *sums.lock().expect("the sums lock");
+    state.last_use = Instant::now();
     let assigned = state
         .store
+        .lock()
+        .unwrap()
         .run_clustering(
             state.config.merge_threshold,
             state.config.collision_margin,
             usize::MAX,
         )
         .map_err(|e| e.to_string())?;
-    let c = state.store.counts().map_err(|e| e.to_string())?;
+    let c = state
+        .store
+        .lock()
+        .unwrap()
+        .counts()
+        .map_err(|e| e.to_string())?;
     write_out(
         serde_json::json!({"event": "cluster", "assigned": assigned, "persons": c.persons, "pending": c.pending}),
     );
@@ -583,30 +694,32 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
     }))
 }
 
+/// A worker's view of the scan: the shared sessions, the lock-serialized store,
+/// and the model pins (FACES.md worker pool). Bundled as one receiver so the
+/// per-file routine reads as one unit — and stays inside clippy's argument gate.
+struct Pool<'a> {
+    det: &'a Scrfd,
+    emb: &'a Embedder,
+    store: &'a Mutex<FaceStore>,
+    config: &'a FaceServiceConfig,
+}
+
 fn decode_and_scan(
-    state: &mut State,
+    pool: &Pool,
     path: &str,
     size: i64,
     mtime: f64,
     now: f64,
 ) -> Result<usize, String> {
-    use_models(state)?;
     let img = decode_photo(path)?;
-    let faces = state
-        .scrfd
-        .as_ref()
-        .expect("the detector is loaded")
+    let faces = pool
+        .det
         .detect(&img.pixels, img.width, img.height)
         .map_err(|e| e.to_string())?;
     let mut records = Vec::new();
     for f in &faces {
         let crop = digup_runtime::face::norm_crop(&img.pixels, img.width, img.height, f);
-        let vector = state
-            .embedder
-            .as_ref()
-            .expect("the embedder is loaded")
-            .embed(&crop)
-            .map_err(|e| e.to_string())?;
+        let vector = pool.emb.embed(&crop).map_err(|e| e.to_string())?;
         records.push(FaceRecord {
             box_: f.box_,
             kps: f.kps,
@@ -614,8 +727,9 @@ fn decode_and_scan(
             vector,
         });
     }
-    state
-        .store
+    pool.store
+        .lock()
+        .expect("the store lock")
         .record_scan(
             ScanOf {
                 path,
@@ -623,8 +737,8 @@ fn decode_and_scan(
                 mtime,
                 width: img.width as i64,
                 height: img.height as i64,
-                det_model: &state.config.det_model,
-                emb_model: &state.config.emb_model,
+                det_model: &pool.config.det_model,
+                emb_model: &pool.config.emb_model,
             },
             &records,
             now,
@@ -632,9 +746,31 @@ fn decode_and_scan(
         .map_err(|e| e.to_string())
 }
 
+/// The scan's worker count (FACES.md 2026-11-22). 0 = auto: cores/2, capped at 8 —
+/// measured on this box (20 cores): the face pipeline is one thread deep, and each
+/// worker's decode spawns a multithreaded ffmpeg, so half the cores cover the
+/// parallel files and leave the rest to the machine. An explicit number names the
+/// pool; files cap it (never a worker with nothing to do).
+fn workers_for(configured: usize, photos: usize) -> usize {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let workers = if configured > 0 {
+        configured
+    } else {
+        (cores / 2).clamp(1, 8)
+    };
+    workers.min(photos).max(1)
+}
+
 fn row_of(state: &State, id: i64) -> Result<Value, String> {
     let mut row: Option<Value> = None;
-    let rows = state.store.face_rows_by_id(id).map_err(|e| e.to_string())?;
+    let rows = state
+        .store
+        .lock()
+        .unwrap()
+        .face_rows_by_id(id)
+        .map_err(|e| e.to_string())?;
     if let Some(r) = rows.first() {
         row = Some(row_json(r));
     }
@@ -661,4 +797,22 @@ fn now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod scan_workers_tests {
+    use super::workers_for;
+
+    #[test]
+    fn auto_workers_is_cores_half_capped_at_eight() {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        assert_eq!(workers_for(0, 1000), (cores / 2).clamp(1, 8).min(1000));
+        assert_eq!(workers_for(0, 3), (cores / 2).clamp(1, 8).min(3));
+        assert_eq!(workers_for(3, 1000), 3);
+        assert_eq!(workers_for(64, 1000), 64); // an explicit number names the pool
+        assert_eq!(workers_for(8, 5), 5); // never more workers than files
+        assert_eq!(workers_for(0, 0), 1); // zero files: one worker does nothing
+    }
 }

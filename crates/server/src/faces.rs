@@ -211,6 +211,12 @@ pub fn faces_call(
         "--model-idle".to_string(),
         format_gf64(server.faces_model_idle),
     ];
+    if server.faces_workers > 0 {
+        // The pool is the daemon's own law (face_service::workers_for); the server
+        // names the flag only when the deployment names a number.
+        argv.push("--faces-workers".to_string());
+        argv.push(server.faces_workers.to_string());
+    }
     if let Some(models) = &server.models_dir {
         argv.push("--faces-models".to_string());
         argv.push(models.to_string_lossy().into_owned());

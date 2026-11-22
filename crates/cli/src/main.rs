@@ -33,7 +33,7 @@ struct Arguments {
 }
 
 /// `Arguments.valued`: flags that need a value.
-const VALUED: [&str; 24] = [
+const VALUED: [&str; 25] = [
     "--index",
     "--limit",
     "--kind",
@@ -55,6 +55,7 @@ const VALUED: [&str; 24] = [
     "--merge-threshold",
     "--collision-margin",
     "--model-idle",
+    "--faces-workers",
     "--time-limit",
     "--tries",
     "--when-quiet",
@@ -259,6 +260,10 @@ fn main() {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(60.0),
                 consent: args.value("--faces-consent").map(PathBuf::from),
+                workers: args
+                    .value("--faces-workers")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
             };
             std::process::exit(digup_services::face_service::face_service(config));
         }

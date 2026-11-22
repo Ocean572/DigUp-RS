@@ -187,6 +187,10 @@ pub struct ServerConfig {
     /// `DIGUP_SERVER_FACE_SCAN_TIMEOUT_S` (3600): the ceiling of one
     /// synchronous scan call (detect is ~4.4 s/photo CPU — a big tree is hours).
     pub faces_scan_timeout_s: f64,
+    /// `DIGUP_SERVER_FACE_WORKERS` (0 = the daemon's own default, min(8, cores/2)):
+    /// parallel FILES per scan, one shared session set per daemon
+    /// (FACES.md 2026-11-22 — the scan ran one thread of 20 measured).
+    pub faces_workers: usize,
 }
 
 fn env_string(name: &str, default: &str) -> String {
@@ -427,6 +431,7 @@ impl ServerConfig {
             faces_collision: knob_float("DIGUP_SERVER_FACE_COLLISION", 0.10)?,
             faces_model_idle: knob_float("DIGUP_SERVER_FACE_MODEL_IDLE_S", 60.0)?,
             faces_scan_timeout_s: knob_float("DIGUP_SERVER_FACE_SCAN_TIMEOUT_S", 3600.0)?,
+            faces_workers: knob_float("DIGUP_SERVER_FACE_WORKERS", 0.0)? as usize,
             encoder_idle: idle,
             binary,
             models_dir: models,
