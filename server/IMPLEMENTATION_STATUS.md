@@ -94,6 +94,33 @@ packs with sha256 checks; Dockerfile payload builds carry `--features digup-cli/
 `.env.example` documents the FACE knobs (merge 0.5 / collision 0.10 / model idle 60 / scan
 ceiling 3600 — enabling faces is a consent POST, never an env var).
 
+**Desktop apps (the Tauri shell — Windows, Linux, the Mac app, 2026-11-22):** the People tab
+lands as a 5th Settings tab (`shell/ui/faces.js` + settings.html/js/css). The shell's own
+`faces.rs` ports the server's seam: the consent record beside `settings.json` (0600 atomic,
+main-target bare name — the app has one index), the faces writer lock at the server's exact
+inode name (`.digup-server.faces.writer.lock` — a shell scan and a server scan of one index
+folder exclude each other), per-call `faces-service` spawns (argv pinned by unit test; the
+knob flags omitted — the daemon's defaults ARE the server's pins), the server's verb clocks
+(counts 60 s, reads 120 s, scan 3600 s with fresh-skip resume), the scan streaming
+crawl/face-scan/cluster to the pages as the `faces` event, `download-model --faces` as a
+ModelDownload of its own (`faces-model` event, packs never gate indexing). The panel mirrors
+the Lit reference: consent gate default-OFF (six pack badges, tier picker, unchecked ack),
+Scan now with the relayed live counts, person cards cropped over the helper's OWN `/render`
+previews via the asset protocol (the same scale-cancelling math — the server's pinned numbers
+re-pinned shell-side), rename/merge/delete with the settings page's in-place confirm rows, the
+review queue with the engine's candidate cosines. Payloads: `scripts/rust/package-{macos,linux,
+windows}.sh` AND the shell installers `scripts/package-{linux,windows}.sh` build with
+`--features digup-cli/faces` (the flag ships code, never weights; a faces-less helper answers
+faces-service with usage + exit 2, relayed, not dressed up). **Gates:** shell `cargo test` 34
+passed / 0 failed (6 new faces tests: argv shape with/without index+models, malformed record =
+no consent, tier law, empty-embedder refusal, verb clocks); `cargo clippy --all-targets` on the
+worktree vs the main-tree baseline — identical lint sets (the shell crate's 5 machine-side lints
+are baseline, the faces code adds zero); the crate is rustfmt-clean-to-baseline (the whole
+crate is unformatted by its own convention — CI runs `cargo test` only); `node --test
+shell/tests/*.test.cjs` **20/20** (3 new: the server's COVER crop numbers `cw 82.5 × ch 100`,
+edge clamps, width-0 fallback, the render-verb request + calc() style values); `cargo check
+--all-targets` clean; `node --check` green on the touched JS.
+
 ## 2026-11-21 — v0.8.1 recut at the Stage-3 tip; the apps' update feed moves to this repo (`792f1d1`)
 
 v0.8.1 now carries the coding-agent CLI verbs (the `4c72f85` #178/#189 contract) alongside

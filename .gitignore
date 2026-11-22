@@ -74,3 +74,7 @@ server/ui/node_modules/
 # The Rust packaging scripts' staging and artifacts (scripts/rust/package-linux.sh):
 # built payloads, like every other package folder, are working artifacts, never git.
 dist/
+
+# A box's own compose overlay (the bench stack's local file): it names the machine's real
+# paths and mounts — personal data, like every other deploy/data*/ shape. Local-only by design.
+deploy/docker-compose.rust.yml

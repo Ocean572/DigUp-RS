@@ -302,3 +302,25 @@ Pascal/sm_61, driver 580). Wiring it into SCRFD+ArcFace is an engineering
 task, not a measurement — the CPU rows above are the shipping numbers
 (CPU is the default device for faces on every platform). Reporting
 "GPU NOT MEASURED" per the house rule; invented success is not.
+
+### Desktop shell People tab — the server seam, ported to the app (shipped 2026-11-22)
+
+The Tauri shell (Windows, Linux, the Mac app) carries the same surface with no server between
+the page and the engine: `shell/src-tauri/src/faces.rs` ports the server's consent record
+(beside `settings.json`, 0600 atomic, main-target bare name — the app has one index), the
+writer lock at the server's **exact inode name** (`<index>/.digup-server.faces.writer.lock` —
+a shell scan and a server scan of one index folder take turns, same as two servers would), and
+the per-call `faces-service` call with the server's verb clocks (counts 60 s, reads 120 s, scan
+3600 s; fresh-skip makes the ceiling a pause, not a loss). The knob flags are named nowhere:
+the daemon's defaults (0.5 / 0.10 / 60 s) ARE the server's pins — naming them would re-say
+numbers the engine owns. The scans stream crawl/face-scan/cluster to the page as the `faces`
+event; the page shows the engine's checked/faces/assigned counts and invents none. The crops
+ride the helper's **own `/render` previews** (the `ask` op the panel/window already use, scoped
+by the search helper's `ready` event) with the server UI's scale-cancelling geometry — the
+server suite's COVER numbers (box [10,10,60,60] in 200×100 → cw 82.5 × ch 100, offsets 0) are
+re-pinned shell-side by `shell/tests/faces.test.cjs`. `download-model --faces` runs as a
+ModelDownload of its own (`faces-model` event); the packs never gate indexing. The payloads
+compile the verbs in (`--features digup-cli/faces` in every packaging script, both the payload
+scripts and the shell installers); a faces-less helper answers `faces-service` with usage text
+and exit 2, which lands as the relayed refusal "the helper is built without face recognition",
+not dressed up.
