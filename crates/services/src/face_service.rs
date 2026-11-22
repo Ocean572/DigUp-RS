@@ -272,6 +272,11 @@ fn row_json(r: &FaceRow) -> Value {
         "box": r.box_,
         "kps": r.kps,
         "score": r.score,
+        // The source-pixel map of the crop (schema 3): box/kps are in these
+        // coordinates, `/preview` is a scaled render — the thin client crops with
+        // them. 0 = a row recorded before the map existed (the uncropped fallback).
+        "width": r.width,
+        "height": r.height,
         "person": r.person,
     })
 }
@@ -506,7 +511,7 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
             serde_json::json!({"event": "crawl", "checked": progress.checked, "root": progress.root}),
         );
     });
-    let photos: Vec<_> = report
+    let candidates: Vec<digup_core::model::Candidate> = report
         .candidates
         .into_iter()
         .filter(|c| {
@@ -516,6 +521,13 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
                 .unwrap_or_default();
             images.contains(&ext.as_str())
         })
+        .collect();
+    // Piggyback freshness (FACES.md §3): the files whose exact `(path, size, mtime)`
+    // the store recorded are NOT re-decoded — including the faceless ones (the
+    // scans table, schema 2), which is where a photo library's cost really lives.
+    // `fresh` relays how many that skipped; `limit` bounds the decode work per scan.
+    let photos: Vec<digup_core::model::Candidate> = candidates
+        .iter()
         .filter(|c| {
             !state
                 .store
@@ -523,7 +535,9 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
                 .unwrap_or(false)
         })
         .take(limit)
+        .cloned()
         .collect();
+    let fresh = candidates.len() - photos.len();
     let mut scanned = 0usize;
     let mut faces_total = 0usize;
     let mut skipped = 0usize;
@@ -564,7 +578,8 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
         serde_json::json!({"event": "cluster", "assigned": assigned, "persons": c.persons, "pending": c.pending}),
     );
     Ok(serde_json::json!({
-        "ok": true, "files": scanned, "faces": faces_total, "skipped": skipped, "assigned": assigned,
+        "ok": true, "files": scanned, "faces": faces_total, "skipped": skipped,
+        "fresh": fresh, "assigned": assigned,
     }))
 }
 
@@ -606,6 +621,8 @@ fn decode_and_scan(
                 path,
                 size,
                 mtime,
+                width: img.width as i64,
+                height: img.height as i64,
                 det_model: &state.config.det_model,
                 emb_model: &state.config.emb_model,
             },

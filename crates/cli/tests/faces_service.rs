@@ -163,6 +163,23 @@ fn faces_service_verbs_round_trip_on_the_public_fixtures() {
         .count();
     assert_eq!(scan_events, 5, "one face-scan event per file");
 
+    // 1b. piggyback freshness (FACES.md §3, the scans table): a rescan of the same
+    //     roots decodes 0 files and skips all 5 as fresh — the faceless-photo case
+    //     included, which is the whole point of schema 2 (measured 2026-11-22:
+    //     under schema 1 a faceless file re-decoded at ~4 s/photo on every scan).
+    let rescan = daemon.request("scan", roots.clone(), 600);
+    assert_eq!(rescan["ok"], true, "{rescan}");
+    assert_eq!(rescan["files"], 0, "nothing new to decode: {rescan}");
+    assert_eq!(
+        rescan["fresh"], 5,
+        "every fixture is recorded at (path,size,mtime): {rescan}"
+    );
+    assert_eq!(rescan["faces"], 0, "no face is paid for twice: {rescan}");
+    assert_eq!(
+        rescan["assigned"], 0,
+        "clustering has nothing new: {rescan}"
+    );
+
     // 2. counts + the persons the clustering opened. Measured fixture facts
     //    (rows pinned in FACES.md): the 2005 and 2021 files are the SAME
     //    source photograph (cos 1.0000 — they merge exactly), and the real

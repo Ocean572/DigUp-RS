@@ -14,12 +14,13 @@
 //! - `fit`: the similarity fit matches scikit-image's `SimilarityTransform`
 //!   within 1e-5 (closed-form 2×2 SVD vs its lstsq; float noise, FACES.md).
 
-use digup_native::cvops::{Affine23, resize_linear, similarity_from_points, warp_affine_linear};
+use digup_native::cvops::{resize_linear, similarity_from_points, warp_affine_linear, Affine23};
 use std::fs;
 use std::path::Path;
 
 fn read_meta(root: &Path) -> serde_json::Value {
-    let raw = fs::read_to_string(root.join("meta.json")).expect("meta.json — run the fixture generator");
+    let raw =
+        fs::read_to_string(root.join("meta.json")).expect("meta.json — run the fixture generator");
     serde_json::from_str(&raw).expect("meta.json parses")
 }
 
@@ -74,12 +75,14 @@ fn resize_matches_pinned_model_and_cv2_divergence_is_pinned() {
         assert_eq!(
             diffs,
             e["cv2_diffs"].as_u64().unwrap() as usize,
-            "resize{}: cv2 diff count moved", e["i"]
+            "resize{}: cv2 diff count moved",
+            e["i"]
         );
         assert_eq!(
             maxd as u64,
             e["cv2_max_delta"].as_u64().unwrap(),
-            "resize{}: cv2 max delta moved", e["i"]
+            "resize{}: cv2 max delta moved",
+            e["i"]
         );
     }
 }
@@ -100,15 +103,17 @@ fn warp_matches_pinned_model_and_cv2_divergence_is_pinned() {
         let mj: Vec<[f64; 3]> =
             serde_json::from_str(&fs::read_to_string(root.join(e["m"].as_str().unwrap())).unwrap())
                 .expect("affine json");
-        let m: Affine23 = [
-            mj[0][0], mj[0][1], mj[0][2], mj[1][0], mj[1][1], mj[1][2],
-        ];
+        let m: Affine23 = [mj[0][0], mj[0][1], mj[0][2], mj[1][0], mj[1][1], mj[1][2]];
         let got = warp_affine_linear(&src, w, h, &m, 112, 112);
         assert_eq!(got.len(), model.len(), "warp{} size", e["i"]);
         // 1) the port reproduces the pinned model byte-for-byte (cross-platform
         //    determinism: the engine's own numbers);
         let model_bad: usize = got.iter().zip(model.iter()).filter(|(a, b)| a != b).count();
-        assert_eq!(model_bad, 0, "warp{}: port diverges from the pinned model", e["i"]);
+        assert_eq!(
+            model_bad, 0,
+            "warp{}: port diverges from the pinned model",
+            e["i"]
+        );
         // 2) the measured cv2 divergence is exactly the pinned count/magnitude.
         let mut diffs = 0usize;
         let mut maxd = 0i64;
@@ -122,12 +127,14 @@ fn warp_matches_pinned_model_and_cv2_divergence_is_pinned() {
         assert_eq!(
             diffs,
             e["cv2_diffs"].as_u64().unwrap() as usize,
-            "warp{}: cv2 diff count moved", e["i"]
+            "warp{}: cv2 diff count moved",
+            e["i"]
         );
         assert_eq!(
             maxd as u64,
             e["cv2_max_delta"].as_u64().unwrap(),
-            "warp{}: cv2 max delta moved", e["i"]
+            "warp{}: cv2 max delta moved",
+            e["i"]
         );
     }
 }
@@ -156,7 +163,13 @@ fn fit_matches_skimage_similarity_transform() {
             .as_array()
             .unwrap()
             .iter()
-            .map(|r| [r[0].as_f64().unwrap(), r[1].as_f64().unwrap(), r[2].as_f64().unwrap()])
+            .map(|r| {
+                [
+                    r[0].as_f64().unwrap(),
+                    r[1].as_f64().unwrap(),
+                    r[2].as_f64().unwrap(),
+                ]
+            })
             .collect();
         let got = similarity_from_points(&src, &dst);
         for (r, row) in want.iter().enumerate() {

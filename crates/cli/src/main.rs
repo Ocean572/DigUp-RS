@@ -2763,7 +2763,7 @@ fn download_model(args: &Arguments) -> i32 {
         // A checksum-matched file in the Hugging Face cache is copied, not fetched.
         let cached_ok = file
             .cache
-            .and_then(|f| ModelFiles::cached_copy(f))
+            .and_then(ModelFiles::cached_copy)
             .map(|cached| {
                 ModelFiles::sha256(&cached)
                     .map(|hash| hash == file.sha256)

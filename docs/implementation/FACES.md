@@ -218,6 +218,66 @@ freshness `(path, size, mtime)` skips re-decode; `--emb-model` is REQUIRED
 `--faces-consent` (the store-scoped consent file: what the UI gates, the
 engine gates); person ids are `New(i) → i+1` insertion order.
 
+### Schema 2 — the per-file scan fact (measured 2026-11-22, this box, ai-ubuntu-computer)
+
+The server contract suite (`server/tests/test_faces.py`) caught schema 1's freshness gap:
+`is_fresh` read the **face rows**, so a file that produced no faces was never recorded and
+**every scan re-decoded every faceless photo** — the majority of a photo library, at
+~4 s/photo. Measured on the 12 corpus photos: the rescan decoded 9 files (the faceless
+ones) with `skipped 0`; the same shape with 3 copies added: `files 12, skipped 0`. Schema
+2 adds `scans(path PRIMARY KEY, size, mtime, faces, scanned_at)`: a completed decode
+records the FILE's fact (`faces: 0` included), `is_fresh` demands the exact
+`(path, size, mtime)` from that table, `prune` takes the scan facts out with their files,
+and a schema-1 store backfills its scan rows from its faces at migration.
+
+Gate rows (the daemon gate's step 1b + the suite's rescan test pin these):
+
+| scan over the 12 corpus photos | files | faces | skipped | fresh | assigned |
+|---|---|---|---|---|---|
+| first (fresh store) | 12 | 3 | 0 | 0 | 3 |
+| rescan (nothing changed) | 0 | 0 | 0 | 12 | 0 |
+| 3 byte-copies added | 3 | 3 | 0 | 12 | 3 |
+| after that | 0 | 0 | 0 | 15 | 0 |
+
+The scan reply gained `fresh` (files skipped as recorded — the honest count of what
+piggyback freshness saved; `skipped` keeps its meaning: decode failures, which the next
+scan retries). A face whose clustering is still queued no longer makes its file stale:
+re-decoding a queued face deletes the very row the human review queue is about, so the
+queue's evidence survives a scan (schema 1's queued-condition in `is_fresh` is gone).
+
+Byte-copy row (measured, same box, merge 0.5): 3 face photos copied under new names →
+`files 3, faces 3, fresh 4, skipped 0, assigned 3`. Every face lands in a person
+(`assigned 6, pending 0`), and the person count is the online centroid's geometry, not a
+constant: a copy joins its person only on its cosine to the **centroid**, and a cluster of
+three different people sits near the merge line for a member's own photo — measured 2
+persons on the 4-photo probe, 3 on the 12-photo suite run (the merged pair's geometry
+moves with the crawl order, the rowid artifact the repo notes pin). The merge/confirm
+verbs are the human's answer to exactly this marginal case; the suite pins the law
+(every face lands, nothing stays queued), never the marginal count.
+
+### Schema 3 — the crop map (2026-11-22)
+
+`faces.width`/`faces.height`: the decoded photo's own pixels, recorded with each face.
+The reason is the thin-client crop law: `box`/`kps` are **source** pixels, `/preview` is a
+scaled render (`pixels` = longest side), and the client crops the face out of the handle
+it is given — for that it needs the map (`scale = pixels / max(width, height)`). Rows
+recorded before schema 3 read `0` — the uncropped fallback, filled by the next scan of a
+changed file. The migration chain runs 1 → scans backfill → dims (the main index's chain
+shape, index_store::migrate); the store's faces, persons and queue are the user's data
+and the chain only adds. Gates: `crates/core/tests/face_store.rs` (freshness rows, the
+dims row, a schema-1 store landing at 3 with its face kept) and the suite's person-rows
+assertions (`width > 0`).
+
+### Consent record — the f64 round-trip row (measured 2026-11-22, this box)
+
+The record's `accepted_at` is an f64, and its file round trip is **not value-exact**:
+serde_json's float *parser* is `mantissa × 10^exp`, not correctly rounded. Measured on
+the suite's first run — the POST echo carries the exact f64 (`1795337956.9011621`), the
+re-read of the same file lands 1 ulp off and its shortest repr loses a digit
+(`1795337956.901162`). The suite pins the record per the repo's cross-process float law
+(root AGENTS.md, the Swift z-noise row): floats within 2 ulps, strings and integers
+exact. A suite demanding bit-exact f64 across a JSON round trip passes only by luck.
+
 ### GPU cost row (2026-11-22, 1070 card) — **GPU NOT MEASURED**
 
 Measured reason, not an assumption: tract 0.23.10's `tract-onnx`/`tract-core`

@@ -15,14 +15,18 @@ use crate::db::{Database, Result, Sql};
 use crate::vectors;
 
 /// The face store's own layout version (its file, its lineage — FACES.md §2).
-pub const FACE_SCHEMA_VERSION: i64 = 1;
+pub const FACE_SCHEMA_VERSION: i64 = 3;
 /// The faces' file in the index folder, beside `index.sqlite`.
 pub const FACE_FILE: &str = "face.sqlite";
 
 /// The base layout. `faces` carries the scan facts and the embedding; `persons`
 /// the online centroid; `pending` the clustering queue (a face is queued the
 /// moment it is recorded, and leaves it when it joins a person, a person is
-/// deleted, or a human decides an ambiguous merge).
+/// deleted, or a human decides an ambiguous merge); `scans` the per-FILE scan
+/// fact — the piggyback freshness key, so a photo with no face is recorded as
+/// scanned too (schema 2: faceless photos are the majority of a photo library,
+/// and a store that records only face rows re-decodes them at ~4 s/photo
+/// forever).
 pub fn create_sql() -> String {
     "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE persons(
@@ -42,6 +46,11 @@ CREATE TABLE faces(
     box TEXT NOT NULL,                -- JSON [x0,y0,x1,y1], source px
     kps TEXT NOT NULL,                -- JSON [[x,y]×5], source px
     score REAL NOT NULL,              -- detection score
+    width REAL NOT NULL DEFAULT 0,    -- source px: the crop map (schema 3). A face's box
+    height REAL NOT NULL DEFAULT 0,   -- is in SOURCE pixels, and /preview is a scaled
+                                      -- render — the thin client crops the face out of the
+                                      -- preview handle, and for that it needs the map.
+                                      -- 0 = a row recorded before the map existed
     det_model TEXT NOT NULL,          -- detector stamp (re-scan when it changes)
     emb_model TEXT NOT NULL,          -- embedder stamp
     vec BLOB NOT NULL,                -- dim × float16, L2-normalized
@@ -54,7 +63,14 @@ CREATE TABLE pending(
     face INTEGER PRIMARY KEY REFERENCES faces(id) ON DELETE CASCADE,
     ts REAL NOT NULL
 );
-PRAGMA user_version = 1;"
+CREATE TABLE scans(
+    path TEXT PRIMARY KEY,            -- one row per scanned file: the freshness key
+    size INTEGER NOT NULL,            -- is_fresh demands path + size + mtime, exact
+    mtime REAL NOT NULL,
+    faces INTEGER NOT NULL,           -- how many faces that scan recorded (0 = faceless)
+    scanned_at REAL NOT NULL
+);
+PRAGMA user_version = 3;"
         .to_string()
 }
 
@@ -74,6 +90,10 @@ pub struct ScanOf<'a> {
     pub path: &'a str,
     pub size: i64,
     pub mtime: f64,
+    /// The decoded image's own pixels — the crop map (schema 3): box/kps are in
+    /// these coordinates, and the frontend maps them onto the scaled `/preview`.
+    pub width: i64,
+    pub height: i64,
     pub det_model: &'a str,
     pub emb_model: &'a str,
 }
@@ -105,6 +125,9 @@ pub struct FaceRow {
     pub box_: [f32; 4],
     pub kps: [[f32; 2]; 5],
     pub score: f32,
+    /// The source pixels the box lives in (0 = a row predating the map).
+    pub width: f64,
+    pub height: f64,
     pub person: Option<i64>,
 }
 
@@ -181,12 +204,54 @@ impl FaceStore {
         }
         self.db
             .set_busy_timeout_ms(crate::db::MIGRATION_BUSY_TIMEOUT_MS)?;
-        self.db.transaction(|| {
-            self.db.execute(&create_sql())?;
+        let result = self.db.transaction(|| {
+            // The version is read once and drives the steps (the main index's own chain
+            // shape, index_store::migrate): a fresh store runs `create`, a schema-1 store
+            // gains the scans table and the backfill, and both end at the version stamp.
+            let version = self.db.user_version()?;
+            if version == 0 {
+                self.db.execute(&create_sql())?;
+            }
+            if version == 1 {
+                self.migrate_scans()?;
+            }
+            if (1..=2).contains(&version) {
+                self.migrate_face_dims()?;
+            }
             self.db.set_user_version(FACE_SCHEMA_VERSION)
-        })?;
+        });
         self.db.set_busy_timeout_ms(crate::db::BUSY_TIMEOUT_MS)?;
-        Ok(())
+        result
+    }
+
+    /// Schema 1 → 2: the per-file scan fact, backfilled from the faces the store already
+    /// has. Files a scan recorded keep their freshness (no re-decode of what was paid
+    /// for); faceless files re-decode once, under the new key, and are recorded.
+    fn migrate_scans(&self) -> Result<()> {
+        self.db.execute(
+            "CREATE TABLE scans(
+                path TEXT PRIMARY KEY,
+                size INTEGER NOT NULL,
+                mtime REAL NOT NULL,
+                faces INTEGER NOT NULL,
+                scanned_at REAL NOT NULL
+            );
+            INSERT INTO scans(path, size, mtime, faces, scanned_at)
+            SELECT path, size, mtime, COUNT(*), MAX(scanned_at)
+            FROM faces GROUP BY path, size, mtime;",
+        )
+    }
+
+    /// Schema 2 → 3: the source-pixel map of the crop. `box`/`kps` are SOURCE
+    /// pixels and `/preview` is a scaled render, so the thin client needs the
+    /// image's own width/height to crop a face out of the handle it is given.
+    /// Rows recorded before the map exists read 0 — the honest fallback (the
+    /// People tab shows the uncropped photo for them, and a re-scan fills the map).
+    fn migrate_face_dims(&self) -> Result<()> {
+        self.db.execute(
+            "ALTER TABLE faces ADD COLUMN width REAL NOT NULL DEFAULT 0;
+             ALTER TABLE faces ADD COLUMN height REAL NOT NULL DEFAULT 0;",
+        )
     }
 
     // MARK: meta (model stamps, consent stamps)
@@ -216,14 +281,16 @@ impl FaceStore {
 
     /// A completed scan of one file: replace its faces wholesale (a re-scan of a
     /// file re-places its rows — the same file never contributes twice), queue the
-    /// new faces for clustering, and return how many were recorded.
+    /// new faces for clustering, record the scan fact itself (`scans`, the
+    /// freshness key — a faceless file is a scan that cost the full decode too),
+    /// and return how many were recorded.
     pub fn record_scan(&self, file: ScanOf, faces: &[FaceRecord], now: f64) -> Result<usize> {
         self.db.transaction(|| {
             self.delete_file_rows(file.path)?;
             for f in faces {
                 self.db.run(
-                    "INSERT INTO faces(path, size, mtime, box, kps, score, det_model, emb_model, vec, scanned_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    "INSERT INTO faces(path, size, mtime, box, kps, score, width, height, det_model, emb_model, vec, scanned_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     [
                         Sql::Text(file.path.to_string()),
                         Sql::Int(file.size),
@@ -231,6 +298,8 @@ impl FaceStore {
                         Sql::Text(json_box(&f.box_)),
                         Sql::Text(json_kps(&f.kps)),
                         Sql::Double(f.score as f64),
+                        Sql::Double(file.width as f64),
+                        Sql::Double(file.height as f64),
                         Sql::Text(file.det_model.to_string()),
                         Sql::Text(file.emb_model.to_string()),
                         Sql::Blob(vectors::half_bytes(&f.vector)),
@@ -243,6 +312,21 @@ impl FaceStore {
                     [Sql::Int(id), Sql::Double(now)],
                 )?;
             }
+            // One row per path, the file's own facts: the freshness key is
+            // path + size + mtime, exact (the main index's freshness law, mirrored).
+            self.db.run(
+                "INSERT INTO scans(path, size, mtime, faces, scanned_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime,
+                                                  faces = excluded.faces, scanned_at = excluded.scanned_at",
+                [
+                    Sql::Text(file.path.to_string()),
+                    Sql::Int(file.size),
+                    Sql::Double(file.mtime),
+                    Sql::Int(faces.len() as i64),
+                    Sql::Double(now),
+                ],
+            )?;
             Ok(faces.len())
         })
     }
@@ -275,43 +359,69 @@ impl FaceStore {
             .filter(|(_, p)| !existing_paths(p))
             .map(|(id, _)| id)
             .collect();
-        if doomed.is_empty() {
+        // Schema 2's shape: the faceless photo is the majority of a library, so the
+        // scan sweep runs even when NO face row is doomed — an early return on an
+        // empty face list would leave the whole faceless freshness key forever.
+        let mut doomed_paths: Vec<String> = Vec::new();
+        self.db.query("SELECT path FROM scans", [], |r| {
+            if let Some(p) = r.text(0) {
+                if !existing_paths(&p) {
+                    doomed_paths.push(p);
+                }
+            }
+            Ok(())
+        })?;
+        if doomed.is_empty() && doomed_paths.is_empty() {
             return Ok(0);
         }
         self.db.transaction(|| {
-            let ids: Vec<String> = doomed.iter().map(|i| i.to_string()).collect();
-            self.db.run(
-                &format!("DELETE FROM faces WHERE id IN ({})", ids.join(",")),
-                [],
-            )?;
+            if !doomed.is_empty() {
+                let ids: Vec<String> = doomed.iter().map(|i| i.to_string()).collect();
+                self.db.run(
+                    &format!("DELETE FROM faces WHERE id IN ({})", ids.join(",")),
+                    [],
+                )?;
+            }
+            // The scan facts go with their files: out of scope, out of the freshness key
+            // (a root that comes back re-decodes, the main index's own ghost-row law).
+            if !doomed_paths.is_empty() {
+                let placeholders: Vec<String> =
+                    (1..=doomed_paths.len()).map(|i| format!("?{i}")).collect();
+                let values: Vec<Sql> = doomed_paths.iter().map(|p| Sql::Text(p.clone())).collect();
+                self.db.run(
+                    &format!(
+                        "DELETE FROM scans WHERE path IN ({})",
+                        placeholders.join(",")
+                    ),
+                    values,
+                )?;
+            }
             self.recount_persons()
         })?;
         Ok(doomed.len())
     }
 
-    /// Piggyback freshness (FACES.md §3): the file is scanned when a face row
-    /// carries its exact `(path, size, mtime)` facts — the join key, never a
-    /// rowid — and no face of it is still queued (a queued face means the
-    /// clustering has work on it, not the scanner).
+    /// Piggyback freshness (FACES.md §3): the file is scanned when the `scans` row
+    /// carries its exact `(path, size, mtime)` facts — the join key, never a rowid.
+    /// Schema 2's point: a faceless photo is a completed scan (the decode was paid
+    /// for), and a face whose clustering is still queued does NOT make its file
+    /// stale — re-decoding a queued face would delete the very row the human
+    /// review queue is about.
     pub fn is_fresh(&self, path: &str, size: i64, mtime: f64) -> Result<bool> {
-        let mut rows = 0i64;
-        let mut queued = 0i64;
+        let mut seen = 0i64;
         self.db.query(
-            "SELECT (SELECT COUNT(*) FROM faces WHERE path = ?1 AND size = ?2 AND mtime = ?3),
-                    (SELECT COUNT(*) FROM pending p JOIN faces f ON f.id = p.face
-                     WHERE f.path = ?1 AND f.size = ?2 AND f.mtime = ?3)",
+            "SELECT COUNT(*) FROM scans WHERE path = ?1 AND size = ?2 AND mtime = ?3",
             [
                 Sql::Text(path.to_string()),
                 Sql::Int(size),
                 Sql::Double(mtime),
             ],
             |r| {
-                rows = r.int(0);
-                queued = r.int(1);
+                seen = r.int(0);
                 Ok(())
             },
         )?;
-        Ok(rows > 0 && queued == 0)
+        Ok(seen > 0)
     }
 
     /// One face row by id (the `similar`/`pending` verbs).
@@ -608,7 +718,7 @@ impl FaceStore {
     pub fn find_similar(&self, vector: &[f32], limit: usize) -> Result<Vec<(FaceRow, f64)>> {
         let mut out = Vec::new();
         self.db.query(
-            "SELECT id, path, size, mtime, box, kps, score, person, vec FROM faces",
+            "SELECT id, path, size, mtime, box, kps, score, person, vec, width, height FROM faces",
             [],
             |r| {
                 let blob = r.blob(8).unwrap_or_default();
@@ -624,6 +734,8 @@ impl FaceStore {
                         kps: parse_kps(&r.text(5).unwrap_or_default()),
                         score: r.double(6) as f32,
                         person: if r.is_null(7) { None } else { Some(r.int(7)) },
+                        width: r.double(9),
+                        height: r.double(10),
                     },
                     cos,
                 ));
@@ -638,7 +750,9 @@ impl FaceStore {
     fn face_rows(&self, tail: &str, values: impl IntoIterator<Item = Sql>) -> Result<Vec<FaceRow>> {
         let mut out = Vec::new();
         self.db.query(
-            &format!("SELECT id, path, size, mtime, box, kps, score, person FROM faces {tail}"),
+            &format!(
+                "SELECT id, path, size, mtime, box, kps, score, person, width, height FROM faces {tail}"
+            ),
             values,
             |r| {
                 out.push(FaceRow {
@@ -650,6 +764,8 @@ impl FaceStore {
                     kps: parse_kps(&r.text(5).unwrap_or_default()),
                     score: r.double(6) as f32,
                     person: if r.is_null(7) { None } else { Some(r.int(7)) },
+                    width: r.double(8),
+                    height: r.double(9),
                 });
                 Ok(())
             },

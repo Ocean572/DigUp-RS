@@ -130,12 +130,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let peak_kb = std::fs::read_to_string("/proc/self/status")?
         .lines()
         .find_map(|l| {
-            l.strip_prefix("VmHWM:").map(|v| {
-                v.split_whitespace()
-                    .next()
-                    .unwrap_or("0")
-                    .to_string()
-            })
+            l.strip_prefix("VmHWM:")
+                .map(|v| v.split_whitespace().next().unwrap_or("0").to_string())
         })
         .unwrap_or_default();
     println!(

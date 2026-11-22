@@ -305,7 +305,7 @@ mass deletion is the user's act, never a side effect.
 
 ```sh
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/scan -H 'content-type: application/json' -d '{}'
-# → 200 {"ok": true, "scan": {"files": 5, "faces": 5, "skipped": 0, "assigned": 5}}
+# → 200 {"ok": true, "scan": {"files": 5, "faces": 5, "skipped": 0, "fresh": 0, "assigned": 5}}
 # → 409 {"detail": "…: a faces scan is already running"} while one is in flight
 ```
 
@@ -318,19 +318,30 @@ tree is hours — the ceiling is `DIGUP_SERVER_FACE_SCAN_TIMEOUT_S` (3600). One 
 Clustering runs at the scan's tail; the knobs are `DIGUP_SERVER_FACE_MERGE` (0.5) and
 `DIGUP_SERVER_FACE_COLLISION` (0.10).
 
+The scan reply's fields are the engine's, in its own words: `files` = files decoded by **this**
+scan; `faces` = faces this scan recorded; `skipped` = files whose decode failed (a failed file
+is not recorded, so a later scan retries it); `fresh` = files the store had already recorded at
+their exact `(path, size, mtime)` — the rescan of a quiet tree answers
+`{"files": 0, "faces": 0, "skipped": 0, "fresh": N, "assigned": 0}`: the decode is paid once
+per file, faceless photos included (`face.sqlite` schema 2's `scans` table); `assigned` = faces
+the tail clustering joined into persons.
+
 ### `GET /api/v1/faces/persons`
 
 ```sh
 curl -s http://127.0.0.1:8787/api/v1/faces/persons
 # → 200 {"ok": true, "persons": [{"id": 3, "name": "Angela", "count": 2,
 #         "cover": 0.9999, "cover_face": {"id": 5, "path": "/…/photo.jpg",
-#         "box": [736.5, 250.9, 1256.3, 904.6], "kps": [[…], …], "score": 0.884,
-#         "media_id": "07cbe86e5775"}}, …]}
+#         "box": [736.5, 250.9, 1256.3, 904.6], "kps": [[…], …],
+#         "width": 1600, "height": 1067, "score": 0.884, "media_id": "07cbe86e5775"}}, …]}
 ```
 
 Person cards: `name` is `null` for an unnamed cluster (the UI shows "Person NN");
-`cover_face` is the person's best-scoring face — crop it out of its `preview` with the
-row's `box`/`kps`.
+`cover_face` is the person's best-scoring face. `box`/`kps` are **source pixels** and
+`width`/`height` are the photo's own pixels — the crop map: scale the box by
+`pixels / max(width, height)` and crop it out of that face's `preview` handle. A row
+recorded before face.sqlite schema 3 carries `width: 0` — the honest fallback (the card
+shows the uncropped photo; a re-scan fills the map).
 
 ### `GET /api/v1/faces/person/{id}`
 
