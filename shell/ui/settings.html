@@ -12,6 +12,7 @@
     <button role="tab" data-tab="folders">Folders</button>
     <button role="tab" data-tab="code">Code</button>
     <button role="tab" data-tab="storage">Storage</button>
+    <button role="tab" data-tab="people">People</button>
   </nav>
   <main class="settings">
     <section class="tab" id="general" role="tabpanel">
@@ -170,9 +171,14 @@
       <p class="note"><span id="version"></span> <button class="link inline" id="licenses" hidden>Licenses</button></p>
     </section>
 
+    <section class="tab" id="people" role="tabpanel" hidden>
+      <div id="people-panel"></div>
+    </section>
+
     <p class="note problem" id="problem" hidden></p>
   </main>
   <script src="shortcut.js"></script>
+  <script src="faces.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

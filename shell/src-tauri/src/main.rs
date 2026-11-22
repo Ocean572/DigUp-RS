@@ -8,6 +8,7 @@
 mod clipboard;
 mod code;
 mod editors;
+mod faces;
 mod helper;
 mod hotkey;
 mod hours;
@@ -63,6 +64,8 @@ struct Shell {
     search: SearchService,
     index: IndexService,
     model: ModelDownload,
+    /// The six face packs' download (`download-model --faces`): its events reach the People tab raw.
+    faces_model: ModelDownload,
     /// The model for the setup window and the tray: {"state": "checking|downloading|waiting|ready|failed", …}.
     model_state: Mutex<Value>,
     /// What indexing is doing, from the index helper's events (status.rs).
@@ -171,6 +174,17 @@ impl Shell {
             download.extend(["--to".to_string(), models.display().to_string()]);
         }
         self.launch(download, "model.log")
+    }
+
+    /// `download-model --faces`: the six pinned face packs into the same models folder
+    /// (crates/cli/src/usage.txt:26-29). The People tab's consent gates every verb; the packs
+    /// themselves are user-supplied — the payload ships code, never weights.
+    fn faces_download_launch(&self) -> Launch {
+        let mut download = vec!["download-model".to_string(), "--faces".to_string()];
+        if let Some(models) = &self.options.models {
+            download.extend(["--to".to_string(), models.display().to_string()]);
+        }
+        self.launch(download, "faces-model.log")
     }
 
     /// What every helper gets: where the model is, and `DIGUP_DEVICE=cpu` when the person chose the processor.
@@ -791,7 +805,9 @@ fn main() {
             app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, relative_path_text, copy_text, drag_out, set_hotkey, hold_hotkey,
-            set_tray_click, check_for_updates, offer_update, set_update_checks, set_mcp_claude, open_licenses
+            set_tray_click, check_for_updates, offer_update, set_update_checks, set_mcp_claude, open_licenses,
+            faces_status, faces_consent, faces_scan, faces_persons, faces_person, faces_pending,
+            faces_name, faces_merge, faces_delete, faces_confirm, faces_download
         ])
         .build(tauri::generate_context!())
         .expect("DigUp couldn't start");
@@ -853,6 +869,10 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         let app = handle.clone();
         move |event| model_event(&app, event)
     });
+    let faces_model = ModelDownload::new({
+        let app = handle.clone();
+        move |event| faces_model_event(&app, event)
+    });
     // Previews show files from the chosen folders (and the helper's renders, once it says where the index is).
     for root in &settings.folders {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
@@ -870,6 +890,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         search,
         index,
         model,
+        faces_model,
         model_state: Mutex::new(json!({"state": "checking"})),
         watcher: Mutex::new(None),
         code_watcher: Mutex::new(None),
@@ -1123,6 +1144,7 @@ fn delete_code_index(shell: &Arc<Shell>) {
 fn stop_helpers(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>();
     shell.model.stop();
+    shell.faces_model.stop();
     shell.index.stop();
     shell.search.stop();
 }
@@ -1768,6 +1790,118 @@ fn set_mcp_claude(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> 
     settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
 }
 
+// MARK: People tab (faces.rs — docs/implementation/FACES.md)
+
+/// One verb call on the blocking pool: the faces daemon answers a click, not a keystroke (the
+/// server's per-call law, faces.rs:183-186), and a scan runs on the engine's clock.
+async fn faces_verb(shell: Arc<Shell>, op: &'static str, fields: serde_json::Map<String, Value>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || faces::verb(&shell, op, fields))
+        .await
+        .map_err(|_| format!("faces: the {op} task stopped"))?
+}
+
+fn faces_id(key: &str, value: i64) -> Result<(), String> {
+    if value > 0 {
+        Ok(())
+    } else {
+        Err(format!("faces: {key} must be a number greater than 0"))
+    }
+}
+
+fn faces_fields(pairs: &[(&str, &Value)]) -> serde_json::Map<String, Value> {
+    pairs.iter().map(|(key, value)| (key.to_string(), (*value).clone())).collect()
+}
+
+/// The People tab's status: consented + the record + the six packs' presence + the engine's counts
+/// (zeroes before consent — the app answers those itself, no daemon behind the wall).
+#[tauri::command]
+async fn faces_status(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    let shell = shell.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || faces::status(&shell))
+        .await
+        .map_err(|_| "faces: the status task stopped".to_string())?
+}
+
+/// The acceptance (POST consent) and the opt-out (DELETE): the record names the tier the person
+/// accepted; withdrawing closes the verbs and never deletes the face store.
+#[tauri::command]
+async fn faces_consent(shell: State<'_, Arc<Shell>>, accept: bool, emb_model: Option<String>) -> Result<Value, String> {
+    let shell = shell.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || faces::set_consent(&shell, accept, emb_model.as_deref()))
+        .await
+        .map_err(|_| "faces: the consent task stopped".to_string())?
+}
+
+/// POST scan: the consent wall, the faces writer lock (busy is "a faces scan is already running"),
+/// the roots — this app's own folders, never client-supplied — and the engine's own counts relayed.
+/// Its events (crawl/face-scan/cluster) reach the pages as the `faces` event while it runs.
+#[tauri::command]
+async fn faces_scan(app: AppHandle, shell: State<'_, Arc<Shell>>, limit: Option<i64>) -> Result<Value, String> {
+    let shell = shell.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || faces::scan(&app, &shell, limit))
+        .await
+        .map_err(|_| "faces: the scan task stopped".to_string())?
+}
+
+/// The person cards: the engine's rows with their cover faces (the page crops them with each row's
+/// box/width/height over the helper's own `/render` previews — the server's crop law, FACES.md).
+#[tauri::command]
+async fn faces_persons(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    faces_verb(shell.inner().clone(), "persons", faces_fields(&[("covers", &json!(true))])).await
+}
+
+#[tauri::command]
+async fn faces_person(shell: State<'_, Arc<Shell>>, person: i64) -> Result<Value, String> {
+    faces_id("person", person)?;
+    faces_verb(shell.inner().clone(), "person", faces_fields(&[("person", &json!(person))])).await
+}
+
+/// The review queue: faces with no confident person, each with the engine's top candidates.
+#[tauri::command]
+async fn faces_pending(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    faces_verb(shell.inner().clone(), "pending", serde_json::Map::new()).await
+}
+
+#[tauri::command]
+async fn faces_name(shell: State<'_, Arc<Shell>>, person: i64, name: String) -> Result<Value, String> {
+    faces_id("person", person)?;
+    let text = name.trim().to_string();
+    if text.is_empty() || text.chars().count() > 120 {
+        return Err("faces: the name must be a non-empty string of at most 120 characters".to_string());
+    }
+    faces_verb(shell.inner().clone(), "name", faces_fields(&[("person", &json!(person)), ("name", &json!(text))])).await
+}
+
+#[tauri::command]
+async fn faces_merge(shell: State<'_, Arc<Shell>>, into: i64, from: i64) -> Result<Value, String> {
+    faces_id("into", into)?;
+    faces_id("from", from)?;
+    faces_verb(shell.inner().clone(), "merge", faces_fields(&[("into", &json!(into)), ("from", &json!(from))])).await
+}
+
+/// Dissolving a person is NOT deleting photos: their face rows land in the review queue (the
+/// engine's own cascade — the server suite pins it).
+#[tauri::command]
+async fn faces_delete(shell: State<'_, Arc<Shell>>, person: i64) -> Result<Value, String> {
+    faces_id("person", person)?;
+    faces_verb(shell.inner().clone(), "delete", faces_fields(&[("person", &json!(person))])).await
+}
+
+#[tauri::command]
+async fn faces_confirm(shell: State<'_, Arc<Shell>>, face: i64, person: i64) -> Result<Value, String> {
+    faces_id("face", face)?;
+    faces_id("person", person)?;
+    faces_verb(shell.inner().clone(), "confirm", faces_fields(&[("face", &json!(face)), ("person", &json!(person))])).await
+}
+
+/// The six face packs, into the app's models folder: the engine's download, its events relayed as
+/// `faces-model`. Consent is not asked here — fetching pinned files is inert; every verb on them
+/// is gated by the record (faces.rs).
+#[tauri::command]
+fn faces_download(shell: State<'_, Arc<Shell>>) -> Result<(), String> {
+    shell.faces_model.run(&shell.faces_download_launch())
+}
+
 #[tauri::command]
 fn set_center_panel(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
     {
@@ -2188,6 +2322,16 @@ fn model_event(app: &AppHandle, event: Value) {
     if ready {
         measure_then_index(app);
     }
+}
+
+/// The face packs' download (`download-model --faces`): the engine's events relayed to the pages
+/// as `faces-model` — the People tab's progress line reads the engine's own bytes/total, and the
+/// packs never gate indexing (the embedding model does; the face tier is the People tab's own).
+fn faces_model_event(app: &AppHandle, event: Value) {
+    if cfg!(debug_assertions) && event["event"] != "progress" {
+        println!("faces-model: {event}");
+    }
+    let _ = app.emit("faces-model", event);
 }
 
 /// Once the model is in: this computer's speed with the model (`digup speed --model --if-needed`: once, kept beside

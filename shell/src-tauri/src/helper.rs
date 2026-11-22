@@ -29,7 +29,10 @@ pub struct Launch {
 }
 
 impl Launch {
-    fn spawn(&self) -> Result<(Child, ChildStdin, ChildStdout), String> {
+    /// Start the helper: piped stdio, stderr to its log. Public for faces.rs, which runs the
+    /// faces daemon per call (the store open is its only boot work — the SearchService's
+    /// long-lived pattern doesn't fit a per-click daemon, FACES.md).
+    pub fn spawn(&self) -> Result<(Child, ChildStdin, ChildStdout), String> {
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
@@ -83,7 +86,8 @@ pub fn end_all() {
 }
 
 /// Asks the process to stop (`farewell` on stdin, then stdin closed), and ends it if it hasn't within two seconds.
-fn stop(mut child: Child, mut stdin: ChildStdin, farewell: &str) {
+/// Public for faces.rs: the per-call faces daemon gets its `quit` here after each reply (faces.rs:231-239's law).
+pub fn stop(mut child: Child, mut stdin: ChildStdin, farewell: &str) {
     let _ = writeln!(stdin, "{farewell}").and_then(|_| stdin.flush());
     drop(stdin);
     for _ in 0..40 {
@@ -117,7 +121,8 @@ fn fatal_signal(_: &std::process::ExitStatus) -> Option<i32> {
 /// code — and the fatal signal it died by, which is what `ExitStatus::code()` does not report on Unix
 /// (a child killed by a signal has no exit code at all: issue #182's crash classification is
 /// unreachable from `code()` alone, and on Windows the SEH exit codes carry the crash class instead).
-fn reap(child: &mut Child) -> (Option<i32>, Option<i32>) {
+/// Public for faces.rs: the per-call daemon is reaped here when its stdout closes mid-call.
+pub fn reap(child: &mut Child) -> (Option<i32>, Option<i32>) {
     for _ in 0..100 {
         match child.try_wait() {
             Ok(Some(status)) => return (status.code(), fatal_signal(&status)),

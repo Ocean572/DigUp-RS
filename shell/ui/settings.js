@@ -34,6 +34,7 @@ function showTab(name) {
   for (const tab of document.querySelectorAll(".tab")) tab.hidden = tab.id !== name;
   if (name === "folders") loadSummaries();
   if (name === "code") loadCodeSummaries();
+  if (name === "people") peopleLoad();   // faces.js: the consent record, the counts, the lists
 }
 
 for (const button of document.querySelectorAll("#tabs button")) button.onclick = () => showTab(button.dataset.tab);
@@ -520,6 +521,7 @@ async function refresh() {
   renderCode();
   if (!$("folders").hidden) loadSummaries();
   if (!$("code").hidden) loadCodeSummaries();
+  if (!$("people").hidden) peopleLoad();
 }
 
 // Back from the code folders window (or anything else that changed the settings): shown as they are now.

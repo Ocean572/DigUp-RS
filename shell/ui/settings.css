@@ -77,3 +77,43 @@ select.field {
 .path-button:hover { color: var(--text); text-decoration: underline; }
 .privacy-text { font-size: 12px; color: var(--secondary); line-height: 1.5; margin: 0; }
 .problem { color: var(--danger); }
+
+/* ── People (faces.js, docs/implementation/FACES.md) ────────────────────────────────
+   The danger red the confirm rows ask for: window.css:40's value — the settings window loads
+   setup.css + settings.css only, and neither defined it, so the .confirm/.danger/.problem lines
+   on this page had no fill. Restated here; the tabs' own look is unchanged. */
+:root { --danger: #c4441c; }
+
+.people-view { display: flex; flex-direction: column; }
+.people-copy { margin-top: 0; max-width: 560px; line-height: 1.45; }
+.people-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.people-ack { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
+.people-ack input { width: 16px; height: 16px; margin: 0; accent-color: var(--moss); }
+select.people-emb { margin-top: 4px; }
+.people-facts { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.people-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--card); color: var(--secondary); }
+.people-badge.ok { color: var(--moss); border-color: color-mix(in srgb, var(--moss) 45%, var(--line)); }
+.people-badge.off { opacity: 0.55; }
+.people-download { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.people-download-state { font-size: 12px; color: var(--secondary); }
+#people-progress { margin-top: 2px; overflow-wrap: anywhere; }
+
+/* Person cards: the auto-fill grid, the crop window, the control rows (the server panel's law). */
+.people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 10px; }
+.person-card { display: grid; gap: 8px; padding: 10px; min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+.person-card .confirm { margin: 0 -10px -10px; border-radius: 0 0 10px 10px; }
+.crop { position: relative; display: block; overflow: hidden; width: 100%; aspect-ratio: 1 / 1; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; }
+.crop img { position: absolute; max-width: none; }
+.crop img.plain { position: static; width: 100%; }
+.person-name { min-width: 0; }
+.face-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; grid-column: 1 / -1; }
+
+/* The review queue: a face + the engine's candidate cosines, one row per item. */
+.people-pending { display: flex; flex-direction: column; margin-top: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+.pending-item { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 12px; border-top: 1px solid var(--line); }
+.pending-item:first-child { border-top: 0; }
+.pending-item .crop { width: 72px; }
+.pending-side { min-width: 0; }
+.pending-file { display: block; font-size: 11px; color: var(--secondary); overflow-wrap: anywhere; }
+.pending-cands { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.pending-cands button { font-size: 12px; padding: 4px 10px; }
