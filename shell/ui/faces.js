@@ -261,10 +261,14 @@ function peopleGateView() {
   if (tiers.length) {
     const select = element("select", "field people-emb");
     select.title = "The embedder tier the record names — one per face store";
+    // The pick is stored (People.embModel) and the option's `selected` follows it: the settings
+    // page re-renders the gate on focus (which is exactly when a native dropdown closes), and a
+    // hardcoded `selected` on the default would paint the pick back to w600k_mbf on every rebuild.
+    if (People.embModel && !tiers.some((m) => m.name === People.embModel)) People.embModel = null;
     for (const m of tiers) {
       const option = element("option", "", m.name);
       option.value = m.name;
-      option.selected = m.name === "w600k_mbf.onnx";
+      option.selected = m.name === (People.embModel || "w600k_mbf.onnx");
       select.append(option);
     }
     if (!People.embModel) People.embModel = select.value;

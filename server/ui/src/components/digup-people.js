@@ -167,7 +167,7 @@ class DigupPeople extends LitElement {
         ${present.length ? html`
           <select id="consent-emb" title="The embedder tier the record names — one per face.sqlite"
                   @change=${(ev) => { this.embModel = ev.target.value; }}>
-            ${present.map((m) => html`<option value=${m.name} ?selected=${m.name === "w600k_mbf.onnx"}>${m.name}</option>`)}
+            ${present.map((m) => html`<option value=${m.name} ?selected=${m.name === (this.embModel || "w600k_mbf.onnx")}>${m.name}</option>`)}
           </select>`
         : html`<p class="note warn-text">The pinned face packs are not installed —
             <code>digup download-model --faces</code> fetches them; the People tab stays

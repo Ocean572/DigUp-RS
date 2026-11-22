@@ -10,9 +10,9 @@
   <nav class="tabs" id="tabs" role="tablist">
     <button role="tab" data-tab="general">General</button>
     <button role="tab" data-tab="folders">Folders</button>
+    <button role="tab" data-tab="people">People</button>
     <button role="tab" data-tab="code">Code</button>
     <button role="tab" data-tab="storage">Storage</button>
-    <button role="tab" data-tab="people">People</button>
   </nav>
   <main class="settings">
     <section class="tab" id="general" role="tabpanel">
@@ -122,6 +122,10 @@
       </label>
     </section>
 
+    <section class="tab" id="people" role="tabpanel" hidden>
+      <div id="people-panel"></div>
+    </section>
+
     <section class="tab" id="code" role="tabpanel" hidden>
       <p class="intro">DigUp can find code by what it does. Type “code:” in the search panel and say what the code does,
         or pick Code in the window. Results open in your editor at the line.</p>
@@ -169,10 +173,6 @@
         computer. It goes online only to download its model, once, and to check for updates (General), which sends nothing
         about your files.</p>
       <p class="note"><span id="version"></span> <button class="link inline" id="licenses" hidden>Licenses</button></p>
-    </section>
-
-    <section class="tab" id="people" role="tabpanel" hidden>
-      <div id="people-panel"></div>
     </section>
 
     <p class="note problem" id="problem" hidden></p>

@@ -61,8 +61,16 @@ input.field {
 input.field:focus, select.field:focus { outline: 2px solid color-mix(in srgb, var(--moss) 50%, transparent); outline-offset: -1px; }
 select.field {
   font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--line);
-  border-radius: 7px; padding: 5px 8px; min-width: 240px;
+  border-radius: 7px; padding: 5px 26px 5px 8px; min-width: 240px;
+  /* webkitGTK paints native select widgets with the system (light) theme — white on white pages,
+     unreadable on dark ones. `appearance: none` hands the painting to CSS: the control then
+     carries --card/--text like the input.field rows around it, with a neutral chevron. The option
+     list carries the same colors: the popup inherits the page, not the GTK theme. */
+  appearance: none; -webkit-appearance: none;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="%23888" stroke-width="1.5" stroke-linecap="round"/></svg>');
+  background-repeat: no-repeat; background-position: right 9px center; background-size: 12px 12px;
 }
+select.field option { background: var(--card); color: var(--text); }
 
 .intro { font-size: 12px; color: var(--secondary); line-height: 1.5; margin: 14px 0 0; }
 .link.danger { color: var(--danger); margin-top: 14px; }
