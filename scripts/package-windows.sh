@@ -12,7 +12,10 @@ cd "$(dirname "$0")/.."
 [[ -x Vendor/ffmpeg/bin/ffmpeg.exe ]] || { echo "no Vendor/ffmpeg/bin/ffmpeg.exe: run scripts/build-ffmpeg.sh in MSYS2" >&2; exit 1; }
 TAURI_CLI=2.12.2
 
-cargo build --release -p digup-cli
+# Faces (FACES.md): the shell's People tab spawns `digup faces-service`, so the shipped helper compiles the faces
+# verbs in — the flag ships code, never weights: the face packs stay user-supplied, the consent record gates every
+# verb. A helper built without it answers faces-service with the usage text and exit 2.
+cargo build --release -p digup-cli --features digup-cli/faces
 
 # What the installer puts beside DigUp.exe, in helper\ ("DigUp.exe" and "digup.exe" can't share a folder): the helper
 # finds the DLLs, llama.cpp's backends and ffmpeg in its own folder. The C++ runtime goes with them, so nothing needs

@@ -16,7 +16,10 @@ scripts/build-ffmpeg.sh
 # The helper: the Rust engine, built from this workspace. The payload scripts assembles the same binary with the
 # same libraries (scripts/rust/package-linux.sh); the shell-side staging below keeps the file set the Swift-era
 # package carried, so the shell's helper layout (resources, $ORIGIN) is unchanged.
-cargo build --release -p digup-cli
+# Faces (FACES.md): the shell's People tab spawns `digup faces-service`, so the shipped helper compiles the faces
+# verbs in — the flag ships code, never weights: the face packs stay user-supplied, the consent record gates every
+# verb. A helper built without it answers faces-service with the usage text and exit 2.
+cargo build --release -p digup-cli --features digup-cli/faces
 
 # What the packages carry beside the shell (shell/src-tauri/helper): the helper finds llama.cpp's backends and ffmpeg
 # in its own folder, and each library finds the others there ($ORIGIN, not the build's folders).
