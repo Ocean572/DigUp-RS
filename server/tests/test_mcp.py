@@ -217,16 +217,17 @@ def test_the_people_tool_relays_the_consent_wall_exactly_as_the_rest_gate(mcp_sc
     # (the bearer gate's 403 body carries `status` — the estimate/index pin above
     # proves that shape; the faces wall's body does not invent one).
     assert result["structuredContent"] == direct.json(), (result, direct.json())
-    # A read key asking the scan lands on the REST admin gate, whose answer relays
-    # field-for-field — pinned by equality with the same REST POST, because the
-    # gate's body shape is the gate's own (the faces guard is not the estimate
-    # guard: its 403 body carries `detail`, the estimate/index body carries
-    # `status` — pin what the gate answers, not a guess).
+    # A read key asking the scan lands on the FACES wall, whose answer relays
+    # field-for-field — pinned by equality with the same REST POST (the same gate
+    # the browser hits). Measured 2026-11-22, this box: the consent guard fires
+    # BEFORE the bearer admin check — a read key on an unconsented deployment
+    # answers the consent wall's 400 sentence, not the bearer's 403. The 403
+    # SCOPE body is the bearer gate's own shape, pinned above on estimate/index.
     refused = call(mcp_scoped, READ, "people", {"action": "scan"})
     assert refused["isError"] is True
     rest_scan = mcp_scoped.post("/api/v1/faces/scan", json={},
                                 headers={"Authorization": f"Bearer {READ}"})
-    assert rest_scan.status_code == 403, rest_scan.text
+    assert rest_scan.status_code == 400, rest_scan.text
     assert refused["structuredContent"] == rest_scan.json(), (refused, rest_scan.json())
     # An unknown action is the tool's own 422-shape refusal, not a wall.
     bad = call(mcp_scoped, READ, "people", {"action": "reboot"})
