@@ -21,6 +21,11 @@ pub mod models;
 pub mod prompts;
 pub mod worker;
 
+// Faces (FACES.md): SCRFD + ArcFace-style embedding on tract; the `faces` cargo
+// feature pulls in tract-onnx. Default payload builds never enable it.
+#[cfg(feature = "faces")]
+pub mod face;
+
 pub use models::{LlamaModels, ModelFile, ModelFiles};
 pub use prompts::{code_query, document, query};
 pub use worker::{Embedder, Embedding, WorkerInfo};

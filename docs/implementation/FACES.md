@@ -149,3 +149,40 @@ Law: the engine ships the pinned model's numbers (byte-deterministic across
 platforms); the divergence from the Python cv2 wheel is recorded as measured
 facts, not hidden. The pipeline-level gate is embedding agreement vs the
 insightface reference (§Phase 0 #4).
+
+### Phase 0 #2/#4 — pipeline agreement + cost (measured 2026-11-22, this box,
+ai-ubuntu-computer: Ryzen 9 7950X, `CARGO_BUILD_JOBS=2` build, CPU tract, `faces` feature)
+
+Fixtures: 34 public Wikimedia photos (`/tmp/opencode/face-fixtures`, manifest with
+source URLs + licenses), 172 reference faces (insightface `scrfd_10g_bnkps` +
+`w600k_mbf` on onnxruntime CPU, `OPENCV_IPP=disabled`). Harnesses:
+`crates/runtime/examples/face_spike.rs` (pipeline), `face_embed_crops.rs`
+(isolation probe), reference `/tmp/opencode/ref_harness.py`.
+
+Gate line (min cosine on matched faces, bar ≥ 0.999): **model numerics
+`w600k_mbf` = 1.00000000 min/median over all 171 matched faces** — tract f32
+reproduces onnxruntime f32 **bit-exactly** on byte-identical 112-crops.
+
+End-to-end facts (Rust pipeline vs reference on the same photos) — the residual
+is crop geometry through the letterbox→SCRFD→warp cascade, not the model:
+
+- detection: 171/172 faces matched (1 reference face under threshold in Rust),
+  **min IoU 0.994267**, max kps L1 Δ **0.6526 px** (over the 5 points);
+- embeddings: min cos **0.99472308**, median **0.99970748**,
+  frac ≥ 0.999 = 0.912, frac ≥ 0.9999 = 0.164;
+- crop pixels (Rust vs reference, matched faces): 21.7 % of pixels differ on
+  average, max Δ 79, worst-face frac 0.66 — sub-pixel warp shift from the
+  0.16-px/coordinate kps delta, amplified by the 112-px template scale;
+- the swapRB fact: the model input is channel-0 = R
+  (`blobFromImage(BGR, swapRB=True)`); reading it backwards (B-first) costs
+  min IoU 0.843, max kps Δ 13.6 px, min cos 0.43 — recorded because the
+  pipeline must reproduce it deliberately, not inherit cv2.
+
+Costs (CPU, this box, tract `default-features=false`): decode 14 516 ms /
+34 photos (427 ms/photo), detect 149 588 ms (**4.4 s/photo** at 640×640),
+embed 133 936 ms / 171 faces (**783 ms/face**, w600k_mbf),
+per-photo total 8.77 s; **VmHWM 304 MB**. GPU row: see below (bounded attempt).
+
+Licenses of the probe models (dev-side reference only, user-supplied tier in
+shipping): `scrfd_10g_bnkps` (non-commercial research terms), `w600k_mbf`
+(AntelopeFace, research-only) — never payload (Phase 0 #1).

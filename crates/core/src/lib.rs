@@ -14,6 +14,8 @@ pub mod db;
 pub mod doc;
 pub mod estimator;
 pub mod extract;
+pub mod face_cluster;
+pub mod face_store;
 /// `pub` on purpose: `digup-services` filters code-search hits through it
 /// (`search_service.rs`'s `use digup_core::folder_selection`).
 pub mod folder_selection;
