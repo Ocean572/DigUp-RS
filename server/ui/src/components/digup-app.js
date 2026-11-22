@@ -1,6 +1,6 @@
-// digup-app — the application shell: the page tree (header, gear panel, search,
-// state panels, results grid, preview, footer, big look), the gear's open/close with
-// aria-expanded kept true to the panel's state on every path, the document-level
+// digup-app — the application shell: the page tree (header, gear panel, People panel,
+// search, state panels, results grid, preview, footer, big look), the gear's open/close
+// with aria-expanded kept true to the panel's state on every path, the document-level
 // keyboard (Esc chain, arrow navigation, the Space guard that never hijacks native
 // button/link activation — the reviewer's finding, pinned), the 15 s status poll,
 // and the ONE layout switch: `document.body.dataset.page` (idle | busy | results |
@@ -21,6 +21,7 @@ import "./digup-preview.js";
 import "./digup-big.js";
 import "./digup-footer.js";
 import "./digup-settings.js";
+import "./digup-people.js";
 
 const IDLE_NOTE = "Say what you'd see, hear, or read in a file — the meaning, not only the "
                 + "words. Results appear as you type.";
@@ -46,11 +47,12 @@ class DigupApp extends LitElement {
     .bar-top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8rem; }
     h1 { font-size: 1.3rem; margin: 0; }
     .bar-center { display: flex; align-items: baseline; justify-content: center; gap: 0.6rem; flex-wrap: wrap; }
-    #gear { flex: none; width: 2.1rem; height: 2.1rem; display: grid; place-items: center;
+    #gear, #people { flex: none; width: 2.1rem; height: 2.1rem; display: grid; place-items: center;
       border: 1px solid var(--edge); border-radius: var(--radius-pill); padding: 0;
       background: var(--field); color: var(--text); cursor: pointer; }
-    #gear svg { display: block; width: 15px; height: 15px; }
-    #gear:hover { border-color: var(--accent); }
+    #gear svg, #people svg { display: block; width: 15px; height: 15px; }
+    #gear:hover, #people:hover { border-color: var(--accent); }
+    .bar-actions { display: flex; align-items: center; gap: 0.5rem; }
     /* a 401 with no stored key points at the gear: a soft pulse until the panel opens */
     #gear.attention { animation: gear-pulse 1.6s ease-in-out 3; }
     @keyframes gear-pulse { 50% { box-shadow: 0 0 0 3px var(--accent); } }
@@ -134,6 +136,8 @@ class DigupApp extends LitElement {
     if (this.renderRoot) {
       const settings = this.renderRoot.querySelector("digup-settings");
       if (settings) settings.store = store;
+      const people = this.renderRoot.querySelector("digup-people");
+      if (people) people.store = store;
     }
     this.requestUpdate();
   }
@@ -199,6 +203,8 @@ class DigupApp extends LitElement {
     const settings = this.renderRoot.querySelector("digup-settings");
     if (settings) settings.store = this._store;
     if (settings && !settings.hasAttribute("hidden")) settings.theme = this._theme?.current() ?? "system";
+    const people = this.renderRoot.querySelector("digup-people");
+    if (people) people.store = this._store;
     // A store change repaints the shell's children through bindings; the host mirror
     // for the shadow panels rides with data-page.
   }
@@ -226,7 +232,18 @@ class DigupApp extends LitElement {
       <header class="bar">
         <div class="bar-top">
           <h1>DigUp</h1>
-          <button id="gear" type="button" aria-label="Settings"
+          <span class="bar-actions">
+            <button id="people" type="button" aria-label="People"
+                    aria-expanded=${String(this._peopleOpen === true)} aria-controls="people-panel"
+                    title="People — face recognition (off until you accept it)"
+                    @click=${this.#peopleClick}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle>
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+            </button>
+            <button id="gear" type="button" aria-label="Settings"
                   aria-expanded=${String(this._settingsOpen === true)} aria-controls="settings"
                   class=${this._gearAttention ? "attention" : ""}
                   title="Settings — appearance, index controls, estimate, the engine's counts"
@@ -237,6 +254,7 @@ class DigupApp extends LitElement {
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
             </svg>
           </button>
+          </span>
         </div>
         <div class="bar-center">
           ${showActivity ? html`
@@ -255,6 +273,19 @@ class DigupApp extends LitElement {
                         @digup:estimate=${() => { this._ctl?.estimate?.setToggle(true); this._ctl?.estimate?.runEstimate(); }}
                         @digup:regenerate=${() => this._ctl?.keys?.regenerate()}>
         </digup-settings>
+        <digup-people id="people-panel" ?hidden=${this._peopleOpen !== true}
+                      .store=${this._store}
+                      @digup:close=${() => this.closePeople()}
+                      @digup:consent=${(e) => this._ctl?.people?.accept(e.detail.embModel)}
+                      @digup:withdraw=${() => this._ctl?.people?.withdraw()}
+                      @digup:scan=${() => this._ctl?.people?.scanNow()}
+                      @digup:name=${(e) => this._ctl?.people?.namePerson(e.detail.person, e.detail.name)}
+                      @digup:merge=${(e) => this._ctl?.people?.merge(e.detail.into, e.detail.from)}
+                      @digup:delete=${(e) => this._ctl?.people?.deletePerson(e.detail.person)}
+                      @digup:confirm=${(e) => this._ctl?.people?.confirmFace(e.detail.face, e.detail.person)}
+                      @digup:open-person=${(e) => this._ctl?.people?.openPerson(e.detail.person)}
+                      @digup:close-person=${() => this._ctl?.people?.closePerson()}>
+        </digup-people>
       </header>
 
       <main>
@@ -355,13 +386,46 @@ class DigupApp extends LitElement {
     if (hadFocus) this.renderRoot.getElementById("gear").focus();
   }
 
+  /* ── People panel (FACES.md Phase 3): the same close discipline as the gear —
+     aria-expanded rides the hidden state, focus returns to the button. Opening
+     asks the controller for status + rows; closing invalidates an in-flight scan
+     (its late reply finds the token moved and writes nothing). ── */
+  #peopleClick = () => {
+    const open = this._peopleOpen !== true;
+    this._peopleOpen = open;
+    this.requestUpdate();
+    const people = this.renderRoot.querySelector("digup-people");
+    if (open) {
+      people.focusFirst();
+      this._ctl?.people?.open();
+    } else {
+      this._ctl?.people?.close();
+    }
+  };
+
+  closePeople() {
+    const people = this.renderRoot.querySelector("digup-people");
+    const hadFocus = people && (people.contains(document.activeElement)
+      || people.shadowRoot.contains(document.activeElement));
+    this._peopleOpen = false;
+    this.requestUpdate();
+    this._ctl?.people?.close();
+    if (hadFocus) this.renderRoot.getElementById("people").focus();
+  }
+
   #docClick = (event) => {
-    if (this._settingsOpen !== true) return;
-    // closest(), not a bare equality: the gear's svg is the click target, not the button.
     const path = event.composedPath();
-    if (path.includes(this.renderRoot.getElementById("gear"))
-        || path.includes(this.renderRoot.querySelector("digup-settings"))) return;
-    this.closeSettings();
+    if (this._settingsOpen === true) {
+      // closest(), not a bare equality: the gear's svg is the click target, not the button.
+      if (path.includes(this.renderRoot.getElementById("gear"))
+          || path.includes(this.renderRoot.querySelector("digup-settings"))) return;
+      this.closeSettings();
+    }
+    if (this._peopleOpen === true) {
+      if (path.includes(this.renderRoot.getElementById("people"))
+          || path.includes(this.renderRoot.querySelector("digup-people"))) return;
+      this.closePeople();
+    }
   };
 
   /* Keys and events (the footer says them; they work from the search field and the list). */
@@ -373,6 +437,7 @@ class DigupApp extends LitElement {
       case "Escape":
         if (this.bigOpen) { event.preventDefault(); this.bigOpen = false; }
         else if (this._settingsOpen === true) { event.preventDefault(); this.closeSettings(); }
+        else if (this._peopleOpen === true) { event.preventDefault(); this.closePeople(); }
         else if (this._s().estimate?.rows || this._s().estimate?.spinning) {
           event.preventDefault(); this._ctl?.estimate?.cancel();
         }

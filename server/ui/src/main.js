@@ -13,6 +13,7 @@ import { createSearchController } from "./app/search-controller.js";
 import { createJobController } from "./app/job-controller.js";
 import { createEstimateController } from "./app/estimate-controller.js";
 import { createKeysController } from "./app/keys-controller.js";
+import { createPeopleController } from "./app/people-controller.js";
 import { setPassageApi } from "./lib/media.js";
 import "./components/digup-app.js";
 
@@ -34,6 +35,9 @@ const store = createStore({
   roots: [],
   targets: [],
   keys: null,
+  // The People tab slice (people-controller is its single writer): consent, the scan,
+  // the person cards, the review queue — all relayed from the engine's face verbs.
+  people: null,
 });
 
 const theme = createTheme();                 // apply at boot: the theme must not flash
@@ -53,7 +57,8 @@ const keys = createKeysController({ store, api: client.api, storage: localStorag
 const jobs = createJobController({ api: client.api, store,
   refreshStatus: () => app.refreshStatus(), loadAccess: () => keys.loadAccess() });
 const estimate = createEstimateController({ api: client.api, store, storage: localStorage });
-app.controllers = { search, jobs, estimate, keys };
+const people = createPeopleController({ api: client.api, store });
+app.controllers = { search, jobs, estimate, keys, people };
 
 // Transcripts ride the api client too: the bearer header belongs to services/api.js
 // (the vanilla passage fetch had none — with a guarded deployment's key it works now).
