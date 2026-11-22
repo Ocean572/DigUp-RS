@@ -151,10 +151,16 @@ async function peopleWithdraw() {
 /// The scan: synchronous on the engine's clock (detection is seconds per photo on CPU — a big tree
 /// is minutes to hours). Files already recorded are skipped, so a scan that ends at the ceiling
 /// continues on the next press. There is no cancel: closing the tab never stops the engine.
+/// The crawl lines the engine relays are CUMULATIVE per root (crawler::crawl progress,
+/// face_service.rs) — summing them inflates quadratically (a 132k-file tree painted 300 M
+/// "checked"). Keep the latest line per root; the shown total is their sum, reset per scan.
+let crawlRoots = {};
+
 async function peopleScan() {
   if (People.scanning) return;
   People.scanning = true;
   People.scan = null;
+  crawlRoots = {};
   People.progress = { checked: 0, faces: 0, last: "", cluster: null };
   peopleRender();
   try {
@@ -204,8 +210,10 @@ async function peopleDownload() {
 window.__TAURI__.event.listen("faces", ({ payload }) => {
   if (!People.scanning || !People.progress) return;
   const event = payload.event || {};
-  if (event.event === "crawl") People.progress.checked += event.checked || 0;
-  else if (event.event === "face-scan") {
+  if (event.event === "crawl") {
+    crawlRoots[event.root] = event.checked || 0;
+    People.progress.checked = Object.values(crawlRoots).reduce((a, b) => a + b, 0);
+  } else if (event.event === "face-scan") {
     People.progress.faces += event.faces || 0;
     People.progress.last = event.path || People.progress.last;
   } else if (event.event === "cluster") People.progress.cluster = event;
