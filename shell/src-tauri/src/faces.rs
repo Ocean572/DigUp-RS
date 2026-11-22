@@ -47,10 +47,16 @@ pub const DETECTOR: &str = "scrfd_10g_bnkps.onnx";
 /// crates/server/src/main.rs:2025).
 pub const DEFAULT_EMBEDDER: &str = "w600k_mbf.onnx";
 
-/// The verb clocks the server pins (crates/server/src/main.rs faces_* endpoints + faces_scan_timeout).
+/// The verb clocks. Reads ride the server's pins (counts 60 s, the reads 120 s). The SCAN is
+/// unbounded shell-side (2026-11-22, the user's law: one press runs the whole folder): the app
+/// streams events and has no HTTP request to outlive — the 30-day wall is a watchdog, not a
+/// bound; a whole library finishes inside it. Kill-safety and the fresh-skip resume are
+/// unchanged, so the wall being far away costs nothing. The SERVER keeps its 3600 s ceiling
+/// (DIGUP_SERVER_FACE_SCAN_TIMEOUT_S): a synchronous scan rides an HTTP request, and the
+/// ceiling is a pause there, not a loss — the next press resumes.
 pub fn verb_timeout(op: &str) -> Duration {
     match op {
-        "scan" => Duration::from_secs(3600),
+        "scan" => Duration::from_secs(30 * 24 * 3600),
         "counts" => Duration::from_secs(60),
         _ => Duration::from_secs(120),
     }
@@ -227,13 +233,17 @@ pub fn consent_guard(shell: &Shell) -> Result<(PathBuf, ConsentRecord), String> 
 }
 
 /// The daemon's argv, exact (crates/cli/src/main.rs:220-264, the server's order, faces.rs:196-217):
-/// the consent file, the record's tier, the packs' folder. The knob flags ride the daemon's defaults,
-/// which equal the server's pins — naming them would re-say numbers the engine already owns.
+/// the consent file, the record's tier, the packs' folder, and the Folders-tab skips — every
+/// `settings.skipped` folder rides `--exclude` (2026-11-22), the same list the search daemons get
+/// (main.rs `folder_arguments`): the face scan must not open what the user skipped. The knob flags
+/// ride the daemon's defaults, which equal the server's pins — naming them would re-say numbers
+/// the engine already owns.
 pub fn faces_arguments(
     index: Option<&Path>,
     consent: &Path,
     record: &ConsentRecord,
     models: Option<&Path>,
+    skipped: &[String],
 ) -> Vec<String> {
     let mut args = vec!["faces-service".to_string()];
     if let Some(index) = index {
@@ -247,6 +257,9 @@ pub fn faces_arguments(
         "--emb-model".to_string(),
         record.emb_model.clone(),
     ]);
+    for folder in skipped {
+        args.extend(["--exclude".to_string(), folder.clone()]);
+    }
     if let Some(models) = models {
         args.extend(["--faces-models".to_string(), models.display().to_string()]);
     }
@@ -361,11 +374,13 @@ pub fn verb(shell: &Shell, op: &str, fields: Map<String, Value>) -> Result<Value
 /// processor), the scan below the person's own programs (background: true — nice, as indexing is).
 pub fn faces_launch(shell: &Shell, record: &ConsentRecord, op: &str) -> Result<Launch, String> {
     let consent = consent_path(shell.settings_path.parent().ok_or("faces: no config folder")?);
+    let skipped = shell.settings.lock().unwrap().skipped.clone();
     let args = faces_arguments(
         shell.options.index.as_deref(),
         &consent,
         record,
         models_folder(shell).as_deref(),
+        &skipped,
     );
     let mut launch = shell.launch(args, "faces.log");
     launch.background = op == "scan";
@@ -470,7 +485,8 @@ mod faces_port_tests {
     }
 
     /// The daemon's argv, pinned: the consent file and the record's tier are the gate's whole
-    /// contract; the packs' folder rides only when one is named.
+    /// contract; the packs' folder rides only when one is named; the Folders-tab skips ride
+    /// `--exclude`, one pair per skipped folder (2026-11-22 — the face scan must not open them).
     #[test]
     fn faces_arguments_carry_the_consent_and_the_tier() {
         let args = faces_arguments(
@@ -478,6 +494,7 @@ mod faces_port_tests {
             Path::new("/home/me/.config/DigUp/faces-consent.json"),
             &record(),
             Some(Path::new("/home/me/digup-models")),
+            &["/home/me/photos/appdata_secret".to_string()],
         );
         let joined = args.join("|");
         assert_eq!(args.first().unwrap(), "faces-service");
@@ -488,14 +505,29 @@ mod faces_port_tests {
         );
         assert!(joined.contains("--det-model|scrfd_10g_bnkps.onnx"), "{joined}");
         assert!(joined.contains("--emb-model|w600k_mbf.onnx"), "{joined}");
-        assert_eq!(&args[args.len() - 2..], ["--faces-models", "/home/me/digup-models"]);
+        assert!(
+            joined.contains("--exclude|/home/me/photos/appdata_secret"),
+            "{joined}"
+        );
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["--faces-models", "/home/me/digup-models"]
+        );
     }
 
     #[test]
     fn faces_arguments_without_an_index_or_models_folder() {
-        let args = faces_arguments(None, Path::new("/cfg/faces-consent.json"), &record(), None);
+        let args = faces_arguments(
+            None,
+            Path::new("/cfg/faces-consent.json"),
+            &record(),
+            None,
+            &[],
+        );
         assert_eq!(args.first().unwrap(), "faces-service");
-        assert!(!args.iter().any(|a| a == "--index" || a == "--faces-models"));
+        assert!(!args
+            .iter()
+            .any(|a| a == "--index" || a == "--faces-models" || a == "--exclude"));
         assert!(args.iter().any(|a| a == "--faces-consent"));
     }
 
@@ -544,7 +576,11 @@ mod faces_port_tests {
     /// The verb clocks are the server's pins (crates/server/src/config.rs:429, faces.rs endpoints).
     #[test]
     fn the_verb_clocks_match_the_servers_pins() {
-        assert_eq!(verb_timeout("scan"), Duration::from_secs(3600));
+        assert_eq!(
+            verb_timeout("scan"),
+            Duration::from_secs(30 * 24 * 3600),
+            "the shell's scan is unbounded — one press runs the whole folder (2026-11-22)"
+        );
         assert_eq!(verb_timeout("counts"), Duration::from_secs(60));
         assert_eq!(verb_timeout("persons"), Duration::from_secs(120));
     }

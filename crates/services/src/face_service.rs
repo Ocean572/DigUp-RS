@@ -48,6 +48,10 @@ pub struct FaceServiceConfig {
     /// session set per daemon — not per-op threading. 0 = auto (see `workers_for`).
     /// The daemon's own default; the shell and the server name no flag and inherit it.
     pub workers: usize,
+    /// Folders the scan's crawl must not open (the app's Folders-tab skip list,
+    /// `--exclude`, the main index's own law — the crawler applies a skip inside
+    /// chosen folders and walks a folder chosen INSIDE a skipped one whole).
+    pub excluded_folders: Vec<String>,
 }
 
 struct State {
@@ -122,6 +126,7 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             model_idle: config.model_idle,
             consent: config.consent.clone(),
             workers: config.workers,
+            excluded_folders: config.excluded_folders.clone(),
         },
         scrfd: None,
         embedder: None,
@@ -560,7 +565,13 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
         .filter(|n| *n > 0)
         .unwrap_or(i64::MAX) as usize;
     let images: Vec<&str> = digup_core::rules::IMAGE_EXTENSIONS.to_vec();
-    let report = crawler::crawl(&roots, &IndexOptions::default(), &mut |progress| {
+    // The scan's crawl honors the deployment's skip list (the app's Folders-tab
+    // skips — the main index's own exclusion law, FACES.md 2026-11-22).
+    let crawl_options = IndexOptions {
+        excluded_folders: state.config.excluded_folders.clone(),
+        ..IndexOptions::default()
+    };
+    let report = crawler::crawl(&roots, &crawl_options, &mut |progress| {
         write_out(
             serde_json::json!({"event": "crawl", "checked": progress.checked, "root": progress.root}),
         );

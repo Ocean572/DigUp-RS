@@ -364,6 +364,44 @@ fn faces_service_scan_with_named_workers_answers_the_same_fields() {
 }
 
 #[test]
+fn faces_service_scan_never_opens_excluded_folders() {
+    // The Folders-tab skip list (2026-11-22): `--exclude` folders are OFF LIMITS to the
+    // face scan's crawl — the main index's own exclusion law, including its override
+    // rule: a skip applies INSIDE a chosen root, and a folder CHOSEN whole is walked
+    // whole (FolderSelection). So the test chooses the fixtures' PARENT and excludes
+    // the faces folder inside it — the exclusion's own shape.
+    let Some(models) = face_models_dir() else {
+        eprintln!("SKIP: the pinned face models are absent (faces_service gate)");
+        return;
+    };
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/faces");
+    let parent = fixtures
+        .parent()
+        .expect("the fixtures have a parent folder");
+    let work = tempfile::tempdir().expect("a work folder");
+    let index = work.path().join("index");
+    std::fs::create_dir_all(&index).expect("the index folder");
+    let consent = consent_file(work.path());
+    let mut daemon = Daemon::start_with(
+        &index,
+        &models,
+        &consent,
+        &["--exclude", &fixtures.to_string_lossy()],
+    );
+    let reply = daemon.request("scan", json!({"roots": [parent.to_string_lossy()]}), 60);
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(
+        reply["files"], 0,
+        "the excluded faces folder yields no scanned file: {reply}"
+    );
+    assert_eq!(
+        reply["faces"], 0,
+        "nothing is decoded, so nothing is recorded: {reply}"
+    );
+    daemon.quit();
+}
+
+#[test]
 fn faces_service_refuses_the_second_embedder_pin_on_the_same_store() {
     // Store-scoped model law (FACES.md tiers): one face.sqlite, one embedder.
     // A daemon under a different --emb-model than the store's stamp refuses.

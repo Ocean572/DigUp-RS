@@ -264,6 +264,11 @@ fn main() {
                     .value("--faces-workers")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0),
+                excluded_folders: args
+                    .list("--exclude")
+                    .iter()
+                    .map(|folder| folder_url(folder).to_string_lossy().into_owned())
+                    .collect(),
             };
             std::process::exit(digup_services::face_service::face_service(config));
         }

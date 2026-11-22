@@ -444,12 +444,19 @@ impl FaceStore {
 
     // MARK: clustering
 
-    /// The pending queue, oldest first, capped.
+    /// The pending queue in the CLUSTERING's own stable order: (path, id) (2026-11-22).
+    /// Online greedy clustering is order-sensitive, and the scan's worker pool makes the
+    /// RECORDING order (the ts) a timing artifact — worker completion shuffles which
+    /// face is "oldest" run to run, and a fixture's cluster shape flipped with it
+    /// (measured: the round-trip gate's singleton count, 3 passes by luck, then a
+    /// flip under load). Keyed on file identity, the same store clusters identically
+    /// every run: faces of one file keep their detect order (ids within a record),
+    /// files sort by path. Capped as before.
     pub fn pending_faces(&self, limit: usize) -> Result<Vec<(i64, Vec<f32>)>> {
         let mut out = Vec::new();
         self.db.query(
             "SELECT f.id, f.vec FROM pending p JOIN faces f ON f.id = p.face
-             ORDER BY p.ts, f.id LIMIT ?1",
+             ORDER BY f.path, f.id LIMIT ?1",
             [Sql::Int(limit as i64)],
             |r| {
                 let id = r.int(0);

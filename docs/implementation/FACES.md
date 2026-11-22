@@ -366,3 +366,30 @@ The design the measurement picks is **parallel FILES, not per-op threading**:
 Pool speedup on this box: measured by the live daemon gate and the desktop scan, recorded in
 IMPLEMENTATION_STATUS.md with the wall numbers (the suite pins reply fields
 files/faces/skipped/fresh/assigned and the event multiset, so the pool changes timing only).
+
+### One press = the whole folder (2026-11-22, the user's law)
+
+The app's Scan press runs the **whole folder in one session**: the shell's scan clock became a
+30-day watchdog (verb_timeout, faces.rs — "a wall, not a bound"; the 3600 s kill was the
+SERVER's HTTP-request ceiling relayed where no request exists). Kill-safety and the fresh-skip
+resume are unchanged, so the far wall costs nothing. The server keeps its 3600 s
+`DIGUP_SERVER_FACE_SCAN_TIMEOUT_S` — a synchronous scan rides an HTTP request, and there the
+ceiling is a pause, not a loss (the next press resumes).
+
+**The skip list reaches faces (2026-11-22):** the app's Folders-tab skips
+(`settings.skipped`) ride the scan's argv as `--exclude`, the same pairs the search daemons get
+(`folder_arguments`, main.rs) — `FaceServiceConfig.excluded_folders` feeds the scan's crawl,
+which applies the main index's own exclusion law (a skip applies inside chosen folders; a folder
+CHOSEN inside a skipped one is walked whole, `FolderSelection`). The gate
+`faces_service_scan_never_opens_excluded_folders` pins it: the test chooses the fixtures' PARENT
+root, excludes the faces folder inside it, and a live scan answers files 0 / faces 0.
+
+**Clustering order is store identity, not time (2026-11-22, the pool's hidden finding):**
+online greedy clustering is order-sensitive, and `pending_faces` ordered by RECORDING time —
+which the worker pool turns into a timing artifact (worker completion order shuffles which face
+is "oldest"). The fixtures' cluster shape flipped with it: the round-trip gate passed three runs
+by luck, then flipped under load (the singleton count). The queue is now keyed on stable
+identity — `ORDER BY f.path, f.id`: faces inside one file keep their detect order, files sort
+by path, so the same store clusters identically every run, pool scheduling and all. The lesson
+joins the tie-order law: **anything a pool touches must be pinned on identity, never on when it
+happened to run.**

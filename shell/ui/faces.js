@@ -148,9 +148,11 @@ async function peopleWithdraw() {
   }
 }
 
-/// The scan: synchronous on the engine's clock (detection is seconds per photo on CPU — a big tree
-/// is minutes to hours). Files already recorded are skipped, so a scan that ends at the ceiling
-/// continues on the next press. There is no cancel: closing the tab never stops the engine.
+/// The scan: one press runs the WHOLE folder in one session (2026-11-22, the user's law — the
+/// shell's scan clock is a 30-day watchdog, not a bound; detection is seconds per photo on CPU,
+/// so a big tree is hours, and hours is what one session does). Files already recorded are
+/// skipped, so a closed app resumes exactly where it stopped on the next press. There is no
+/// cancel: closing the tab never stops the engine.
 /// The crawl lines the engine relays are CUMULATIVE per root (crawler::crawl progress,
 /// face_service.rs) — summing them inflates quadratically (a 132k-file tree painted 300 M
 /// "checked"). Keep the latest line per root; the shown total is their sum, reset per scan.
@@ -366,7 +368,7 @@ function peopleConsentedView() {
   progress.id = "people-progress";
   const line = element("div", "people-line");
   const scanButton = element("button", "primary", "Scan now");
-  scanButton.title = "Scan the folders for faces — files already recorded are skipped";
+  scanButton.title = "Scan the whole folder for faces — one long run; files already recorded are skipped, so the next press resumes";
   scanButton.disabled = People.scanning;
   scanButton.onclick = peopleScan;
   const withdraw = element("button", "", "Withdraw consent");
@@ -396,7 +398,7 @@ function peopleConsentedView() {
     for (const person of People.persons) grid.append(peopleCard(person));
     view.append(grid);
   } else {
-    view.append(element("p", "note", "Nothing found yet — press Scan now. A scan runs on the engine's clock; files already recorded are skipped."));
+    view.append(element("p", "note", "Nothing found yet — press Scan now. One press runs the whole folder; files already recorded are skipped."));
   }
 
   if (People.pending.length) {
