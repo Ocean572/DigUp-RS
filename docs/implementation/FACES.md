@@ -12,9 +12,12 @@ This specification establishes the blueprint for implementing a native, privacy-
 ## Phase 0: Research & Licensing Gates (Pre-Code)
 Before code execution begins, the following gates must be cleared:
 
-1. **Licensing Audit & Dataset Lineage:** 
-   * Audit embedder training sets (e.g., YuNet, MobileFaceNet/PaddleFace variants) for dataset provenance (WIDER FACE, CASIA, etc.).
-   * *User-Supplied Fallback:* If research licenses prevent commercial/redistribution packaging, embedders are **user-supplied** via `download-model` behind an explicit license-acceptance gate. Models never ship in repository payloads.
+1. **Licensing Audit & Dataset Lineage:** — **GATE RUN 2026-11-21** (independent audit; exact quotes below are from dataset pages/model cards).
+   * Dataset license quotes: WIDER FACE (HF card): "Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International (CC BY-NC-ND 4.0)"; CASIA-WebFace agreement: "Researcher shall use the Database only for non-commercial research and educational purposes"; Glint360K: "The Glint360K dataset (and the models trained with this dataset) are available for non-commercial research purposes only"; WebFace260M: signed-agreement, non-commercial academic; MS-Celeb-1M: research-only, **withdrawn 2019** (MS1MV2/V3 derivatives have no obtainable license text).
+   * **Detectors:** YuNet — weights stated MIT per zoo model dir (badge links Apache-2.0 zoo LICENSE; mismatch recorded), lineage WIDER FACE NC-ND → **ship, disclosed**. MediaPipe BlazeFace — Apache-2.0 weights, Google-internal self-collected training → **fully clean**. UltraFace — MIT weights in-repo, lineage WIDER FACE NC-ND → ship, disclosed. SCRFD/det_10g — "ALL models are available for non-commercial research purposes only" → **REJECT for payload; user-supplied only** (dev-side reference baseline allowed). Paddle detectors — Apache-2.0 repo, no per-weight terms → ship only with disclosure.
+   * **Embedders:** **No 512-d embedder was found whose published license names a permissive training dataset.** MediaPipe face_embedding (192-d, MobileFaceNet, Apache-2.0, internal data) = the only fully clean pair, weaker accuracy, TFLite (tract tflite frontend is experimental — reference role, not ship target). AuraFace-v1 `glintr100` (512-d, HF apache-2.0 + Apache-2.0 LICENSE.md, card claims "trained on commercially and publicly available data sources", datasets **not enumerated**) = best 512-d candidate **pending written provenance from the publisher**. AdaFace (MIT repo incl. weights, WebFace600K/260M research lineage), ONNX-Zoo arcfaceresnet100 (Apache-2.0, MS1MV2 withdrawn/unverifiable), SFace + Paddle face exports (Apache repo badges; CASIA-WebFace NC / MS1Mv3 research; PaddleClas repo-level statement puts models/datasets under CC BY-NC 4.0 — recorded as a license conflict, conservative reading = CC BY-NC) → disclosed tier at best. EdgeFace — GitHub BSD-3 vs HF CC BY-NC-SA 4.0 **conflict** → REJECT pending author clarification. w600k_r50 / buffalo_l / antelopev2 / Keras facenet512 → **REJECT payload; user-supplied only**.
+   * *User-Supplied Fallback (CONFIRMED AS THE PLAN, not Plan B):* embedders are **user-supplied** via `download-model` behind an explicit license-acceptance gate. No embedder ships in repository payloads. Default tier = YuNet detector (shipped, WIDER FACE lineage disclosed in the acceptance-gate text) + user-supplied embedder; the MediaPipe pair is the fully-clean low-accuracy fallback tier; AuraFace 512-d joins the tier list only if provenance arrives in writing.
+   * Open items recorded: AuraFace provenance unenumerated; EdgeFace license conflict; Paddle per-model weight terms; MS1MV2-withdrawal provenance gap for all zoo ArcFace exports; MediaPipe internal training collection unverifiable; no public legal position on whether WIDER FACE NC-ND reaches trained weights (every major detector inherits this).
 2. **Inference Engine Spike (`ort` vs `tract`):**
    * Spike pure-Rust `tract` vs `ort`. 
    * *Acceptance Metrics:* Cosine similarity agreement $\ge 0.999$ (with 2-ulp float tolerance) against a dev-only Python reference harness using public Wikimedia fixtures (~30 identities / ~50 images; fixture set must include multi-year same-person pairs and side profiles — the purity curve pins on them).
@@ -81,3 +84,32 @@ The user goal is a functional **People tab** built on thin-client relays.
 * **Still Images Only:** v1.0 indexes still images only. Video-frame face extraction is out of scope.
 * **Opt-In Default:** Face indexing defaults to OFF per target. Local-only data; never included in logs or audit pushes.
 * **Resource Management:** Rides the existing watchdog (`crates/services/src/watchdog.rs`). Inference models load once for a batch job and auto-unload after 60s of idle time (incorporating batch stickiness).
+
+---
+
+## Competitive Baseline Gate (v1.1 amendment — the accuracy bar, 2026-11-21)
+
+The bar is explicit: **outperform Immich and PhotoPrism on faces, with a stricter license posture than either.** Competitor facts (verified from their docs/configs):
+
+* **Immich:** default recognition model `buffalo_l` = SCRFD-10G detector + `w600k_r50` ArcFace-R50 embedder — NC-research weights shipped in official images; clustering = distance-based with operator knobs (`maxDistance 0.5`, `minFaces 3`, `minScore 0.7`); documented complaint profile: over-splitting / person-spam, quality variance.
+* **PhotoPrism (current develop):** bundled default `sface` (SFace, 128-d, CASIA lineage); legacy `facenet` (512-d TF); `auraface` is THEIR optional download (their docs: same quality band as sface at ~8× size); `arcface_r50` registered. Their own measured operating points (TAR @ FAR): `facenet` 0.8318 @ 1.43 %; `auraface` 0.9308 @ 0.14 %; `arcface_r50` 0.9943 @ 0.14 %; detection runs on the **720-px thumbnail**; documented failure profile: over-merging (family relatives merged into one cluster), DBSCAN core tuning.
+
+**Tier claims (published benchmark numbers — the measured-claim bar below is what ships):**
+
+| Tier | Embedder | LFW / CFP-FP / AgeDB / CPLFW | Verdict vs competitors |
+|---|---|---|---|
+| Clean-shipped (fully permissive) | MediaPipe face_embedding 192-d (Apache-2.0, internal training) | MobileFaceNet-class | ≥ PhotoPrism default band; **< Immich default** |
+| Clean-shipped candidate (provenance pending) | AuraFace `glintr100` 512-d (Apache-2.0) | 99.65 / 95.19 / 96.10 / 90.93 | > PhotoPrism `facenet`; ≈ PhotoPrism `sface` band; **< Immich default** (their own table: 0.9308 vs 0.9943 TAR) |
+| Accuracy tier (user-supplied / disclosed-ship decision) | **AdaFace IR-101 512-d (MIT weights incl. repo license; WebFace600K/12M lineage)** | 99.78–99.83 / **99.2** / 98.2–98.4 / **95.0**; IJB-C 97.66 TAR@FAR 0.1 %; TinyFace/IJB-S SOTA | **> Immich default** (`w600k_r50`: 99.80 / 97.82 / 97.82 / 92.23) on cross-pose, cross-pose-lighting, low quality; ≈ on age/ frontal. > everything in PhotoPrism's registry. Quality-adaptive margin = the aging/lighting/small-face axis the People tab needs |
+| Detector | default YuNet (shipped, disclosed); user tier SCRFD-10G (NC) | SCRFD > YuNet on tiny faces | Immich's detection = SCRFD-10G; parity needs the user-supplied tier |
+
+**The gate is a measurement, not a claim.** Dev-only harness scores competitor-class models (`w600k_r50`, `scrfd_10g`, `sface`, `facenet`, `auraface`, AdaFace IR-50/IR-101, MediaPipe pair) on the SAME pinned fixtures — per-person recall, cluster purity + purification, multi-year age-gap pairs, low-quality crops, tiny faces in group photos — at matched budgets (ms/photo, ms/face, RSS). **No "outperforms X" line ships in our docs from vendor numbers; only from fixture rows recorded in this file.**
+
+Design edges to measure (they are where "outperform" is most defensible — their documented failures are clustering, not embedding):
+* Online quality-scored centroid clustering + collision-distance guard + match margin + the **active-learning review queue** vs their pure auto-clustering (their issue threads are the target: merged-grandpas, split-personas).
+* Detection at full decoded pixels vs PhotoPrism's 720-px thumbnail → small-face recall, measured.
+* CPU pure-Rust (tract) vs Python-onnxruntime (Immich) / Go+TF/ONNX (PhotoPrism) — per-face ms at parity accuracy, measured.
+* License posture: **we ship zero NC-licensed weights; both competitors ship NC-lineage weights in official images.** This advantage is real only if the shipped tier stays clean (MediaPipe/AuraFace) and NC-lineage models (AdaFace-with-disclosure, SCRFD, w600k, buffalo) ride the user-supplied acceptance gate.
+
+Open item: Immich's 2025+ "new face backend / more models" direction (minivision/miniface family) — license + lineage not yet audited; re-survey before Phase 2 ships claims.
+
