@@ -252,6 +252,116 @@ curl -s -D - -o /dev/null -H 'Range: bytes=0-1023' \
 # → 206, content-range: bytes 0-1023/124177, accept-ranges: bytes
 ```
 
+## Faces — the People tab (consent-gated)
+
+Face recognition is **off by default**: no face model ships in any payload, and no endpoint
+answers until the deployment records an affirmative acceptance. The record lives in the
+server's config folder — `faces-consent.json` for the main media index,
+`faces-consent-<name>.json` for a named target, mode `0600` — and every faces endpoint
+(including the reads) answers `400 {"detail": "face recognition is not consented for target
+'media' …"}` until it exists. The engine enforces the same file daemon-side
+(`faces-service --faces-consent`): what the UI gates, the engine gates. All face facts come
+from `digup faces-service` (`scan/cluster/persons/name/merge/delete/confirm/pending/similar`
+over JSON-lines, FACES.md); the server relays them and invents nothing. Face rows carry the
+engine's `box`/`kps` and a minted `media_id` for their photo — the frontend crops the face out
+of the existing [`/preview`](#get-apiv1mediamedia_idpreviewpixels256) with those numbers;
+there are no crop verbs and no crop files.
+
+### `GET /api/v1/faces/status`
+
+```sh
+curl -s http://127.0.0.1:8787/api/v1/faces/status
+# → 200 {"ok": true, "consented": false, "record": null,
+#        "models": [{"name": "scrfd_10g_bnkps.onnx", "present": true}, …],
+#        "counts": {"faces": 0, "assigned": 0, "persons": 0, "named": 0, "pending": 0}}
+```
+
+`counts` are the engine's (`0` before any scan); `models` names the pinned user-supplied packs
+and whether each is in the models folder — the People tab offers the model download only for
+a consented target and pins it by sha256.
+
+### `GET/POST/DELETE /api/v1/faces/consent`
+
+```sh
+curl -s http://127.0.0.1:8787/api/v1/faces/consent
+# → 200 {"ok": true, "consented": false, "record": null}
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/consent \
+  -H 'content-type: application/json' -d '{"accept": true}'
+# → 200 {"ok": true, "consented": true,
+#        "record": {"consented": true, "accepted_at": 1730000000.5,
+#                   "det_model": "scrfd_10g_bnkps.onnx", "emb_model": "w600k_mbf.onnx"}}
+curl -s -X DELETE http://127.0.0.1:8787/api/v1/faces/consent
+# → 200 {"ok": true, "consented": false, "removed": true}
+```
+
+`POST` is the affirmative act (admin operation): `accept` must be `true`, and the tier names
+must be pinned packs (`emb_model` one of `w600k_mbf.onnx`, `w600k_r50.onnx`,
+`adaface_ir_18.onnx`, `adaface_ir_50.onnx`, `adaface_ir_101.onnx`; `det_model`
+`scrfd_10g_bnkps.onnx`) — anything else answers `422`. The record is written `0600`, atomically.
+`DELETE` withdraws consent (endpoints go back to `400`); the face store is **not** deleted —
+mass deletion is the user's act, never a side effect.
+
+### `POST /api/v1/faces/scan` (admin operation)
+
+```sh
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/scan -H 'content-type: application/json' -d '{}'
+# → 200 {"ok": true, "scan": {"files": 5, "faces": 5, "skipped": 0, "assigned": 5}}
+# → 409 {"detail": "…: a faces scan is already running"} while one is in flight
+```
+
+The scan crawls the **target's own roots** (the deployment's config — no path is accepted from
+a client, § [Security](#security)), decodes each image not yet recorded at its exact
+`(path, size, mtime)` (piggyback freshness), runs detection + embedding, and relays the
+engine's counts. Synchronous on the engine's clock: detection is ~4.4 s/photo on CPU, so a big
+tree is hours — the ceiling is `DIGUP_SERVER_FACE_SCAN_TIMEOUT_S` (3600). One scan at a time
+(`flock` on `.digup-server.faces.writer.lock` beside the index, the index writer's law).
+Clustering runs at the scan's tail; the knobs are `DIGUP_SERVER_FACE_MERGE` (0.5) and
+`DIGUP_SERVER_FACE_COLLISION` (0.10).
+
+### `GET /api/v1/faces/persons`
+
+```sh
+curl -s http://127.0.0.1:8787/api/v1/faces/persons
+# → 200 {"ok": true, "persons": [{"id": 3, "name": "Angela", "count": 2,
+#         "cover": 0.9999, "cover_face": {"id": 5, "path": "/…/photo.jpg",
+#         "box": [736.5, 250.9, 1256.3, 904.6], "kps": [[…], …], "score": 0.884,
+#         "media_id": "07cbe86e5775"}}, …]}
+```
+
+Person cards: `name` is `null` for an unnamed cluster (the UI shows "Person NN");
+`cover_face` is the person's best-scoring face — crop it out of its `preview` with the
+row's `box`/`kps`.
+
+### `GET /api/v1/faces/person/{id}`
+
+The person's face rows (same row shape as `cover_face`, each with its minted `media_id`).
+
+### `POST /api/v1/faces/name` · `merge` · `delete` · `confirm` (admin operations)
+
+```sh
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/name   -d '{"person": 3, "name": "Angela"}' -H 'content-type: application/json'
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/merge  -d '{"into": 3, "from": 4}' -H 'content-type: application/json'
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/delete -d '{"person": 1}' -H 'content-type: application/json'
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/confirm -d '{"face": 5, "person": 3}' -H 'content-type: application/json'
+# → 200 {"ok": true} on each
+```
+
+Naming is a label. `merge` joins two clusters. `delete` dissolves a person — its faces go to
+the pending queue (deleting a person is **not** deleting photos; the faces re-cluster).
+`confirm` is the human answer to a collision: a queued face joins the named person and is
+pinned there. `name` is 1–120 characters; ids are integers > 0; bad bodies answer `422`.
+
+### `GET /api/v1/faces/pending` and `GET /api/v1/faces/similar?face=N&limit=M`
+
+`pending` is the collision guard's review queue: each queued face with the engine's top
+candidate persons and their cosines (the evidence, not an invented score). `similar` ranks
+the store's faces against one face's vector (brute-force cosine, the engine's own numbers),
+`limit` 1–200 default 20 — the People tab's "more like this".
+
+Faces ride the bearer gate like every other endpoint: the reads answer a `read` key, the
+consent writes, `scan`, `name`, `merge`, `delete` and `confirm` demand the admin key
+(`ADMIN_ROUTES`); an `app:<name>` token works only on its own target.
+
 ## Limits and pagination
 
 `limit` is the whole pagination story: 1–100 per search, default 40 (the engine's own default,

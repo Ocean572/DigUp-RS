@@ -72,6 +72,26 @@ fn post_op(summary: &str, id: &str, body: Value) -> Value {
 
 /// Path → operations, pinned to `main.rs`'s router. Keep in step.
 fn paths() -> Value {
+    // The one entry with query parameters is built outside the big table's
+    // `json!` (its nesting pushes the macro past the default recursion limit).
+    let faces_similar = json!({
+        "tags": ["api"],
+        "summary": "Faces similar to one face (the engine's brute-force cosine rank)",
+        "operationId": "faces_similar",
+        "parameters": [
+            target_param(),
+            { "name": "face", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 1 } },
+            { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20 } }
+        ],
+        "responses": {
+            "200": { "description": "Faces similar to one face (the engine's brute-force cosine rank)" },
+            "401": { "description": "bearer token required (www-authenticate: Bearer)" },
+            "403": { "description": "the token's scope does not cover this" },
+            "422": { "description": "validation: a list of {type, loc, msg} objects" },
+            "502": { "description": "the engine CLI failed" },
+            "503": { "description": "the engine's refusal, relayed verbatim" }
+        }
+    });
     json!({
         "/api/v1/health": {
             "get": get_op("Engine identity + live index counts (503 while the searcher respawns; unguarded)", "health")
@@ -225,6 +245,101 @@ fn paths() -> Value {
                 "tokens_rotate",
                 json!({ "type": "object", "properties": {} })
             )
+        },
+        "/api/v1/faces/status": {
+            "get": get_op("Faces state: consent, tier pins present, the engine's counts", "faces_status")
+        },
+        "/api/v1/faces/consent": {
+            "get": get_op("The target's consent record (consented + the accepted tier)", "faces_consent_get"),
+            "post": post_op(
+                "The affirmative license acceptance (admin; writes the 0600 record)",
+                "faces_consent_post",
+                json!({
+                    "type": "object",
+                    "required": ["accept"],
+                    "properties": {
+                        "accept": { "type": "boolean", "enum": [true] },
+                        "det_model": { "type": "string", "enum": ["scrfd_10g_bnkps.onnx"] },
+                        "emb_model": { "type": "string", "enum": ["w600k_mbf.onnx", "w600k_r50.onnx", "adaface_ir_18.onnx", "adaface_ir_50.onnx", "adaface_ir_101.onnx"] }
+                    }
+                })
+            ),
+            "delete": get_op("Withdraw consent (admin; removes the record, the store stays)", "faces_consent_delete")
+        },
+        "/api/v1/faces/scan": {
+            "post": post_op(
+                "The faces scan on the target's own roots (admin; 409 when a scan runs; counts relayed)",
+                "faces_scan",
+                json!({
+                    "type": "object",
+                    "properties": { "limit": { "type": "integer", "minimum": 1 } }
+                })
+            )
+        },
+        "/api/v1/faces/persons": {
+            "get": get_op("The person cards: id, name, count, cover face (with its media handle)", "faces_persons")
+        },
+        "/api/v1/faces/person/{id}": {
+            "get": get_op("One person's faces: engine rows with box/kps/score + preview media handles", "faces_person_show")
+        },
+        "/api/v1/faces/name": {
+            "post": post_op(
+                "Name a person (admin)",
+                "faces_name",
+                json!({
+                    "type": "object",
+                    "required": ["person", "name"],
+                    "properties": {
+                        "person": { "type": "integer", "minimum": 1 },
+                        "name": { "type": "string", "minLength": 1, "maxLength": 120 }
+                    }
+                })
+            )
+        },
+        "/api/v1/faces/merge": {
+            "post": post_op(
+                "Merge two persons (admin)",
+                "faces_merge",
+                json!({
+                    "type": "object",
+                    "required": ["into", "from"],
+                    "properties": {
+                        "into": { "type": "integer", "minimum": 1 },
+                        "from": { "type": "integer", "minimum": 1 }
+                    }
+                })
+            )
+        },
+        "/api/v1/faces/delete": {
+            "post": post_op(
+                "Delete a person — its faces queue for re-clustering (admin)",
+                "faces_delete",
+                json!({
+                    "type": "object",
+                    "required": ["person"],
+                    "properties": { "person": { "type": "integer", "minimum": 1 } }
+                })
+            )
+        },
+        "/api/v1/faces/confirm": {
+            "post": post_op(
+                "Confirm a queued face into a person (admin; the human answer to a collision)",
+                "faces_confirm",
+                json!({
+                    "type": "object",
+                    "required": ["face", "person"],
+                    "properties": {
+                        "face": { "type": "integer", "minimum": 1 },
+                        "person": { "type": "integer", "minimum": 1 }
+                    }
+                })
+            )
+        },
+        "/api/v1/faces/pending": {
+            "get": get_op("The collision guard's review queue with the engine's top candidates", "faces_pending")
+        },
+        "/api/v1/faces/similar": {
+            "get": faces_similar
         },
         "/api/v1/openapi.json": {
             "get": get_op("This document (unguarded by design)", "openapi")

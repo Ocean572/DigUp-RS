@@ -424,8 +424,20 @@ pub fn origin_host(origin: &str) -> String {
 pub const OPEN_PATHS: [&str; 3] = ["/api/v1/health", "/api/v1/docs", "/api/v1/openapi.json"];
 
 /// `ADMIN_ROUTES`: POST endpoints that change the index or crawl the whole tree.
-pub const ADMIN_ROUTES: [(&str, &str); 2] =
-    [("POST", "/api/v1/index"), ("POST", "/api/v1/estimate")];
+/// Faces (FACES.md Phase 3): consent writes, scans (they crawl the tree) and the
+/// person mutations are the deployment's mutating acts; the faces READS ride the
+/// ordinary bearer gate.
+pub const ADMIN_ROUTES: [(&str, &str); 9] = [
+    ("POST", "/api/v1/index"),
+    ("POST", "/api/v1/estimate"),
+    ("POST", "/api/v1/faces/scan"),
+    ("POST", "/api/v1/faces/consent"),
+    ("DELETE", "/api/v1/faces/consent"),
+    ("POST", "/api/v1/faces/name"),
+    ("POST", "/api/v1/faces/merge"),
+    ("POST", "/api/v1/faces/delete"),
+    ("POST", "/api/v1/faces/confirm"),
+];
 
 /// The live Auth: rotation swaps the value in place — the gate and the
 /// endpoints read the SAME live object (Python's `current = {"auth": ...}`).

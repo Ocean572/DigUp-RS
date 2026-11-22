@@ -17,6 +17,9 @@ chrono = { workspace = true }
 # The MCP peer core (search/status/estimate/index relay + JSON-RPC shapes) lives in
 # the services crate, shared verbatim with the stdio front-end.
 digup-services = { workspace = true }
+# The faces surface reads the weight pins (FaceModelFiles) — the same pins the
+# engine's download verb checks (crates/runtime/src/models.rs).
+digup-runtime = { workspace = true }
 httpdate = { workspace = true }
 libc = { workspace = true }
 futures-util = { workspace = true }

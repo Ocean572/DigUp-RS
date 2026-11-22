@@ -291,15 +291,33 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             Ok(serde_json::json!({"ok": true, "assigned": assigned}))
         }
         "persons" => {
+            // `covers: true` (the People tab's cards): each person row gains
+            // `cover_face` — its best-scoring face row (box/kps/path), so the
+            // thin client can mint one preview handle per card from the same
+            // answer. Without the flag the reply is the plain list.
+            let covers = request
+                .get("covers")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let persons: Vec<Value> = state
                 .store
                 .list_persons()
                 .map_err(|e| e.to_string())?
                 .iter()
                 .map(|p| {
-                    serde_json::json!({"id": p.id, "name": p.name, "count": p.count, "cover": p.cover})
+                    let mut row = serde_json::json!({"id": p.id, "name": p.name, "count": p.count, "cover": p.cover});
+                    if covers {
+                        let face = state
+                            .store
+                            .person_faces(p.id)
+                            .map_err(|e| e.to_string())?
+                            .into_iter()
+                            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+                        row["cover_face"] = face.map(|f| row_json(&f)).unwrap_or(Value::Null);
+                    }
+                    Ok(row)
                 })
-                .collect();
+                .collect::<Result<Vec<Value>, String>>()?;
             Ok(serde_json::json!({"ok": true, "persons": persons}))
         }
         "person" => {

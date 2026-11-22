@@ -40,6 +40,7 @@
 
 mod cli;
 mod config;
+mod faces;
 mod jobs;
 mod mcp;
 mod media;
@@ -1858,6 +1859,727 @@ async fn job_show(
     }
 }
 
+// ── faces surface (FACES.md Phase 3): the People-tab endpoints ─────────────────
+//
+// Thin-client law to the letter: every face fact comes from `digup
+// faces-service` (JSON-lines, the same seam as search/index); the server
+// relays counts/persons/faces verbatim, gates consent (the wall below),
+// serializes scans on the faces writer lock, and mints the preview handles
+// the People tab crops faces out of (box/kps ride the rows — the engine has
+// no crop verbs and the server invents none).
+
+impl From<faces::FacesBusy> for ApiError {
+    fn from(busy: faces::FacesBusy) -> Self {
+        ApiError::Busy(busy.to_string())
+    }
+}
+
+fn faces_call_error(error: faces::FacesCall) -> ApiError {
+    match error {
+        faces::FacesCall::Refused(why) => ApiError::Refused(why),
+        faces::FacesCall::Engine(why) => ApiError::Engine(why),
+        faces::FacesCall::Timeout(why) => ApiError::Timeout(why),
+        faces::FacesCall::Cli(why) => ApiError::Cli(why),
+    }
+}
+
+/// The consent wall (FACES.md Phase 1 §5): no accepted record for the
+/// request's target → 400, before any daemon spawns. The record is the
+/// deployment's durable fact (`<config>/faces-consent[-name].json`, 0600);
+/// the daemon enforces the same file engine-side.
+fn faces_consent_guard(
+    app: &App,
+    target: &str,
+) -> Result<(PathBuf, faces::ConsentRecord), ApiError> {
+    let consent = faces::consent_path(&app.cfg.config, target);
+    match faces::read_consent(&consent) {
+        Some(record) => Ok((consent, faces::ConsentRecord::of(&record))),
+        None => Err(ApiError::http(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "face recognition is not consented for target {} — \
+                 the People tab opens it with POST /api/v1/faces/consent",
+                targets::py_repr(target)
+            ),
+        )),
+    }
+}
+
+/// The People tab's thumbnails: each face row mints the existing `/preview`
+/// handle for its photo (the frontend crops with the row's box/kps — zero
+/// crop verbs, the same HitCache search hits ride). The row keeps its `path`
+/// next to the minted `media_id`, in the search hits' own shape.
+fn mint_face_rows(app: &App, rows: &mut [Value]) -> Result<(), ApiError> {
+    for row in rows.iter_mut() {
+        let Some(row_map) = row.as_object_mut() else {
+            return Err(ApiError::Internal);
+        };
+        let Some(path) = row_map
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return Err(ApiError::Internal); // face rows carry the store's path
+        };
+        let entry = HitEntry {
+            path,
+            kind: "image".to_string(),
+            segment_id: 0,
+            loc: None,
+            code: false,
+        };
+        let media_id = app.hit_cache.put(entry).map_err(|_| ApiError::Internal)?;
+        row_map.insert("media_id".into(), json!(media_id));
+    }
+    Ok(())
+}
+
+/// Drop the protocol `id` and the daemon's own `ok` from a relayed engine
+/// answer; the endpoint adds its `{"ok": true}` envelope (the `index`
+/// endpoint's own shape — the engine's `ok` is the daemon's, not the API's).
+fn engine_answer(mut row: Value) -> Value {
+    if let Some(map) = row.as_object_mut() {
+        map.remove("id");
+        map.remove("ok");
+    }
+    row
+}
+
+async fn faces_status(State(app): State<Shared>, Extension(ctx): Extension<Ctx>) -> Response {
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let consent = faces::consent_path(&app.cfg.config, &target);
+        let record = faces::read_consent(&consent);
+        let models: Vec<Value> = faces::model_presence(&app.cfg)
+            .into_iter()
+            .map(|(name, present)| json!({"name": name, "present": present}))
+            .collect();
+        let counts = match &record {
+            Some(record) => {
+                let reply = faces::faces_call(
+                    &scope.cfg,
+                    &app.cfg,
+                    &consent,
+                    &faces::ConsentRecord::of(record),
+                    "counts",
+                    Map::new(),
+                    Duration::from_secs(60),
+                )
+                .map_err(faces_call_error)?;
+                engine_answer(reply)
+            }
+            None => json!({"faces": 0, "assigned": 0, "persons": 0, "named": 0, "pending": 0}),
+        };
+        Ok(json!({
+            "ok": true,
+            "consented": record.is_some(),
+            "record": record.unwrap_or(Value::Null),
+            "models": models,
+            "counts": counts,
+        }))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn faces_consent_get(State(app): State<Shared>, Extension(ctx): Extension<Ctx>) -> Response {
+    let target = request_target(&ctx);
+    let record = faces::read_consent(&faces::consent_path(&app.cfg.config, &target));
+    Json(json!({
+        "ok": true,
+        "consented": record.is_some(),
+        "record": record.unwrap_or(Value::Null),
+    }))
+    .into_response()
+}
+
+/// POST consent — the affirmative act (FACES.md Phase 1 §5: no pre-ticked
+/// checkbox, the button is "I understand and accept"). Admin route. The
+/// record names the tier the user accepted; the model pins ride the record,
+/// so the daemon serves exactly the tier the consent names.
+async fn faces_consent_post(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut errors = Vec::new();
+    let accept = value.get("accept").and_then(Value::as_bool);
+    if accept != Some(true) {
+        errors.push(json!({
+            "type": "acceptance",
+            "loc": ["body", "accept"],
+            "msg": "accept must be true — consent is the affirmative act (DELETE /api/v1/faces/consent withdraws it)",
+            "input": value
+        }));
+    }
+    let emb = value
+        .get("emb_model")
+        .and_then(Value::as_str)
+        .unwrap_or("w600k_mbf.onnx")
+        .to_string();
+    let det = value
+        .get("det_model")
+        .and_then(Value::as_str)
+        .unwrap_or("scrfd_10g_bnkps.onnx")
+        .to_string();
+    // Only the pinned user-supplied packs (FACES.md Phase 0 #1): the server
+    // names the tier, the record stores it, the daemon loads it.
+    use digup_runtime::models::FaceModelFiles;
+    let emb_ok = FaceModelFiles::ALL
+        .iter()
+        .filter(|file| file.name != FaceModelFiles::DET.name)
+        .any(|file| file.name == emb);
+    let det_ok = FaceModelFiles::ALL
+        .iter()
+        .filter(|file| file.name == FaceModelFiles::DET.name)
+        .any(|file| file.name == det);
+    if !emb_ok {
+        errors.push(json!({
+            "type": "tier",
+            "loc": ["body", "emb_model"],
+            "msg": "the embedder must be one of the pinned user-supplied packs (see /api/v1/faces/status)",
+            "input": emb
+        }));
+    }
+    if !det_ok {
+        errors.push(json!({
+            "type": "tier",
+            "loc": ["body", "det_model"],
+            "msg": "the detector must be one of the pinned user-supplied packs (see /api/v1/faces/status)",
+            "input": det
+        }));
+    }
+    if !errors.is_empty() {
+        return detail_response(errors);
+    }
+    let target = request_target(&ctx);
+    let consent = faces::consent_path(&app.cfg.config, &target);
+    let record = json!({
+        "consented": true,
+        "accepted_at": now_epoch(),
+        "det_model": det,
+        "emb_model": emb,
+    });
+    match faces::write_consent(&consent, &record) {
+        Ok(()) => Json(json!({"ok": true, "consented": true, "record": record})).into_response(),
+        Err(why) => {
+            eprintln!("faces consent: {why}");
+            ApiError::Internal.into_response()
+        }
+    }
+}
+
+async fn faces_consent_delete(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+) -> Response {
+    let target = request_target(&ctx);
+    let consent = faces::consent_path(&app.cfg.config, &target);
+    match faces::remove_consent(&consent) {
+        // Opting out removes the record; the face store stays (the user's
+        // data — mass deletion is the user's act, not a side effect).
+        Ok(removed) => {
+            Json(json!({"ok": true, "consented": false, "removed": removed})).into_response()
+        }
+        Err(why) => {
+            eprintln!("faces consent: {why}");
+            ApiError::Internal.into_response()
+        }
+    }
+}
+
+fn now_epoch() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// POST scan — synchronous on the blocking pool with the faces writer lock
+/// (busy → 409, the index writer's law). The roots are the target's own
+/// roots from the deployment config, never client-supplied (§7). Counts are
+/// the engine's own (`files/faces/skipped/assigned`), relayed.
+async fn faces_scan(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = if body.is_empty() {
+        json!({})
+    } else {
+        match parse_body(&body) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        }
+    };
+    let mut errors = Vec::new();
+    let mut limit: Option<i64> = None;
+    if let Some(raw) = value.get("limit") {
+        match raw.as_i64() {
+            Some(n) if n > 0 => limit = Some(n),
+            other => errors.push(json!({
+                "type": "greater_than",
+                "loc": ["body", "limit"],
+                "msg": "Input should be greater than 0",
+                "input": other
+            })),
+        }
+    }
+    if !errors.is_empty() {
+        return detail_response(errors);
+    }
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let _writer = faces::FacesWriterGuard::acquire(&scope.cfg.index).map_err(ApiError::from)?;
+        let mut fields = Map::new();
+        fields.insert(
+            "roots".into(),
+            Value::Array(scope.cfg.roots.iter().map(|root| json!(root)).collect()),
+        );
+        if let Some(n) = limit {
+            fields.insert("limit".into(), json!(n));
+        }
+        let reply = faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "scan",
+            fields,
+            Duration::from_secs(app.cfg.faces_scan_timeout_s.max(1.0) as u64),
+        )
+        .map_err(faces_call_error)?;
+        Ok(json!({"ok": true, "scan": engine_answer(reply)}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn faces_persons(State(app): State<Shared>, Extension(ctx): Extension<Ctx>) -> Response {
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let mut fields = Map::new();
+        fields.insert("covers".into(), json!(true));
+        let reply = faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "persons",
+            fields,
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        let mut row = engine_answer(reply);
+        let mut persons = row
+            .get_mut("persons")
+            .and_then(Value::as_array_mut)
+            .map(std::mem::take)
+            .unwrap_or_default();
+        // Cards crop the cover face out of the same `/preview` seam.
+        for person in &mut persons {
+            let cover = person.as_object_mut().and_then(|p| p.remove("cover_face"));
+            if let Some(mut cover) = cover {
+                if !cover.is_null() {
+                    mint_face_rows(&app, std::slice::from_mut(&mut cover))?;
+                    if let Some(p) = person.as_object_mut() {
+                        p.insert("cover_face".into(), cover);
+                    }
+                }
+            }
+        }
+        if let Some(map) = row.as_object_mut() {
+            map.insert("persons".into(), Value::Array(persons));
+        }
+        Ok(json!({"ok": true, "persons": row.get("persons").cloned().unwrap_or(json!([]))}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn faces_person_show(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let person = match id.parse::<i64>() {
+        Ok(id) if id > 0 => id,
+        _ => {
+            return detail_response(vec![json!({
+                "type": "int_parsing",
+                "loc": ["path", "id"],
+                "msg": "Input should be a valid integer, unable to parse string as an integer",
+                "input": id
+            })])
+        }
+    };
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let mut fields = Map::new();
+        fields.insert("person".into(), json!(person));
+        let reply = faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "person",
+            fields,
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        let mut row = engine_answer(reply);
+        let mut faces = row
+            .get_mut("faces")
+            .and_then(Value::as_array_mut)
+            .map(std::mem::take)
+            .unwrap_or_default();
+        mint_face_rows(&app, &mut faces)?;
+        Ok(json!({"ok": true, "faces": faces}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// One small body reader: the FastAPI 422 list shape for missing fields and
+/// type refusals (`validate.rs`'s family, the faces subset).
+fn faces_body_int(body: &Value, key: &str, errors: &mut Vec<Value>) -> Option<i64> {
+    match body.get(key) {
+        None => {
+            errors.push(json!({
+                "type": "missing",
+                "loc": ["body", key],
+                "msg": "Field required",
+                "input": body
+            }));
+            None
+        }
+        Some(value) => match value.as_i64() {
+            Some(n) if n > 0 => Some(n),
+            _ => {
+                errors.push(json!({
+                    "type": "int_parsing",
+                    "loc": ["body", key],
+                    "msg": "Input should be a valid integer, a number greater than 0",
+                    "input": value
+                }));
+                None
+            }
+        },
+    }
+}
+
+async fn faces_name(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut errors = Vec::new();
+    let person = faces_body_int(&value, "person", &mut errors);
+    let name = match value.get("name").and_then(Value::as_str) {
+        Some(name) if !name.trim().is_empty() && name.chars().count() <= 120 => {
+            Some(name.trim().to_string())
+        }
+        _ => {
+            errors.push(json!({
+                "type": "string",
+                "loc": ["body", "name"],
+                "msg": "Input should be a non-empty string of at most 120 characters",
+                "input": value.get("name")
+            }));
+            None
+        }
+    };
+    if !errors.is_empty() {
+        return detail_response(errors);
+    }
+    let (person, name) = (person.expect("checked above"), name.expect("checked above"));
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let mut fields = Map::new();
+        fields.insert("person".into(), json!(person));
+        fields.insert("name".into(), json!(name));
+        faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "name",
+            fields,
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        Ok(json!({"ok": true}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn faces_merge(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut errors = Vec::new();
+    let into = faces_body_int(&value, "into", &mut errors);
+    let from = faces_body_int(&value, "from", &mut errors);
+    if into.is_some() && from.is_some() && into == from {
+        errors.push(json!({
+            "type": "identity",
+            "loc": ["body", "into"],
+            "msg": "into and from must name two different persons",
+            "input": value
+        }));
+    }
+    if !errors.is_empty() {
+        return detail_response(errors);
+    }
+    let (into, from) = (into.expect("checked"), from.expect("checked"));
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let mut fields = Map::new();
+        fields.insert("into".into(), json!(into));
+        fields.insert("from".into(), json!(from));
+        faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "merge",
+            fields,
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        Ok(json!({"ok": true}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn faces_delete(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut errors = Vec::new();
+    let person = faces_body_int(&value, "person", &mut errors);
+    if !errors.is_empty() {
+        return detail_response(errors);
+    }
+    let person = person.expect("checked above");
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let mut fields = Map::new();
+        fields.insert("person".into(), json!(person));
+        faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "delete",
+            fields,
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        Ok(json!({"ok": true}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// The human confirm of a queued collision (FACES.md Phase 2 §3 — the
+/// active-learning loop): a face joins the person the human names.
+async fn faces_confirm(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let mut errors = Vec::new();
+    let face = faces_body_int(&value, "face", &mut errors);
+    let person = faces_body_int(&value, "person", &mut errors);
+    if !errors.is_empty() {
+        return detail_response(errors);
+    }
+    let (face, person) = (face.expect("checked"), person.expect("checked"));
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let mut fields = Map::new();
+        fields.insert("face".into(), json!(face));
+        fields.insert("person".into(), json!(person));
+        faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "confirm",
+            fields,
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        Ok(json!({"ok": true}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn faces_pending(State(app): State<Shared>, Extension(ctx): Extension<Ctx>) -> Response {
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let reply = faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "pending",
+            Map::new(),
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        let mut row = engine_answer(reply);
+        let mut queue = row
+            .get_mut("pending")
+            .and_then(Value::as_array_mut)
+            .map(std::mem::take)
+            .unwrap_or_default();
+        for item in &mut queue {
+            let face = item.as_object_mut().and_then(|i| i.remove("face"));
+            if let Some(mut face) = face {
+                if !face.is_null() {
+                    mint_face_rows(&app, std::slice::from_mut(&mut face))?;
+                    if let Some(o) = item.as_object_mut() {
+                        o.insert("face".into(), face);
+                    }
+                }
+            }
+        }
+        Ok(json!({"ok": true, "pending": queue, "count": row.get("count").cloned().unwrap_or(json!(0))}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// `GET /api/v1/faces/similar?face=N&limit=M` — one face's own vector
+/// against the store (the engine's `find-similar-faces`, brute force,
+/// FACES.md §2). A person card opens with it: "more like this face".
+async fn faces_similar(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    uri: Uri,
+) -> Response {
+    let mut errors = Vec::new();
+    let face = match query_param(&uri, "face").and_then(|raw| raw.parse::<i64>().ok()) {
+        Some(n) if n > 0 => n,
+        _ => {
+            errors.push(json!({
+                "type": "int_parsing",
+                "loc": ["query", "face"],
+                "msg": "Input should be a valid integer, a number greater than 0",
+                "input": query_param(&uri, "face")
+            }));
+            return detail_response(errors);
+        }
+    };
+    let limit = match query_param(&uri, "limit") {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(n) if (1..=200).contains(&n) => n,
+            _ => {
+                errors.push(json!({
+                    "type": "less_than_equal",
+                    "loc": ["query", "limit"],
+                    "msg": "Input should be between 1 and 200",
+                    "input": raw
+                }));
+                return detail_response(errors);
+            }
+        },
+        None => 20,
+    };
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        let mut fields = Map::new();
+        fields.insert("face".into(), json!(face));
+        fields.insert("limit".into(), json!(limit));
+        let reply = faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "similar",
+            fields,
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)?;
+        let mut row = engine_answer(reply);
+        let mut faces = row
+            .get_mut("faces")
+            .and_then(Value::as_array_mut)
+            .map(std::mem::take)
+            .unwrap_or_default();
+        mint_face_rows(&app, &mut faces)?;
+        Ok(json!({"ok": true, "faces": faces}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
 /// `_media_scope_allows` (api.py:438): media handles resolve to the target
 /// that owns the path. A principal with NO key touches the main index only
 /// — the minted-shape opening is for the main index's reads; an
@@ -2619,6 +3341,26 @@ async fn main() -> ExitCode {
             "/api/v1/tokens",
             get_only(tokens_endpoint).post(rotate_tokens),
         )
+        // Faces (FACES.md Phase 3): consent-gated People-tab verbs. Scans and
+        // mutations are ADMIN_ROUTES (security.rs); the reads ride the ordinary
+        // bearer gate. Consent itself is a mutation: POST/DELETE admin, GET reads
+        // its own state (the People tab asks before the popup).
+        .route("/api/v1/faces/status", get_only(faces_status))
+        .route(
+            "/api/v1/faces/consent",
+            get_only(faces_consent_get)
+                .post(faces_consent_post)
+                .delete(faces_consent_delete),
+        )
+        .route("/api/v1/faces/scan", post_only(faces_scan))
+        .route("/api/v1/faces/persons", get_only(faces_persons))
+        .route("/api/v1/faces/person/{id}", get_only(faces_person_show))
+        .route("/api/v1/faces/name", post_only(faces_name))
+        .route("/api/v1/faces/merge", post_only(faces_merge))
+        .route("/api/v1/faces/delete", post_only(faces_delete))
+        .route("/api/v1/faces/confirm", post_only(faces_confirm))
+        .route("/api/v1/faces/pending", get_only(faces_pending))
+        .route("/api/v1/faces/similar", get_only(faces_similar))
         .fallback(fallback)
         .layer(axum::middleware::from_fn_with_state(app.clone(), api_gate))
         .with_state(app.clone());

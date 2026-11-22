@@ -412,6 +412,7 @@ version = "0.8.1"
 dependencies = [
  "axum",
  "chrono",
+ "digup-runtime",
  "digup-services",
  "futures-util",
  "httpdate",

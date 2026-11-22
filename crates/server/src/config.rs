@@ -175,6 +175,18 @@ pub struct ServerConfig {
     pub mint_keys: bool,
     /// `DIGUP_SERVER_UI`: where the built frontend lives (Stage 6's mount).
     pub ui: Option<PathBuf>,
+    /// Faces (FACES.md Phase 3): the clustering knobs the faces-service daemon
+    /// is spawned with — `DIGUP_SERVER_FACE_MERGE` (0.5) and
+    /// `DIGUP_SERVER_FACE_COLLISION` (0.10); the fixture row in FACES.md pins
+    /// what a threshold does (the 2008↔2013 pair joins at 0.45, splits at 0.5).
+    pub faces_merge: f64,
+    pub faces_collision: f64,
+    /// `DIGUP_SERVER_FACE_MODEL_IDLE_S` (60): the daemon unloads the face
+    /// models after this idle window — the encoder's rule.
+    pub faces_model_idle: f64,
+    /// `DIGUP_SERVER_FACE_SCAN_TIMEOUT_S` (3600): the ceiling of one
+    /// synchronous scan call (detect is ~4.4 s/photo CPU — a big tree is hours).
+    pub faces_scan_timeout_s: f64,
 }
 
 fn env_string(name: &str, default: &str) -> String {
@@ -411,6 +423,10 @@ impl ServerConfig {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from),
+            faces_merge: knob_float("DIGUP_SERVER_FACE_MERGE", 0.5)?,
+            faces_collision: knob_float("DIGUP_SERVER_FACE_COLLISION", 0.10)?,
+            faces_model_idle: knob_float("DIGUP_SERVER_FACE_MODEL_IDLE_S", 60.0)?,
+            faces_scan_timeout_s: knob_float("DIGUP_SERVER_FACE_SCAN_TIMEOUT_S", 3600.0)?,
             encoder_idle: idle,
             binary,
             models_dir: models,
