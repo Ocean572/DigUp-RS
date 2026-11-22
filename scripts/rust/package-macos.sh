@@ -51,7 +51,10 @@ targets=()
 for arch in aarch64 x86_64; do
   target=$arch-apple-darwin
   rustup target list --installed | grep -q "^$target$" || { echo "no $target toolchain (rustup target add $target)"; exit 1; }
-  cargo build --release --target "$target" -p digup-cli -p digup-server
+  # Faces (FACES.md): the desktop People tab needs the faces verbs compiled in —
+  # the flag ships code, never weights: the face packs stay user-supplied, the
+  # consent record gates every verb (what the UI gates, the engine gates).
+  cargo build --release --target "$target" -p digup-cli -p digup-server --features digup-cli/faces
   targets+=("$target")
 done
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)

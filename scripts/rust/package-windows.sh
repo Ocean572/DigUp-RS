@@ -18,7 +18,10 @@ cd "$(dirname "$0")/../.."
 scripts/fetch-vendor.sh
 scripts/build-ffmpeg.sh
 scripts/build-llama.sh
-cargo build --release -p digup-cli -p digup-server
+# Faces (FACES.md): the desktop People tab needs the faces verbs compiled in —
+# the flag ships code, never weights: the face packs stay user-supplied, the
+# consent record gates every verb.
+cargo build --release -p digup-cli -p digup-server --features digup-cli/faces
 
 # Before the payload exists the DLLs come from Vendor/ (Windows loads the exe's own
 # folder first, then PATH — the payload gate needs nothing extra, that is where its

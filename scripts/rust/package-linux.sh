@@ -19,7 +19,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 scripts/build-ffmpeg.sh
-cargo build --release -p digup-cli -p digup-server
+# Faces (FACES.md): the desktop People tab needs the faces verbs compiled in —
+# the flag ships code, never weights: the face packs stay user-supplied, the
+# consent record gates every verb.
+cargo build --release -p digup-cli -p digup-server --features digup-cli/faces
 
 # The engine asks for its C libraries by name (libllama.so.0 …): before the payload
 # exists, the probe points at Vendor/; inside the payload it needs nothing, because
