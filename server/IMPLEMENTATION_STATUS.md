@@ -2,6 +2,42 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-21 — v0.8.1 recut at the Stage-3 tip; the apps' update feed moves to this repo (`792f1d1`)
+
+v0.8.1 now carries the coding-agent CLI verbs (the `4c72f85` #178/#189 contract) alongside
+MCP: the tag was deleted (GitHub takes the attached release with it) and recut annotated at
+the release commit; the old 0.8.0-stamped release is superseded. The release commit: version
+stamps 0.8.1 in `Cargo.toml`/`server/pyproject.toml`/`tauri.conf.json` (one commit — the
+asset names carry the Cargo stamp; the first v0.8.1's `digup-0.8.0-*` names were a lagging
+stamp); `scripts/fetch-vendor.sh` pinned downloads gained `--retry 6 --retry-delay 15
+--retry-all-errors` (the Packages run died on curl 22 — a 403 from GitHub's release-asset
+CDN at miniz, the same URL 200 from the box minutes later; pins verify the final bytes
+unchanged).
+
+**The update-feed fix (the macOS "Couldn't check for updates" report):** the apps read
+`updates/{{target}}-{{arch}}.json` from raw main — of the UPSTREAM repo: 404 for
+`macos-aarch64.json`/`windows` feeds, and the feeds that exist are Swift-era v0.7.0-beta
+rows signed with upstream's key, which the fork's pubkey refuses (key ids differ). The
+endpoint moves to `Ocean572/DigUp-RS` (`tauri.conf.json` + the `updates.rs` release-page
+fallback), and `packages.yml` gained the `feeds` job (tag dispatches): the signed app
+artifacts → `scripts/update-feed.py` (the generator that existed **unwired** — no run had
+ever published the fork's own feeds) with `DOWNLOAD_BASE` at this repo's release and the
+release body as notes → `updates/*.json` committed to **main**, where installed apps read
+them. Copies of 0.8.0 keep the old endpoint: manual update from the release page; 0.8.1+
+installs self-update on Windows, Linux (AppImage) and both Mac slices (the universal
+tarball feeds both keys). AGENTS.md gained the 9-step release checklist (stamp → push/CI →
+tag → release page → Packages + feeds → attach the RAW update artifacts promptly → status +
+journal + privacy audit → watch the runs → transient-fetch shapes).
+
+**Gates (ai-ubuntu-computer, `CARGO_BUILD_JOBS=2`):** host `cargo check --workspace` clean,
+lock synced; shell Docker gate (Shellfile2, webkit set) **TEST rc=0** incl. the moved
+fallback assertion, **zero new clippy lints** vs the HEAD baseline (7 vs 8; fmt
+informational — not fmt-clean at HEAD, crate not clippy-gated by CI); actionlint: **zero
+findings** in the new feeds job; `update-feed.py` synthetic run: windows/linux/
+macos-aarch64/macos-x86_64/latest all 0.8.1 with this repo's URLs. **CI @792f1d1: CI + Server success; Packages success (linux fetch-retry fix VERIFIED, 7 jobs green incl. 3 distro checks); Rust release success — payload tiles `digup-0.8.1-*` (stamp fix VERIFIED). Feeds job SKIPPED on the 18:15 dispatch (`ref: main`, gate is `ref v*`) — feeds on main remain Swift-era 0.7.0-beta, macos-aarch64 404: cure = re-dispatch Packages `ref: v0.8.1` + attach the RAW `DigUp_0.8.1_x64-setup.exe` / `.AppImage` / `.app.tar.gz` to the release (today: only the 4 payload tiles are on it).**
+Release chain + Packages dispatch + raw-asset attach + raw-main feed checks: the live chain
+is the user-side UI step (checklist in AGENTS.md).
+
 ## 2026-11-21 — Stage 3: coding-agent CLI verbs on the Rust engine (`4c72f85`)
 
 The #178/#189 community PRs (the Swift-side coding-agent surface — the verbs exist only in
