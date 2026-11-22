@@ -229,10 +229,14 @@ def test_the_people_tool_relays_the_consent_wall_exactly_as_the_rest_gate(mcp_sc
                                 headers={"Authorization": f"Bearer {READ}"})
     assert rest_scan.status_code == 403, rest_scan.text
     assert refused["structuredContent"] == rest_scan.json(), (refused, rest_scan.json())
-    # An unknown action is the tool's own 422-shape refusal, not a wall.
-    bad = call(mcp_scoped, READ, "people", {"action": "reboot"})
-    assert bad["isError"] is True
-    assert "no such action" in bad["content"][0]["text"], bad["content"][0]["text"]
+    # An unknown action lands on the JSON-RPC invalid-params refusal — the same
+    # shape as `show` without a segment_id: execute()'s Err goes out as an
+    # envelope error (there is no tools/call result to read), not an isError
+    # tool result.
+    bad = rpc(mcp_scoped, READ, "tools/call",
+              {"name": "people", "arguments": {"action": "reboot"}}, msg_id=41).json()
+    assert bad["error"]["code"] == -32602, bad
+    assert "no such action" in bad["error"]["message"], bad["error"]
     # action=person without a person id is refused as bad params.
     missing = rpc(mcp_scoped, READ, "tools/call",
                   {"name": "people", "arguments": {"action": "person"}}, msg_id=42).json()
