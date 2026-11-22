@@ -186,3 +186,45 @@ per-photo total 8.77 s; **VmHWM 304 MB**. GPU row: see below (bounded attempt).
 Licenses of the probe models (dev-side reference only, user-supplied tier in
 shipping): `scrfd_10g_bnkps` (non-commercial research terms), `w600k_mbf`
 (AntelopeFace, research-only) — never payload (Phase 0 #1).
+
+### Phase 2 #2 — faces verbs daemon gate (measured 2026-11-22, this box)
+
+Gate: `crates/cli/tests/faces_service.rs` — a live `digup faces-service` over
+JSON-lines on five repo-committed public Wikimedia fixtures
+(`crates/cli/tests/fixtures/faces/`, manifest with source URLs + licenses,
+resized ≤1600 px q88). 2 tests green (31 s with the pinned models, self-skip
+without them): full verb round trip (scan/counts/persons/name/person/person-faces/
+merge/delete/cluster/pending/similar/prune/quit) + the tier-switch refusal
+(second embedder pin on the same store → daemon exits non-zero before `ready`).
+
+Fixture cosine rows (`w600k_mbf`, Rust pipeline, the facts the gate pins):
+
+| pair | cos | fact |
+|---|---|---|
+| Merkel 2005 ↔ 2021 | 1.0000 | SAME source photograph (identical Wikimedia file) — merges exactly |
+| Merkel 2005/2021 ↔ 2013 | 0.4761 | the real cross-age pair: joins at 0.45, SPLITS at default 0.5 |
+| cross-person (Merkel↔Obama↔Trump) | ≤ 0.068 | cleanly separated at any sane threshold |
+
+Gate threshold **0.45** — at the default 0.5 the 2013 photo stands alone
+(4 persons, the purity curve's point); at 0.45 the three Merkel files form one
+person (cover 0.860), Obama and Trump stand alone: **5 faces, 3 persons, 0
+pending**. The 0.5-vs-0.45 fact is the fixture row behind the merge-threshold
+knob; the server does not invent it.
+
+Daemon facts (measured, same run): scan events = one `face-scan` per file in
+readdir order (order is a crawl artifact — the gate asserts counts, not order);
+freshness `(path, size, mtime)` skips re-decode; `--emb-model` is REQUIRED
+(no default embedder ships — the user-supplied posture); the daemon requires
+`--faces-consent` (the store-scoped consent file: what the UI gates, the
+engine gates); person ids are `New(i) → i+1` insertion order.
+
+### GPU cost row (2026-11-22, 1070 card) — **GPU NOT MEASURED**
+
+Measured reason, not an assumption: tract 0.23.10's `tract-onnx`/`tract-core`
+register **no CUDA/Vulkan/wgpu feature** (grep of their Cargo.toml: zero hits);
+GPU compute in tract lives in the separate `tract-gpu` crate, which needs a
+manual linalg-lowering pipeline plus wgpu's CUDA backend (untested on
+Pascal/sm_61, driver 580). Wiring it into SCRFD+ArcFace is an engineering
+task, not a measurement — the CPU rows above are the shipping numbers
+(CPU is the default device for faces on every platform). Reporting
+"GPU NOT MEASURED" per the house rule; invented success is not.

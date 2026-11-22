@@ -289,6 +289,49 @@ impl FaceStore {
         Ok(doomed.len())
     }
 
+    /// Piggyback freshness (FACES.md §3): the file is scanned when a face row
+    /// carries its exact `(path, size, mtime)` facts — the join key, never a
+    /// rowid — and no face of it is still queued (a queued face means the
+    /// clustering has work on it, not the scanner).
+    pub fn is_fresh(&self, path: &str, size: i64, mtime: f64) -> Result<bool> {
+        let mut rows = 0i64;
+        let mut queued = 0i64;
+        self.db.query(
+            "SELECT (SELECT COUNT(*) FROM faces WHERE path = ?1 AND size = ?2 AND mtime = ?3),
+                    (SELECT COUNT(*) FROM pending p JOIN faces f ON f.id = p.face
+                     WHERE f.path = ?1 AND f.size = ?2 AND f.mtime = ?3)",
+            [
+                Sql::Text(path.to_string()),
+                Sql::Int(size),
+                Sql::Double(mtime),
+            ],
+            |r| {
+                rows = r.int(0);
+                queued = r.int(1);
+                Ok(())
+            },
+        )?;
+        Ok(rows > 0 && queued == 0)
+    }
+
+    /// One face row by id (the `similar`/`pending` verbs).
+    pub fn face_rows_by_id(&self, id: i64) -> Result<Vec<FaceRow>> {
+        self.face_rows("WHERE id = ?1", [Sql::Int(id)])
+    }
+
+    /// A face's stored unit vector (fp16 round trip, the store's own numbers).
+    pub fn face_vector(&self, id: i64) -> Result<Option<Vec<f32>>> {
+        let mut out = None;
+        self.db
+            .query("SELECT vec FROM faces WHERE id = ?1", [Sql::Int(id)], |r| {
+                if let Some(blob) = r.blob(0) {
+                    out = Some(vectors::floats_from_halves(&blob));
+                }
+                Ok(())
+            })?;
+        Ok(out)
+    }
+
     // MARK: clustering
 
     /// The pending queue, oldest first, capped.

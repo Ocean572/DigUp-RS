@@ -15,6 +15,8 @@
 pub mod costs;
 pub mod crashnotes;
 pub mod emit;
+#[cfg(feature = "faces")]
+pub mod face_service;
 pub mod index_service;
 pub mod mcp;
 pub mod parentwatch;

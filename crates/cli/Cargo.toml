@@ -19,6 +19,11 @@ digup-services = { workspace = true }
 serde_json = { workspace = true }
 unicode-segmentation = { workspace = true }
 
+[features]
+# Faces (FACES.md): the faces-service daemon + face verbs; default payload
+# builds never enable it (it pulls in tract-onnx through the services feature).
+faces = ["digup-services/faces"]
+
 [dev-dependencies]
 # tests/cli.rs runs the verbs against the built binary and reads the SQLite files they write.
 rusqlite = { workspace = true }

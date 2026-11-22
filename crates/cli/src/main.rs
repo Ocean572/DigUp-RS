@@ -33,7 +33,7 @@ struct Arguments {
 }
 
 /// `Arguments.valued`: flags that need a value.
-const VALUED: [&str; 17] = [
+const VALUED: [&str; 24] = [
     "--index",
     "--limit",
     "--kind",
@@ -48,6 +48,13 @@ const VALUED: [&str; 17] = [
     "--encoder-idle",
     "--to",
     "--memory-limit",
+    "--faces-models",
+    "--det-model",
+    "--emb-model",
+    "--faces-consent",
+    "--merge-threshold",
+    "--collision-margin",
+    "--model-idle",
     "--time-limit",
     "--tries",
     "--when-quiet",
@@ -89,7 +96,7 @@ fn main() {
     // that outlives them.
     if matches!(
         command,
-        Some("index-service" | "worker" | "search-service" | "download-model")
+        Some("index-service" | "worker" | "search-service" | "download-model" | "faces-service")
     ) || (command == Some("estimate") && args.flags.iter().any(|f| f == "--json"))
     {
         digup_services::parentwatch::start();
@@ -209,6 +216,51 @@ fn main() {
             // downloadModel(_:) (DownloadModel.swift): the events are the contract;
             // it exits 0 on `done`, 1 on `error`.
             std::process::exit(download_model(&args));
+        }
+        #[cfg(feature = "faces")]
+        Some("faces-service") => {
+            // The faces verbs daemon (FACES.md Phase 2 §2): face.sqlite rides in the
+            // index folder, the ONNX pins are user-supplied in the models folder
+            // (the license gate's posture), thresholds are the clustering knobs,
+            // and the models unload after their idle window (Phase 2 §4).
+            let models = args
+                .value("--faces-models")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(std::env::var("DIGUP_MODELS_DIR").unwrap_or_default())
+                });
+            let emb = args.value("--emb-model").unwrap_or("").to_string();
+            if emb.is_empty() {
+                // No default embedder ships: face embedders ride the user-supplied
+                // acceptance gate (FACES.md Phase 0 #1 + the consent gate).
+                eprintln!(
+                    "error: faces-service needs --emb-model (face embedders are user-supplied)"
+                );
+                std::process::exit(1);
+            }
+            let config = digup_services::face_service::FaceServiceConfig {
+                index: args.index_folder(),
+                models,
+                det_model: args
+                    .value("--det-model")
+                    .unwrap_or("scrfd_10g_bnkps.onnx")
+                    .to_string(),
+                emb_model: emb,
+                merge_threshold: args
+                    .value("--merge-threshold")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.5),
+                collision_margin: args
+                    .value("--collision-margin")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.10),
+                model_idle: args
+                    .value("--model-idle")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60.0),
+                consent: args.value("--faces-consent").map(PathBuf::from),
+            };
+            std::process::exit(digup_services::face_service::face_service(config));
         }
         Some("index-service") => {
             // indexService(_:) (main.swift:421): the media options and the code

@@ -25,6 +25,12 @@ digup: search your files by meaning (DigUp developer CLI)
                                           see SearchService): for shells that can't link DigUpKit
   digup download-model [--to DIR]         the model files, from the Hugging Face cache or downloaded with
                                           resume, checked (JSON lines: see DownloadModel)
+  digup faces-service [--faces-consent FILE] [--faces-models DIR] [--det-model NAME] --emb-model NAME
+                                          the face verbs daemon, face.sqlite beside the index (JSON lines;
+                                          see FACES.md): scan / cluster / persons / name / merge / delete /
+                                          confirm / pending / similar — face embedders are user-supplied,
+                                          so --emb-model is required and --faces-consent must name an
+                                          accepted consent record; needs the `faces` build feature
   digup mcp [--allow-admin] [FOLDER]...   the Model Context Protocol server over stdio (JSON-RPC, one message
                                           per line): search/status/show tools (+ estimate with --allow-admin),
                                           the engine's answers relayed verbatim — for Claude Desktop and local
