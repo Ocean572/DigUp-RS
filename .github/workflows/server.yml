@@ -75,9 +75,15 @@ jobs:
       - name: Model pins follow the engine (drift guard)
         run: |
           engine=$(grep -oE 'sha256: "[0-9a-f]{64}"' crates/runtime/src/models.rs | grep -oE '[0-9a-f]{64}' | sort)
-          ci=$(printf '%s\n%s\n' \
+          ci=$(printf '%s\n' \
             2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135 \
-            c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f | sort)
+            c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f \
+            5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91 \
+            9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f \
+            4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43 \
+            6b6a35772fb636cdd4fa86520c1a259d0c41472a76f70f802b351837a00d9870 \
+            9c0ae385d7362323c92d218de598d32e52a9130b78faac6a8a924091aca62c0b \
+            f2eb07d03de0af560a82e1214df799fec5e09375d43521e2868f9dc387e5a43e | sort)
           if [ "$engine" != "$ci" ]; then
             echo "::error::models.rs pins differ from server.yml — update the download step's pins in the same PR"
             echo "engine: $engine"; echo "ci:     $ci"; exit 1
@@ -90,6 +96,11 @@ jobs:
           grep -q '"embeddinggemma-2-Q8_0.gguf"' crates/runtime/src/models.rs &&
           grep -q '"mmproj-embeddinggemma-2-Q8_0.gguf"' crates/runtime/src/models.rs || {
             echo "::error::models.rs file names changed — update the download step in the same PR"; exit 1; }
+          for face in scrfd_10g_bnkps.onnx w600k_mbf.onnx w600k_r50.onnx \
+                      adaface_ir_18.onnx adaface_ir_50.onnx adaface_ir_101.onnx; do
+            grep -q "\"$face\"" crates/runtime/src/models.rs || {
+              echo "::error::FaceModelFiles pin $face moved — update the download step in the same PR"; exit 1; }
+          done
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -140,6 +151,16 @@ jobs:
             "$base/mmproj-embeddinggemma-2-Q8_0.gguf"
           echo "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135  $RUNNER_TEMP/models/embeddinggemma-2-Q8_0.gguf" > "$RUNNER_TEMP/pins.txt"
           echo "c4a8a52691ecef40618438928bdf9e68379b854e24166f292592353db0aab64f  $RUNNER_TEMP/models/mmproj-embeddinggemma-2-Q8_0.gguf" >> "$RUNNER_TEMP/pins.txt"
+          # The face packs (FaceModelFiles, FACES.md Phase 0 #1): user-supplied TIER
+          # weights — the CI suite runs the faces gates against the same pinned hashes
+          # the engine checks (resolve/main is moving, so the sha256 pins each fetch).
+          dl() { curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/models/$2" "$1"; echo "$3  $RUNNER_TEMP/models/$2" >> "$RUNNER_TEMP/pins.txt"; }
+          dl https://huggingface.co/fal/AuraFace-v1/resolve/main/scrfd_10g_bnkps.onnx scrfd_10g_bnkps.onnx 5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91
+          dl https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx w600k_mbf.onnx 9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f
+          dl https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx w600k_r50.onnx 4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43
+          dl https://huggingface.co/yakhyo/uniface-weights/resolve/main/adaface_ir_18.onnx adaface_ir_18.onnx 6b6a35772fb636cdd4fa86520c1a259d0c41472a76f70f802b351837a00d9870
+          dl https://huggingface.co/yakhyo/uniface-weights/resolve/main/adaface_ir_50.onnx adaface_ir_50.onnx 9c0ae385d7362323c92d218de598d32e52a9130b78faac6a8a924091aca62c0b
+          dl https://huggingface.co/yakhyo/uniface-weights/resolve/main/adaface_ir_101.onnx adaface_ir_101.onnx f2eb07d03de0af560a82e1214df799fec5e09375d43521e2868f9dc387e5a43e
           sha256sum -c "$RUNNER_TEMP/pins.txt"
 
       # The runtime image's CLI, headless: the payload the image carries (built by the

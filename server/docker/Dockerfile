@@ -120,7 +120,7 @@ RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
       echo "build-ffmpeg: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
     tries=0; until scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
       echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done; \
-    cargo build --release -p digup-cli -p digup-server; \
+    cargo build --release -p digup-cli -p digup-server --features digup-cli/faces; \
     # The engine answers with the C libraries beside Vendor/ (the payload's own $ORIGIN
     # shape is gated in rust-engine-payload below). PIPEFAIL is the point: the usage is
     # CAPTURED and checked non-empty, because `./digup --help | sed -n '2p'` reports SED's
@@ -143,7 +143,7 @@ RUN --mount=type=cache,target=/src/Vendor,id=rust-vendor \
     --mount=type=cache,target=/src/target \
     --mount=type=cache,target=/root/.cargo/registry \
     set -euxo pipefail; \
-    cargo build --release -p digup-cli -p digup-server; \
+    cargo build --release -p digup-cli -p digup-server --features digup-cli/faces; \
     mkdir -p /out; \
     cp /src/target/release/digup /src/target/release/digup-server \
        /src/Vendor/pdfium/lib/libpdfium.so \
