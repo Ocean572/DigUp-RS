@@ -217,12 +217,12 @@ def test_the_people_tool_relays_the_consent_wall_exactly_as_the_rest_gate(mcp_sc
     # (the bearer gate's 403 body carries `status` — the estimate/index pin above
     # proves that shape; the faces wall's body does not invent one).
     assert result["structuredContent"] == direct.json(), (result, direct.json())
-    // A read key asking the scan lands on the bearer admin wall — measured
-    // 2026-11-22, this box: the MIDDLEWARE fires first on REST (403 with the
-    // SCOPE body, {"detail": …} as refuse() shapes it), before the handler's
-    // consent guard. A tool call skips the middleware, so the front-end quotes
-    // the SAME sentence for the SAME principal (the thin-client law: the tool
-    // answers exactly what REST answers).
+    # A read key asking the scan lands on the bearer admin wall — measured
+    # 2026-11-22, this box: the MIDDLEWARE fires first on REST (403 with the
+    # SCOPE body, {"detail": …} as refuse() shapes it), before the handler's
+    # consent guard. A tool call skips the middleware, so the front-end quotes
+    # the SAME sentence for the SAME principal (the thin-client law: the tool
+    # answers exactly what REST answers).
     refused = call(mcp_scoped, READ, "people", {"action": "scan"})
     assert refused["isError"] is True
     rest_scan = mcp_scoped.post("/api/v1/faces/scan", json={},
