@@ -213,8 +213,10 @@ def test_the_people_tool_relays_the_consent_wall_exactly_as_the_rest_gate(mcp_sc
     assert result["isError"] is True
     direct = mcp_scoped.get("/api/v1/faces/persons", headers={"Authorization": f"Bearer {READ}"})
     assert direct.status_code == 400, direct.text
-    assert result["structuredContent"]["detail"] == direct.json()["detail"]
-    assert result["structuredContent"]["status"] == 400
+    # The relay is the REST body, whole: the consent wall's 400 carries `detail`
+    # (the bearer gate's 403 body carries `status` — the estimate/index pin above
+    # proves that shape; the faces wall's body does not invent one).
+    assert result["structuredContent"] == direct.json(), (result, direct.json())
     # A read key asking the scan lands on the REST admin gate, whose words relay.
     refused = call(mcp_scoped, READ, "people", {"action": "scan"})
     assert refused["isError"] is True
@@ -250,16 +252,22 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     rest = mcp_open.get("/api/v1/faces/persons").json()
     relayed = call(mcp_open, None, "people", {"action": "persons"})
     assert relayed["isError"] is False
+    # Preview handles are minted per answer (the media contract: a fresh id per
+    # reply), so they cannot compare equal across two calls — strip them row by
+    # row, on both sides, exactly as the search relay test does (every cover row
+    # carries one on both sides — asserted on the way through the strip).
+    for row in relayed["structuredContent"]["persons"] + rest["persons"]:
+        assert "media_id" in row["cover_face"], row
+        row["cover_face"].pop("media_id")
     assert relayed["structuredContent"] == rest, "the tool answers what REST answers"
     persons = rest["persons"]
     assert 1 <= len(persons) <= scan["faces"]
     assert sum(p["count"] for p in persons) == scan["faces"]   # every face landed
-    cover = persons[0]["cover_face"]
+    assert all(p["cover_face"]["width"] > 0 for p in persons)  # the crop map rides the relay
     one = call(mcp_open, None, "people", {"action": "person", "person": persons[0]["id"]})
     assert one["isError"] is False
     assert [f["id"] for f in one["structuredContent"]["faces"]] == \
            [f["id"] for f in mcp_open.get(f"/api/v1/faces/person/{persons[0]['id']}").json()["faces"]]
-    assert cover["width"] > 0 and cover["media_id"]      # the crop map rides the relay
 
 
 def test_the_show_tool_reads_a_segments_stored_text(mcp_scoped):
