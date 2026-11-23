@@ -191,6 +191,29 @@ zero both shapes (faces shape now includes digup-server). The contract suite's f
 deployments opt `DIGUP_SERVER_FACE_MIN_FACES=1` (their fixtures pin the singleton shape — the
 law is engine-pinned; the opt-out live-tests the env→argv→daemon chain).
 
+**Round three tail — the live-store migration + the GPU payload (2026-11-23, measured):** the
+core law applied to the live store (faces + scan rows kept, 37,513 cards wiped, all 195,604
+faces requeued, one cluster session): **8,868 persons (all count ≥ 3, zero cards under the law),
+148,312 faces assigned, 47,292 stay queued, 0 named** — exactly the 0.5 + core-law experiment
+verdict on the full library (37,513 → 8,868, −76 %). The GPU payload for the app is measured on
+this box (ai-ubuntu-computer, driver 580.178.04, 1070 = GPU 0): the host's CUDA enumeration maps
+**device 0 to the busy 4070** (raw runtime probe: cc 8.9, 512 MB malloc = out of memory) — every
+host-side GPU failure (mtmd clip `GGML_ASSERT(buffer)` at ggml-backend.cpp:328, "can't create a
+llama.cpp context") was the engine fighting the 4070, not a broken 1070. Cure:
+`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0` (probe: cc 6.1, mallocs 512 MB + 3 GB
+clean). Flavors: CUDA 12.8 stack PASSED in-container (device=gpu, agreement **0.99972**, picture
+0.149 s vs 1.953 s CPU) but on the host its context creation fails, and the 570 forward-compat
+userspace (the one containers inject) is refused by the 580 kernel (driver-branch mismatch) →
+the app ships the **11.8 flavor (Gate B's pairing)**: host speed gate with the CUDA payload
+binary + staged runtime libs: **device=gpu, agreement 0.99977, picture 0.143822 s vs 1.114989 s
+CPU (7.75×), steady, settled, not doubtful**. Utilization gate — 40 samples at 0.75 s during the
+app's real indexing job: **GPU 0 peak 89 %, average 35 %, VRAM 1874 MiB**. Packaging seams
+(DIGUP_SKIP_BUILD / DIGUP_LLAMA_LIB / DIGUP_CUDA_LIBS + NVIDIA notices, `99dbe93`) as measured;
+the CUDA AppImage is 777 MB (helper carries libggml-cuda.so + 13 staged runtime libs, rpath
+$ORIGIN), deb 1.37 GB. linuxdeploy's failure mode pinned: squashfs dies "No space left on
+device" (mksquashfs writes the full tree before compressing) — disk is the constraint on this
+box (97 %+ daily), the AppImage leg needs headroom before it starts.
+
 ## 2026-11-21 — v0.8.1 recut at the Stage-3 tip; the apps' update feed moves to this repo (`792f1d1`)
 
 v0.8.1 now carries the coding-agent CLI verbs (the `4c72f85` #178/#189 contract) alongside
