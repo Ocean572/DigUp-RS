@@ -33,9 +33,14 @@ const QUEUE_ICON = icon(html`
   <circle cx="4.5" cy="12" r="1"></circle><circle cx="4.5" cy="18" r="1"></circle>`);
 
 const personLabel = (p) => p.name || `Person ${p.id}`;
+// The panel paints at most this many person cards (finding-1 cure 2026-11-23,
+// measured on the bench library: 37k cards are unpaintable — the cap is on
+// PAINT, every person stays in the store; most-photo people first).
+const GRID_CAP = 300;
 
 class DigupPeople extends LitElement {
-  static properties = { ack: { state: true }, openId: { state: true } };
+  static properties = { ack: { state: true }, openId: { state: true },
+    mergeFrom: { state: true }, mergeInto: { state: true } };
 
   static styles = [controlCss, badgeCss, spinCss, noteCss, css`
     /* The gear panel's measured frame, restated for this panel (component CSS owns the
@@ -81,6 +86,11 @@ class DigupPeople extends LitElement {
     /* Person cards: the auto-fill grid, the crop window, the 2 rem control rows. */
     #people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
       gap: var(--space-sm); }
+    /* The merge strip (finding-1 cure 2026-11-23): one row of two native selects +
+       the Merge act — native dropdowns, no scroller, no height cap (the panel's
+       round-7 law). */
+    .merge-strip { display: flex; gap: 0.45rem; align-items: center; }
+    .merge-strip select { flex: 1 1 0; min-width: 0; }
     .person-card { display: grid; gap: 0.35rem; padding: 0.5rem; min-width: 0;
       border: 1px solid var(--edge); border-radius: var(--radius-lg); background: var(--bg); }
     .crop { position: relative; display: block; overflow: hidden; width: 100%;
@@ -231,9 +241,16 @@ class DigupPeople extends LitElement {
       <section class="set-sec" aria-labelledby="people-people">
         <span class="set-title" id="people-people">${USERS_ICON} People</span>
         ${p.persons.length ? html`
+          ${this.#mergeStrip(p)}
           <div id="people-grid">
-            ${p.persons.map((person) => this.#card(person, p))}
-          </div>`
+            ${(p.persons.length > GRID_CAP
+              ? [...p.persons].sort((a, b) => b.count - a.count || a.id - b.id)
+              : p.persons
+            ).slice(0, GRID_CAP).map((person) => this.#card(person, p))}
+          </div>
+          ${p.persons.length > GRID_CAP ? html`
+            <p class="note">Showing the top ${GRID_CAP.toLocaleString()} of
+            ${p.persons.length.toLocaleString()} people — the most-photo people first.</p>` : nothing}`
         : html`<p class="note">Nothing found yet — press Scan now. A scan runs on the
             engine's clock; files already recorded are skipped.</p>`}
       </section>
@@ -241,6 +258,7 @@ class DigupPeople extends LitElement {
       <section class="set-sec" id="pending-sec" aria-labelledby="people-pending"
                ?hidden=${p.pending.length === 0}>
         <span class="set-title" id="people-pending">${QUEUE_ICON} To review</span>
+        <p class="note">Faces with the closest candidate lead the queue — the top rows are the ones you can confirm.</p>
         <div id="pending-list">
           ${p.pending.map((item) => html`
             <div class="pending-item">
@@ -262,8 +280,40 @@ class DigupPeople extends LitElement {
       </section>`;
   }
 
+  #mergeStrip(p) {
+    // Finding-1 cure (2026-11-23): the merge picker renders ONCE per panel.
+    // The card used to carry a "Merge into…" select listing EVERY other
+    // person — N² options (37,513 cards × 37,512 options ≈ 1.4 billion nodes;
+    // the panel could not paint, answering "Nothing found yet" with 37k
+    // people in the store). Two selects in one strip = 2N options, linear.
+    // Merge is the human's act; the panel relays, the engine merges.
+    const label = (o) => `${personLabel(o)} (${o.count})`;
+    return html`
+      <div class="merge-strip">
+        <select class="merge-from" aria-label="Merge which person"
+                @change=${(ev) => { this.mergeFrom = Number(ev.target.value) || 0; this.mergeInto = 0; }}>
+          <option value="">Merge this person…</option>
+          ${p.persons.map((o) => html`<option value=${String(o.id)}>${label(o)}</option>`)}
+        </select>
+        <select class="merge-into" aria-label="into which person"
+                ?disabled=${!this.mergeFrom}
+                @change=${(ev) => { this.mergeInto = Number(ev.target.value) || 0; }}>
+          <option value="">into this person…</option>
+          ${p.persons.filter((o) => o.id !== this.mergeFrom).map(
+            (o) => html`<option value=${String(o.id)}>${label(o)}</option>`)}
+        </select>
+        <button type="button" class="merge-go"
+                ?disabled=${!this.mergeFrom || !this.mergeInto}
+                @click=${() => {
+                  const from = this.mergeFrom, into = this.mergeInto;
+                  this.mergeFrom = 0;
+                  this.mergeInto = 0;
+                  this.#emit("digup:merge", { into, from });
+                }}>Merge</button>
+      </div>`;
+  }
+
   #card(person, p) {
-    const others = p.persons.filter((x) => x.id !== person.id);
     const expanded = p.facesFor && p.facesFor.person === person.id;
     return html`
       <div class="person-card" id=${`person-${person.id}`}>
@@ -281,16 +331,8 @@ class DigupPeople extends LitElement {
         <span class="set-facts">
           <span class="badge ${person.count > 1 ? "ok" : "off"}">${person.count} photo${person.count === 1 ? "" : "s"}</span>
         </span>
-        <select class="person-merge" aria-label=${`Merge ${personLabel(person)} into…`}
-                ?disabled=${others.length === 0}
-                @change=${(ev) => {
-                  const into = Number(ev.target.value);
-                  ev.target.value = "";                       // the picker is one-shot
-                  if (into) this.#emit("digup:merge", { into, from: person.id });
-                }}>
-          <option value="">Merge into…</option>
-          ${others.map((o) => html`<option value=${String(o.id)}>${personLabel(o)}</option>`)}
-        </select>
+        <!-- (finding-1 cure 2026-11-23: the merge picker lives in the section strip,
+             not in the card — a card-side select listed EVERY other person, N² options.) -->
         <button class="person-delete" type="button"
                 title="Dissolve this person — their faces move to the review queue, no photo is deleted"
                 @click=${() => this.#emit("digup:delete", { person: person.id })}>Delete</button>

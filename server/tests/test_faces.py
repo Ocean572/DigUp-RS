@@ -109,7 +109,13 @@ def faces(faces_corpus, tmp_path_factory):
     folder of its own (the store is the scan's, the module's mutations are its story)."""
     index = tmp_path_factory.mktemp("faces-index")
     app = LiveApp(_cfg(index, (faces_corpus,)),
-                  config_dir=str(tmp_path_factory.mktemp("faces-config"))).start()
+                  config_dir=str(tmp_path_factory.mktemp("faces-config")),
+                  # The core law is the engine's default now (FACES.md 2026-11-23: a person
+                  # exists from 3 faces up — the daemon gates pin it). This suite pins the
+                  # SERVER's relay on the law-off shape (the corpus yields singleton
+                  # clusters), and by setting the knob it live-tests the argv chain:
+                  # env → faces.rs → faces-service `--faces-min-faces 1`.
+                  env_extra={"DIGUP_SERVER_FACE_MIN_FACES": "1"}).start()
     handle = Faces(app)
     try:
         yield handle

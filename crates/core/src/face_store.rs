@@ -470,33 +470,57 @@ impl FaceStore {
     }
 
     /// The persons as the clustering sees them: unit centroid + member count.
-    pub fn centroids(&self) -> Result<Vec<crate::face_cluster::Centroid>> {
+    /// Centroids with their person row ids — the pairing every writer must use,
+    /// because row ids are not `index + 1` once the core law's dissolve pass has
+    /// deleted persons (id gaps are normal after 2026-11-23).
+    pub fn centroids_with_ids(&self) -> Result<Vec<(i64, crate::face_cluster::Centroid)>> {
         let mut out = Vec::new();
         self.db.query(
-            "SELECT centroid, count, cover FROM persons ORDER BY id",
+            "SELECT id, centroid, count, cover FROM persons ORDER BY id",
             [],
             |r| {
-                let blob = r.blob(0).unwrap_or_default();
-                out.push(crate::face_cluster::Centroid {
-                    vec: vectors::floats_from_halves(&blob),
-                    count: r.int(1) as usize,
-                    cover: r.double(2) as f32,
-                });
+                let blob = r.blob(1).unwrap_or_default();
+                out.push((
+                    r.int(0),
+                    crate::face_cluster::Centroid {
+                        vec: vectors::floats_from_halves(&blob),
+                        count: r.int(2) as usize,
+                        cover: r.double(3) as f32,
+                    },
+                ));
                 Ok(())
             },
         )?;
         Ok(out)
     }
 
+    pub fn centroids(&self) -> Result<Vec<crate::face_cluster::Centroid>> {
+        Ok(self
+            .centroids_with_ids()?
+            .into_iter()
+            .map(|(_, c)| c)
+            .collect())
+    }
+
     /// One clustering pass over the pending queue (FACES.md §2: online centroid,
-    /// collision guard). A face that reaches no person opens a new one; an
-    /// ambiguous face stays queued for `pending-clusters` to show. Assignments,
-    /// centroids, counts and covers persist in one transaction. Returns the faces
-    /// that left the queue.
+    /// collision guard, the core law). A face that reaches no person opens a new
+    /// one; an ambiguous face stays queued for `pending-clusters` to show.
+    /// Assignments, centroids, counts and covers persist in one transaction.
+    /// Returns the faces that left the queue.
+    ///
+    /// The core law (FACES.md 2026-11-23 — Immich's `minFaces: 3`, the cure for
+    /// the fragmentation measured on the bench library: 195,604 faces became
+    /// 37,513 "people" because every singleton opened its own card): a person
+    /// exists from `min_faces` faces up. A centroid this pass opened with fewer
+    /// faces stays PROVISIONAL — its faces stay in the queue and re-cluster on
+    /// the next pass — and an unnamed person whose count fell below `min_faces`
+    /// is dissolved: its faces return to the queue. A NAMED person survives any
+    /// count — a human named it, the engine does not overrule that.
     pub fn run_clustering(
         &self,
         merge_threshold: f32,
         collision_margin: f32,
+        min_faces: usize,
         limit: usize,
     ) -> Result<usize> {
         let queue: Vec<(usize, Vec<f32>)> = self
@@ -504,21 +528,27 @@ impl FaceStore {
             .into_iter()
             .map(|(id, v)| (id as usize, v))
             .collect();
-        if queue.is_empty() {
-            return Ok(0);
-        }
-        let mut centroids = self.centroids()?;
-        let res =
-            crate::face_cluster::cluster(&queue, &mut centroids, merge_threshold, collision_margin);
+        let mut with_ids = self.centroids_with_ids()?;
+        let existing = with_ids.len();
+        let ids: Vec<i64> = with_ids.iter().map(|(id, _)| *id).collect();
+        let mut centroids: Vec<_> = with_ids.drain(..).map(|(_, c)| c).collect();
+        let res = if queue.is_empty() {
+            Vec::new()
+        } else {
+            crate::face_cluster::cluster(&queue, &mut centroids, merge_threshold, collision_margin)
+        };
         let mut done = 0usize;
         self.db.transaction(|| {
             let ts = now();
-            for ((face, _vector), assignment) in queue.iter().zip(res.iter().map(|(_, a)| a)) {
+            // Faces assigned to persons THIS PASS opened (centroid index → faces):
+            // their rows are written by the core law once the counts are final.
+            let mut opened: std::collections::BTreeMap<usize, Vec<i64>> = Default::default();
+            for ((face, _vector), assignment) in queue.iter().zip(res.iter().map(|(_, a)| *a)) {
                 let face = *face as i64;
                 match assignment {
-                    crate::face_cluster::Assignment::Merge(p) => {
-                        // persons are 1-based rows; the clustering indexed 0-based.
-                        let c = &centroids[*p];
+                    crate::face_cluster::Assignment::Merge(p) if p < existing => {
+                        // A person the store already had: its row exists, the update lands.
+                        let c = &centroids[p];
                         self.db.run(
                             "UPDATE persons SET centroid = ?1, count = ?2, cover = ?3 WHERE id = ?4",
                             [
@@ -529,37 +559,76 @@ impl FaceStore {
                                 } else {
                                     c.cover as f64
                                 }),
-                                Sql::Int(*p as i64 + 1),
+                                Sql::Int(ids[p]),
                             ],
                         )?;
                         self.db.run(
                             "UPDATE faces SET person = ?1 WHERE id = ?2",
-                            [Sql::Int(*p as i64 + 1), Sql::Int(face)],
+                            [Sql::Int(ids[p]), Sql::Int(face)],
                         )?;
                         self.db.run("DELETE FROM pending WHERE face = ?1", [Sql::Int(face)])?;
                         done += 1;
                     }
+                    crate::face_cluster::Assignment::Merge(p) => {
+                        opened.entry(p).or_default().push(face);
+                    }
                     crate::face_cluster::Assignment::New(i) => {
-                        // Reaches no person: opens its own, centroid = itself.
-                        // Existing persons are rows 1..=m; this pass appends
-                        // m+1, m+2… in index order, so the row id is i + 1.
-                        let c = &centroids[*i];
-                        self.db.run(
-                            "INSERT INTO persons(id, centroid, count, cover, created_at) VALUES (?1, ?2, 1, 100, ?3)",
-                            [Sql::Int(*i as i64 + 1), Sql::Blob(vectors::half_bytes(&c.vec)), Sql::Double(ts)],
-                        )?;
-                        self.db.run(
-                            "UPDATE faces SET person = ?1 WHERE id = ?2",
-                            [Sql::Int(*i as i64 + 1), Sql::Int(face)],
-                        )?;
-                        self.db.run("DELETE FROM pending WHERE face = ?1", [Sql::Int(face)])?;
-                        done += 1;
+                        opened.entry(i).or_default().push(face);
                     }
                     crate::face_cluster::Assignment::Deferred => {
                         // The collision guard's decision: the human decides
                         // (pending-clusters → confirm-person), the engine does not.
                     }
                 }
+            }
+            // The core law: a centroid this pass opened becomes a person row only
+            // from `min_faces` faces; below that it stays provisional — its faces
+            // never left the queue, nothing to undo. Row ids continue past the
+            // highest existing one in this pass's index order.
+            let mut next_id = ids.last().copied().unwrap_or(0) + 1;
+            for (idx, faces) in opened {
+                let c = &centroids[idx];
+                if c.count < min_faces {
+                    continue;
+                }
+                self.db.run(
+                    "INSERT INTO persons(id, centroid, count, cover, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    [
+                        Sql::Int(next_id),
+                        Sql::Blob(vectors::half_bytes(&c.vec)),
+                        Sql::Int(c.count as i64),
+                        Sql::Double(if c.cover == f32::MAX { 100.0 } else { c.cover as f64 }),
+                        Sql::Double(ts),
+                    ],
+                )?;
+                for face in faces {
+                    self.db.run(
+                        "UPDATE faces SET person = ?1 WHERE id = ?2",
+                        [Sql::Int(next_id), Sql::Int(face)],
+                    )?;
+                    self.db.run("DELETE FROM pending WHERE face = ?1", [Sql::Int(face)])?;
+                    done += 1;
+                }
+                next_id += 1;
+            }
+            // The dissolve post-pass: unnamed persons below the core law lose
+            // their card — `faces.person`'s FK (`ON DELETE SET NULL`) frees them,
+            // and they requeue at their scan stamps. Named persons are exempt.
+            let mut doomed: Vec<i64> = Vec::new();
+            self.db.query(
+                "SELECT id FROM persons WHERE count < ?1 AND name IS NULL ORDER BY id",
+                [Sql::Int(min_faces as i64)],
+                |r| {
+                    doomed.push(r.int(0));
+                    Ok(())
+                },
+            )?;
+            for id in doomed {
+                self.db.run(
+                    "INSERT INTO pending(face, ts) SELECT id, scanned_at FROM faces WHERE person = ?1",
+                    [Sql::Int(id)],
+                )?;
+                self.db.run("DELETE FROM persons WHERE id = ?1", [Sql::Int(id)])?;
             }
             Ok(done)
         })

@@ -167,9 +167,11 @@ fn clustering_groups_faces_by_their_vectors() {
         rec(0.7, 0.7),
     ];
     s.record_scan(scan_of("/p/a.jpg"), &faces, 1.0).unwrap();
-    let done = s.run_clustering(0.5, 0.10, 100).unwrap();
+    let done = s.run_clustering(0.5, 0.10, 1, 100).unwrap();
     // The ambiguous face (0.7,0.7) sits ~0.707 from P0 and ~0.742 from P1 — above
     // threshold at both, inside the collision margin: the guard defers it.
+    // (min_faces = 1 here: this gate pins the collision guard, not the core law —
+    // the core law's own gate is `the_core_law_opens_persons_only_from_min_faces`.)
     let c = s.counts().unwrap();
     assert_eq!(c.faces, 4);
     assert_eq!(c.persons, 2);
@@ -208,7 +210,7 @@ fn verbs_the_person_surface_needs_work_on_the_store() {
         1.0,
     )
     .unwrap();
-    s.run_clustering(0.5, 0.10, 100).unwrap();
+    s.run_clustering(0.5, 0.10, 1, 100).unwrap();
     let persons = s.list_persons().unwrap();
     let (a, b) = (persons[0].id, persons[1].id);
 
@@ -243,7 +245,7 @@ fn verbs_the_person_surface_needs_work_on_the_store() {
 
     // confirm-person: a queued face joins a named person
     let q = s.pending_faces(1).unwrap();
-    s.run_clustering(0.5, 0.10, 1).unwrap();
+    s.run_clustering(0.5, 0.10, 1, 1).unwrap();
     let persons = s.list_persons().unwrap();
     let p = persons[0].id;
     let rest: Vec<_> = s
@@ -287,9 +289,62 @@ fn ghost_rows_prune_with_the_scope_the_main_index_keeps() {
     let c = s.counts().unwrap();
     assert_eq!((c.faces, c.pending), (1, 1));
     // Person counts follow the live rows after a cascade (recount ran inside).
-    s.run_clustering(0.5, 0.10, 100).unwrap();
+    s.run_clustering(0.5, 0.10, 1, 100).unwrap();
     assert_eq!(s.counts().unwrap().persons, 1);
     assert_eq!(s.list_persons().unwrap()[0].count, 1);
+}
+
+#[test]
+fn the_core_law_opens_persons_only_from_min_faces_up() {
+    // Immich's `minFaces` law (FACES.md 2026-11-23 — the measured cure for the
+    // bench fragmentation: 195,604 faces → 37,513 cards, 46 % singleton junk).
+    let s = tmp_store("core-law");
+    // A 3-face person and a 2-face provisional pair.
+    s.record_scan(
+        scan_of("/p/a.jpg"),
+        &[
+            rec(1.0, 0.05),
+            rec(1.0, -0.05),
+            rec(1.05, 0.03),
+            rec(0.0, 1.0),
+        ],
+        1.0,
+    )
+    .unwrap();
+    s.record_scan(scan_of("/p/b.jpg"), &[rec(0.05, 1.0)], 2.0)
+        .unwrap();
+    let done = s.run_clustering(0.5, 0.10, 3, 100).unwrap();
+    assert_eq!(done, 3, "only the 3-face person leaves the queue");
+    let c = s.counts().unwrap();
+    assert_eq!((c.persons, c.assigned, c.pending), (1, 3, 2));
+    assert_eq!(s.list_persons().unwrap()[0].count, 3);
+
+    // The dissolve post-pass: raise the law above a person's count — the
+    // UNNAMED person loses the card and its faces return to the queue.
+    let done = s.run_clustering(0.5, 0.10, 5, 100).unwrap();
+    assert_eq!(
+        done, 0,
+        "the queued pair never reaches 5: nothing to assign"
+    );
+    let c = s.counts().unwrap();
+    assert_eq!(
+        (c.persons, c.assigned, c.pending),
+        (0, 0, 5),
+        "dissolved: all faces requeued"
+    );
+
+    // A NAMED person survives any count — the human's act outranks the law.
+    s.run_clustering(0.5, 0.10, 3, 100).unwrap();
+    let persons = s.list_persons().unwrap();
+    assert_eq!(persons.len(), 1);
+    s.name_person(persons[0].id, "Angela", 3.0).unwrap();
+    s.run_clustering(0.5, 0.10, 5, 100).unwrap();
+    let c = s.counts().unwrap();
+    assert_eq!(
+        (c.persons, c.named, c.pending),
+        (1, 1, 2),
+        "named: exempt from dissolve"
+    );
 }
 
 #[test]

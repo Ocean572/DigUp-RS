@@ -207,9 +207,11 @@ Fixture cosine rows (`w600k_mbf`, Rust pipeline, the facts the gate pins):
 
 Gate threshold **0.45** — at the default 0.5 the 2013 photo stands alone
 (4 persons, the purity curve's point); at 0.45 the three Merkel files form one
-person (cover 0.860), Obama and Trump stand alone: **5 faces, 3 persons, 0
-pending**. The 0.5-vs-0.45 fact is the fixture row behind the merge-threshold
-knob; the server does not invent it.
+person (cover 0.860). With the core law's engine default (`min_faces: 3`,
+2026-11-23 below) the gate answers **5 faces, 1 person, 2 pending**: the
+Merkel trio clears the law, and the Obama and Trump singletons stay QUEUED —
+they are review material, not cards. The 0.5-vs-0.45 fact is the fixture row
+behind the merge-threshold knob; the server does not invent it.
 
 Daemon facts (measured, same run): scan events = one `face-scan` per file in
 readdir order (order is a crawl artifact — the gate asserts counts, not order);
@@ -393,3 +395,70 @@ identity — `ORDER BY f.path, f.id`: faces inside one file keep their detect or
 by path, so the same store clusters identically every run, pool scheduling and all. The lesson
 joins the tie-order law: **anything a pool touches must be pinned on identity, never on when it
 happened to run.**
+
+### The core law, the sorted queue, the N² panel (2026-11-23, the Immich cure)
+
+**The full-library scan (measured, ai-ubuntu-computer, adaface_ir_101, CPU pool of 8):**
+133,789 files · 195,604 faces · **37,513 persons** · 23,492 queued, 11.2 h at 3.31 photos/s
+(764–790 % CPU). The scan ran the whole library in one unbounded session — the unbounded-scan
+law held end to end.
+
+**The diagnosis.** The user's screen: "people nothing found yet, a ton to review, all with no
+close person". Two causes, both measured:
+1. **37,513 cards is unpaintable, and the panel made it worse than unpaintable**: every person
+   card carried a "Merge into…" select listing EVERY other person — 37,513 × 37,512 options
+   ≈ **1.4 billion DOM nodes**. The panel cannot paint that; it answered "Nothing found yet"
+   with 37k healthy persons in the store. The server panel carried the identical pattern.
+2. **Over-fragmentation is the core-point absence, not the threshold.** Re-clustering the whole
+   store on copies (live store untouched):
+
+   | merge threshold | persons | count-1 + count-2 cards | after core law ≥3 | faces covered | queue |
+   |---|---|---|---|---|---|
+   | 0.50 (shipped) | 37,513 | 46 % at 0.40 ↓ | ~11–13 k | — | — |
+   | 0.45 | 31,163 | 22,838 | **8,325** | 142,019 | 53,585 |
+   | 0.40 | 24,887 | 17,334 | **7,553** | 150,103 | 45,501 |
+
+   Lowering the threshold barely collapses the headcount (37.5k → 24.9k, and 46 % of the
+   remaining cards are 1- and 2-face clusters). **Immich's default maxDistance 0.5 IS our 0.5
+   similarity line** (`facialRecognition: {minScore: 0.7, maxDistance: 0.5, minFaces: 3}`,
+   docs.immich.app) — their libraries do not fragment because of `minFaces: 3`: singletons
+   never become persons; they stay in a re-processed pool. The twin-family guide (0.40–0.45)
+   is a knob for lookalike libraries, not the fragmentation cure. The merge line stays 0.5.
+
+**The engine cure (face_store::run_clustering, FACES.md §2 law extended).** A `min_faces`
+parameter (default 3, `--faces-min-faces`, `DIGUP_SERVER_FACE_MIN_FACES`):
+* a centroid a pass OPENS with fewer than `min_faces` faces stays **provisional** — its faces
+  never leave the queue, nothing is written;
+* the dissolve post-pass deletes UNNAMED persons whose count fell below `min_faces` (the FK
+  `ON DELETE SET NULL` frees the faces, which requeue at their scan stamps); a NAMED person
+  survives any count — the human's act outranks the law;
+* the service loops the pass until the queue stops shrinking (≤ 6): dissolved faces merged
+  with centroids that ARE persons now, so the next pass absorbs them (Immich re-runs its
+  clusterer nightly for the same reason);
+* person row ids are read via `centroids_with_ids()` — dissolve leaves id gaps, so `index+1`
+  is not a row id and every writer maps through ids (the pending verb's candidates too).
+
+**The queue is best-match-first (the user's law 2026-11-23).** The pending verb scores a
+window of 1,000 queued faces against every centroid and answers the top 500 by their BEST
+candidate cosine, descending — faces with close candidates lead, faces with no close person
+sink (and stay queued forever; nothing expires). Ties break by face identity — the pool
+determinism law. `--faces-min-score` (default 0.5, Immich runs 0.7) filters the record side
+of the scan — the detector keeps its 0.5 SCRFD gate (parity seam, DET_THRESH stays); faces
+below the floor are never recorded and never surface in the queue.
+
+**The panel cure (finding 1, both UIs).** The merge picker is ONE strip per panel (source
+select + target select + Merge button = 2N options, linear — never N² per card); the grid
+paints at most `GRID_CAP = 300` cards, the most-photo people first (a cap on PAINT — the
+store keeps every person; the page scrolls; no scroller, no height cap — the round-7 panel
+law). The review queue's copy tells the truth: closest candidates first.
+
+**Gates.** The daemon round-trip gate re-pinned on the core law: scan answers assigned 3
+(the trio; the singletons queue), counts 1 person / 2 pending, the queue answers sorted
+(best-cos descending, all under the merge line — "no close person" IS the honest shape),
+confirm-person is the human override, the cluster pass keeps a no-close singleton queued
+(it opens no card and never disappears), delete + cluster rebuilds the shape from an EMPTY
+persons table (the trio re-forms, the singletons queue). Core tests: 12/12 with
+`the_core_law_opens_persons_only_from_min_faces_up` (opens-only-from-3, dissolve, named
+exemption). Daemon gates 5/5 live; vitest 79/79 (the strip test pins 2 selects + source-
+exclusion + no card-side select); node 20/20; clippy zero both shapes (the faces shape
+includes digup-server).

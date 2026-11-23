@@ -108,6 +108,8 @@ select.people-emb { margin-top: 4px; }
 
 /* Person cards: the auto-fill grid, the crop window, the control rows (the server panel's law). */
 .people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 10px; }
+.people-merge-strip { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.people-merge-strip select { flex: 1 1 0; min-width: 0; }
 .person-card { display: grid; gap: 8px; padding: 10px; min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
 .person-card .confirm { margin: 0 -10px -10px; border-radius: 0 0 10px 10px; }
 .crop { position: relative; display: block; overflow: hidden; width: 100%; aspect-ratio: 1 / 1; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; }

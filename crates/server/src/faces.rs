@@ -208,6 +208,10 @@ pub fn faces_call(
         format_gf64(server.faces_merge),
         "--collision-margin".to_string(),
         format_gf64(server.faces_collision),
+        "--faces-min-faces".to_string(),
+        server.faces_min_faces.to_string(),
+        "--faces-min-score".to_string(),
+        format_gf64(server.faces_min_score),
         "--model-idle".to_string(),
         format_gf64(server.faces_model_idle),
     ];

@@ -322,7 +322,10 @@ engine's counts. Synchronous on the engine's clock: detection is ~4.4 s/photo on
 tree is hours — the ceiling is `DIGUP_SERVER_FACE_SCAN_TIMEOUT_S` (3600). One scan at a time
 (`flock` on `.digup-server.faces.writer.lock` beside the index, the index writer's law).
 Clustering runs at the scan's tail; the knobs are `DIGUP_SERVER_FACE_MERGE` (0.5) and
-`DIGUP_SERVER_FACE_COLLISION` (0.10).
+`DIGUP_SERVER_FACE_COLLISION` (0.10), and the core law `DIGUP_SERVER_FACE_MIN_FACES` (3 — a
+person exists from this many faces up, lower counts stay in the review queue; Immich's
+`minFaces` law) with the record-side detection floor `DIGUP_SERVER_FACE_MIN_SCORE` (0.5;
+Immich runs 0.7).
 
 The scan reply's fields are the engine's, in its own words: `files` = files decoded by **this**
 scan; `faces` = faces this scan recorded; `skipped` = files whose decode failed (a failed file

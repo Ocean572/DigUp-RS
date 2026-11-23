@@ -52,6 +52,18 @@ pub struct FaceServiceConfig {
     /// `--exclude`, the main index's own law — the crawler applies a skip inside
     /// chosen folders and walks a folder chosen INSIDE a skipped one whole).
     pub excluded_folders: Vec<String>,
+    /// The core law (FACES.md 2026-11-23 — Immich's `minFaces: 3`, the measured
+    /// cure for the bench-library fragmentation: 195,604 faces → 37,513 cards at
+    /// 0.5, of which 46 % were singleton/pair junk). A person exists from this
+    /// many faces up; lower counts stay in the review queue. Default 3, Immich's
+    /// shipped default; `--faces-min-faces` moves it.
+    pub min_faces: usize,
+    /// The detection-score floor for RECORDED faces (Immich runs its detector at
+    /// 0.7, we record at the SCRFD gate's own 0.5). The detector seam stays at
+    /// 0.5 — parity — this knob filters on the record side, so a deployment can
+    /// skip background faces from low-confidence detections.
+    /// `--faces-min-score` moves it; default 0.5 changes nothing.
+    pub min_score: f32,
 }
 
 struct State {
@@ -127,6 +139,8 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             consent: config.consent.clone(),
             workers: config.workers,
             excluded_folders: config.excluded_folders.clone(),
+            min_faces: config.min_faces,
+            min_score: config.min_score,
         },
         scrfd: None,
         embedder: None,
@@ -305,16 +319,29 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
     match op {
         "scan" => scan(state, request),
         "cluster" => {
-            let assigned = state
-                .store
-                .lock()
-                .unwrap()
-                .run_clustering(
-                    state.config.merge_threshold,
-                    state.config.collision_margin,
-                    usize::MAX,
-                )
-                .map_err(|e| e.to_string())?;
+            // Multi-pass clustering (FACES.md 2026-11-23): the core law dissolves
+            // sub-min_faces persons and requeues their faces; those faces merged
+            // with centroids that ARE persons now, so the next pass absorbs them
+            // (Immich re-runs its clusterer nightly for the same reason). Passes
+            // repeat until the queue stops shrinking — bounded at 6.
+            let mut assigned = 0usize;
+            for _ in 0..6 {
+                let n = state
+                    .store
+                    .lock()
+                    .unwrap()
+                    .run_clustering(
+                        state.config.merge_threshold,
+                        state.config.collision_margin,
+                        state.config.min_faces,
+                        usize::MAX,
+                    )
+                    .map_err(|e| e.to_string())?;
+                assigned += n;
+                if n == 0 {
+                    break;
+                }
+            }
             Ok(serde_json::json!({"ok": true, "assigned": assigned}))
         }
         "persons" => {
@@ -417,45 +444,75 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             Ok(serde_json::json!({"ok": true}))
         }
         "pending" => {
-            // The collision guard's review queue: each queued face with its top
-            // candidates (the engine's own cosine against the centroids — the
-            // evidence, not a score invented here).
+            // The collision guard's review queue, BEST MATCH FIRST (the user's
+            // law 2026-11-23: "faces with close matches should be at the top —
+            // I can't scroll through that many faces"). A window of the queue is
+            // scored against every centroid (the engine's own cosines — the
+            // evidence, not a score invented here), sorted by its best candidate
+            // descending, ties broken by face identity — the pool's determinism
+            // law: never the order things ran. Faces below the deployment's
+            // min-score stay queued and unseen (Immich's minScore law — they are
+            // background-face noise, not review material).
+            const WINDOW: usize = 1_000;
+            const PAGE: usize = 500;
             let queue = state
                 .store
                 .lock()
                 .unwrap()
-                .pending_faces(500)
+                .pending_faces(WINDOW)
                 .map_err(|e| e.to_string())?;
             let centroids = state
                 .store
                 .lock()
                 .unwrap()
-                .centroids()
+                .centroids_with_ids()
                 .map_err(|e| e.to_string())?;
-            let persons = state
+            let names: std::collections::HashMap<i64, Option<String>> = state
                 .store
                 .lock()
                 .unwrap()
                 .list_persons()
-                .map_err(|e| e.to_string())?;
-            let mut out = Vec::new();
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|p| (p.id, p.name))
+                .collect();
+            let mut scored: Vec<ScoredFace> = Vec::with_capacity(queue.len());
             for (face, vector) in queue {
-                let mut candidates: Vec<(i64, f64)> = centroids
-                    .iter()
-                    .enumerate()
-                    .map(|(pid, c)| {
-                        (
-                            pid as i64 + 1,
-                            digup_core::face_cluster::cosine(&vector, &c.vec) as f64,
-                        )
-                    })
-                    .collect();
-                candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                let mut top: Vec<(i64, f32)> = Vec::with_capacity(4);
+                for (id, c) in &centroids {
+                    let cos = digup_core::face_cluster::cosine(&vector, &c.vec);
+                    if top.len() < 3 || cos > top[2].1 {
+                        top.push((*id, cos));
+                        top.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        top.truncate(3);
+                    }
+                }
+                scored.push((top.first().map(|t| t.1).unwrap_or(f32::MIN), face, top));
+            }
+            scored.sort_by(|a, b| {
+                b.0.partial_cmp(&a.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.1.cmp(&b.1))
+            });
+            let mut out = Vec::new();
+            for (_, face, top) in scored {
+                if out.len() == PAGE {
+                    break;
+                }
                 let row = row_of(state, face)?;
+                if row["score"]
+                    .as_f64()
+                    .map(|s| s < state.config.min_score as f64)
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
                 out.push(serde_json::json!({
                     "face": row,
-                    "candidates": candidates.iter().take(3).map(|(pid, cos)| {
-                        serde_json::json!({"person": pid, "name": persons.iter().find(|p| p.id == *pid).and_then(|p| p.name.clone()), "cos": cos})
+                    "candidates": top.iter().map(|(pid, cos)| {
+                        serde_json::json!({"person": pid, "name": names.get(pid).cloned().flatten(), "cos": cos})
                     }).collect::<Vec<_>>(),
                 }));
             }
@@ -680,16 +737,24 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
     });
     let (scanned, faces_total, skipped) = *sums.lock().expect("the sums lock");
     state.last_use = Instant::now();
-    let assigned = state
-        .store
-        .lock()
-        .unwrap()
-        .run_clustering(
-            state.config.merge_threshold,
-            state.config.collision_margin,
-            usize::MAX,
-        )
-        .map_err(|e| e.to_string())?;
+    let mut assigned = 0usize;
+    for _ in 0..6 {
+        let n = state
+            .store
+            .lock()
+            .unwrap()
+            .run_clustering(
+                state.config.merge_threshold,
+                state.config.collision_margin,
+                state.config.min_faces,
+                usize::MAX,
+            )
+            .map_err(|e| e.to_string())?;
+        assigned += n;
+        if n == 0 {
+            break;
+        }
+    }
     let c = state
         .store
         .lock()
@@ -729,6 +794,13 @@ fn decode_and_scan(
         .map_err(|e| e.to_string())?;
     let mut records = Vec::new();
     for f in &faces {
+        // The deployment's detection-score floor (Immich's minScore law): the
+        // detector keeps its 0.5 SCRFD gate (parity), the record side applies
+        // the knob — low-confidence detections (background faces, posters) never
+        // become faces, so they never become cards or queue entries.
+        if f.score < pool.config.min_score {
+            continue;
+        }
         let crop = digup_runtime::face::norm_crop(&img.pixels, img.width, img.height, f);
         let vector = pool.emb.embed(&crop).map_err(|e| e.to_string())?;
         records.push(FaceRecord {
@@ -773,6 +845,10 @@ fn workers_for(configured: usize, photos: usize) -> usize {
     };
     workers.min(photos).max(1)
 }
+
+/// One queued face scored for the review queue: (best candidate cosine, face id,
+/// top-3 candidates as (person id, cosine)) — the engine's cosines, relayed.
+type ScoredFace = (f32, i64, Vec<(i64, f32)>);
 
 fn row_of(state: &State, id: i64) -> Result<Value, String> {
     let mut row: Option<Value> = None;

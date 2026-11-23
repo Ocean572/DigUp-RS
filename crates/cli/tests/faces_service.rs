@@ -163,7 +163,10 @@ fn faces_service_verbs_round_trip_on_the_public_fixtures() {
     assert_eq!(reply["files"], 5, "five photos scanned: {reply}");
     assert_eq!(reply["faces"], 5, "one face each: {reply}");
     assert_eq!(reply["skipped"], 0, "every fixture decodes: {reply}");
-    assert_eq!(reply["assigned"], 5, "every face joins a person: {reply}");
+    assert_eq!(
+        reply["assigned"], 3,
+        "the core law: the trio joins, the singletons stay queued: {reply}"
+    );
     let scan_events = daemon
         .events
         .iter()
@@ -188,32 +191,34 @@ fn faces_service_verbs_round_trip_on_the_public_fixtures() {
         "clustering has nothing new: {rescan}"
     );
 
-    // 2. counts + the persons the clustering opened. Measured fixture facts
-    //    (rows pinned in FACES.md): the 2005 and 2021 files are the SAME
-    //    source photograph (cos 1.0000 — they merge exactly), and the real
-    //    2008↔2013 pair measures 0.4761 with w600k_mbf — it joins at the
-    //    0.45 threshold this daemon runs, not at 0.5. Three people, one of
-    //    them the three-file Merkel cluster.
+    // 2. counts + the persons the clustering opened (core law, FACES.md
+    //    2026-11-23: a person exists from 3 faces up — Immich's `minFaces` law,
+    //    the measured cure for the bench fragmentation). Measured fixture facts
+    //    (rows pinned in FACES.md): the 2005 and 2021 files are the SAME source
+    //    photograph (cos 1.0000 — they merge exactly), and the real cross-age
+    //    pair 2005/2021 ↔ 2013 measures 0.4761 with w600k_mbf — it joins at the
+    //    0.45 threshold this daemon runs, not at 0.5. One person: the three-file
+    //    Merkel cluster; the Obama and Trump singletons are queued, not cards.
     let counts = daemon.request("counts", json!({}), 60);
     assert_eq!(counts["ok"], true, "{counts}");
     assert_eq!(counts["faces"], 5);
-    assert_eq!(counts["persons"], 3, "three people: {counts}");
+    assert_eq!(
+        counts["persons"], 1,
+        "the core law keeps singletons out of the cards: {counts}"
+    );
     assert_eq!(counts["named"], 0);
-    assert_eq!(counts["pending"], 0);
+    assert_eq!(
+        counts["pending"], 2,
+        "the singletons are review material: {counts}"
+    );
     assert_eq!(counts["models"]["emb"], "w600k_mbf.onnx");
     let persons = daemon.request("persons", json!({}), 60);
     let rows = persons["persons"].as_array().expect("a persons array");
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 1);
     let merkel = rows
         .iter()
         .find(|p| p["count"] == json!(3))
         .expect("the three-photo person is one cluster");
-    let singletons: Vec<i64> = rows
-        .iter()
-        .filter(|p| p["count"] == json!(1))
-        .map(|p| p["id"].as_i64().expect("a person id"))
-        .collect();
-    assert_eq!(singletons.len(), 2);
 
     // 3. name-person rides the store and shows in the list.
     let merkel_id = merkel["id"].as_i64().expect("a person id");
@@ -266,38 +271,122 @@ fn faces_service_verbs_round_trip_on_the_public_fixtures() {
         "cosine ranks: {similar}"
     );
 
-    // 6. merge-persons, then delete-person: the faces are evidence, they queue.
-    let merged = daemon.request(
-        "merge",
-        json!({"into": singletons[1], "from": singletons[0]}),
+    // 6. the review queue, BEST MATCH FIRST (the user's law 2026-11-23: "faces
+    //    with close matches should be at the top — I can't scroll through that
+    //    many"). The two queued singletons answer with the engine's real cosines
+    //    against the one person — all under the merge line, "no close person"
+    //    is the honest shape — sorted by their best candidate descending, ties
+    //    broken by face identity (the pool determinism law).
+    let pending = daemon.request("pending", json!({}), 60);
+    let queue = pending["pending"].as_array().expect("a queue");
+    assert_eq!(pending["count"], 2, "{pending}");
+    assert_eq!(queue.len(), 2);
+    let best = |row: &serde_json::Value| row["candidates"][0]["cos"].as_f64().expect("a cos");
+    assert!(
+        best(&queue[0]) >= best(&queue[1]),
+        "the faces with the closest candidates sort to the top: {pending}"
+    );
+    for row in queue {
+        assert!(
+            best(row) < 0.45,
+            "the engine does not guess: these faces have no close person: {pending}"
+        );
+        assert_eq!(
+            row["candidates"][0]["person"], merkel["id"],
+            "the only candidate is the one person: {pending}"
+        );
+        assert_eq!(
+            row["candidates"][0]["name"], "Angela",
+            "the candidate carries the person's name: {pending}"
+        );
+    }
+
+    // 7. confirm-person is the human's override of the engine's refusal: the
+    //    Obama face joins the named person at a cosine the clustering refused
+    //    (below the merge line — the human decides, the engine relays). And the
+    //    cluster pass keeps the REMAINING singleton queued: a face with no
+    //    close person never opens a card and never disappears (the core law's
+    //    review shape — the exact screen the user saw on the bench library).
+    let face_of = |row: &serde_json::Value| row["face"]["id"].as_i64().expect("a face id");
+    let obama = queue
+        .iter()
+        .find(|row| {
+            row["face"]["path"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Obama")
+        })
+        .expect("the queued Obama face");
+    let confirmed = daemon.request(
+        "confirm",
+        json!({"face": face_of(obama), "person": merkel_id}),
         60,
     );
-    assert_eq!(merged["ok"], true, "{merged}");
-    assert_eq!(daemon.request("counts", json!({}), 60)["persons"], 2);
-    let deleted = daemon.request("delete", json!({"person": singletons[1]}), 60);
+    assert_eq!(confirmed["ok"], true, "{confirmed}");
+    let counts = daemon.request("counts", json!({}), 60);
+    assert_eq!(
+        (counts["persons"].as_i64(), counts["pending"].as_i64()),
+        (Some(1), Some(1)),
+        "{counts}"
+    );
+    let reclustered = daemon.request("cluster", json!({}), 60);
+    assert_eq!(
+        reclustered["assigned"], 0,
+        "the last singleton has no close person: it stays queued, it opens no card: {reclustered}"
+    );
+    let counts = daemon.request("counts", json!({}), 60);
+    assert_eq!(
+        (counts["persons"].as_i64(), counts["pending"].as_i64()),
+        (Some(1), Some(1)),
+        "{counts}"
+    );
+    let trump_queue = daemon.request("pending", json!({}), 60);
+    let trump = &trump_queue["pending"].as_array().expect("a queue")[0];
+    assert!(
+        trump["face"]["path"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Trump"),
+        "the queued face after the confirm is the Trump photo: {trump_queue}"
+    );
+    let confirmed = daemon.request(
+        "confirm",
+        json!({"face": face_of(trump), "person": merkel_id}),
+        60,
+    );
+    assert_eq!(confirmed["ok"], true, "{confirmed}");
+    let counts = daemon.request("counts", json!({}), 60);
+    assert_eq!(
+        (counts["assigned"].as_i64(), counts["pending"].as_i64()),
+        (Some(5), Some(0)),
+        "{counts}"
+    );
+
+    // 8. delete-person: the human dissolves the card — every face is evidence
+    //    again — and one cluster press rebuilds exactly the core-law shape from
+    //    an EMPTY persons table: the Merkel trio becomes a person, the
+    //    singletons stay queued (the cluster verb from zero, convergence pinned).
+    let deleted = daemon.request("delete", json!({"person": merkel_id}), 60);
     assert_eq!(deleted["ok"], true, "{deleted}");
+    let counts = daemon.request("counts", json!({}), 60);
+    assert_eq!(
+        (counts["persons"].as_i64(), counts["pending"].as_i64()),
+        (Some(0), Some(5)),
+        "{counts}"
+    );
+    let reclustered = daemon.request("cluster", json!({}), 60);
+    assert_eq!(
+        reclustered["assigned"], 3,
+        "the trio re-forms, the singletons stay queued: {reclustered}"
+    );
     let counts = daemon.request("counts", json!({}), 60);
     assert_eq!(
         (counts["persons"].as_i64(), counts["pending"].as_i64()),
         (Some(1), Some(2)),
         "{counts}"
     );
-    let reclustered = daemon.request("cluster", json!({}), 60);
-    assert_eq!(
-        reclustered["assigned"], 2,
-        "the two queue and open again: {reclustered}"
-    );
-    assert_eq!(daemon.request("counts", json!({}), 60)["persons"], 3);
 
-    // 7. pending-clusters is empty here (the fixtures are cleanly separated) —
-    //    the review queue answers its shape.
-    let pending = daemon.request("pending", json!({}), 60);
-    assert_eq!(
-        pending["count"], 0,
-        "no collisions on the fixtures: {pending}"
-    );
-
-    // 8. the ghost-row cascade: no roots → every face row is outside scope.
+    // 9. the ghost-row cascade: no roots → every face row is outside scope.
     let pruned = daemon.request("prune", json!({"roots": []}), 60);
     assert_eq!(pruned["ok"], true, "{pruned}");
     assert_eq!(pruned["pruned"], 5, "{pruned}");
@@ -312,7 +401,7 @@ fn faces_service_verbs_round_trip_on_the_public_fixtures() {
         "the store emptied: {counts}"
     );
 
-    // 9. quit answers, then the process exits clean.
+    // 10. quit answers, then the process exits clean.
     daemon.quit();
 }
 
@@ -339,7 +428,10 @@ fn faces_service_scan_with_named_workers_answers_the_same_fields() {
     assert_eq!(reply["files"], 5, "five photos scanned: {reply}");
     assert_eq!(reply["faces"], 5, "one face each: {reply}");
     assert_eq!(reply["skipped"], 0, "every fixture decodes: {reply}");
-    assert_eq!(reply["assigned"], 5, "every face joins a person: {reply}");
+    assert_eq!(
+        reply["assigned"], 3,
+        "the core law: the trio joins, the singletons stay queued: {reply}"
+    );
     let mut paths: Vec<String> = daemon
         .events
         .iter()

@@ -127,23 +127,37 @@ describe("digup-people", () => {
       .toBe("/api/v1/media/bbb/preview?pixels=256");
   });
 
-  it("the card controls: the name rides the rename, the merge picker names the OTHER people, Delete emits", async () => {
+  it("the card controls: the name rides the rename, the merge strip is ONE strip (2 selects, not N² per card), Delete emits", async () => {
     el = await mount(CONSENTED);
     const [card1, card2] = [...el.shadowRoot.querySelectorAll("#people-grid .person-card")];
     expect(card1.querySelector(".person-name").value).toBe("Angela");
     expect(card2.querySelector(".person-name").getAttribute("placeholder")).toBe("Person 2");
-    const names = [...card1.querySelectorAll(".person-merge option")].map((o) => o.textContent);
-    expect(names).toEqual(["Merge into…", "Person 2"]);   // never itself
+    // Finding-1 cure (2026-11-23): NO merge select in any card — the picker is
+    // one strip per panel: two selects = 2N options, never N² (the 37k-card
+    // panel answered "Nothing found yet" at 1.4 billion option nodes).
+    expect(card1.querySelector("select")).toBe(null);
+    const strip = el.shadowRoot.querySelector(".merge-strip");
+    const from = strip.querySelector(".merge-from");
+    const into = strip.querySelector(".merge-into");
+    expect([...from.querySelectorAll("option")].map((o) => o.textContent))
+      .toEqual(["Merge this person…", "Angela (2)", "Person 2 (1)"]);
+    expect(into.disabled).toBe(true);                          // a source must be chosen first
     let seen = onceEvent(el, "digup:name");
     card1.querySelector(".person-name").value = "Angela M";
     card1.querySelector(".person-name").dispatchEvent(new Event("change"));
     expect((await seen).detail).toEqual({ person: 1, name: "Angela M" });
+    from.value = "1";
+    from.dispatchEvent(new Event("change"));
+    await el.updateComplete;                                     // Lit state re-render is a microtask
+    expect([...into.querySelectorAll("option")].map((o) => o.textContent))
+      .toEqual(["into this person…", "Person 2 (1)"]);         // the target excludes the source
+    expect(into.disabled).toBe(false);
     seen = onceEvent(el, "digup:merge");
-    const pick = card1.querySelector(".person-merge");
-    pick.value = "2";
-    pick.dispatchEvent(new Event("change"));
+    into.value = "2";
+    into.dispatchEvent(new Event("change"));
+    await el.updateComplete;                                     // the Merge button wakes
+    strip.querySelector(".merge-go").click();
     expect((await seen).detail).toEqual({ into: 2, from: 1 });
-    expect(pick.value).toBe("");                          // one-shot picker
     seen = onceEvent(el, "digup:delete");
     card2.querySelector(".person-delete").click();
     expect((await seen).detail).toEqual({ person: 2 });

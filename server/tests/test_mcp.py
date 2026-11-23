@@ -32,9 +32,13 @@ SCOPE_WORDS = ("that is this server's read-scope token; indexing and estimating 
 @pytest.fixture(scope="module")
 def mcp_open(corpus, index, tmp_path_factory):
     """No tokens named: the gate is inert, so key-free reads — and the admin tools
-    riding the same openness — are what an inert deployment must answer."""
+    riding the same openness — are what an inert deployment must answer.
+    (FACE_MIN_FACES=1: the people-scan law below pins the singleton shape —
+    the core law is the engine's default and pinned by the daemon gates; the
+    suite relay runs the law-off deployment, testing the knob chain live.)"""
     with live_server(_cfg(index, (corpus,)),
-                     config_dir=str(tmp_path_factory.mktemp("mcp-open-config"))) as c:
+                     config_dir=str(tmp_path_factory.mktemp("mcp-open-config")),
+                     env_extra={"DIGUP_SERVER_FACE_MIN_FACES": "1"}) as c:
         yield c
 
 
@@ -43,7 +47,8 @@ def mcp_scoped(corpus, index, tmp_path_factory):
     with live_server(_cfg(index, (corpus,)),
                      config_dir=str(tmp_path_factory.mktemp("mcp-scoped-config")),
                      env_extra={"DIGUP_SERVER_TOKEN": READ,
-                                "DIGUP_SERVER_ADMIN_TOKEN": ADMIN}) as c:
+                                "DIGUP_SERVER_ADMIN_TOKEN": ADMIN,
+                                "DIGUP_SERVER_FACE_MIN_FACES": "1"}) as c:
         yield c
 
 

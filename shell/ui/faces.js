@@ -11,6 +11,10 @@
 "use strict";
 
 const DETECTOR = "scrfd_10g_bnkps.onnx";
+// The panel paints at most this many person cards (finding-1 cure 2026-11-23,
+// measured on the bench library: a full 37k-card grid is unpaintable — the
+// cap is on PAINT, the store keeps every person; most-photo people first).
+const GRID_CAP = 300;
 const fInvoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 const fAsk = (request) => fInvoke("ask", { request });
 const fURL = (path) => window.__TAURI__.core.convertFileSrc(path);
@@ -21,6 +25,7 @@ const fURL = (path) => window.__TAURI__.core.convertFileSrc(path);
 const People = {
   consented: false, record: null, models: [], counts: null,
   persons: [], pending: [],
+  mergeFrom: 0, mergeInto: 0,
   scan: null,                       // the last finished scan's {files,faces,skipped,fresh,assigned}
   scanning: false, progress: null,  // the engine's scan events, relayed as they stream
   ack: false, embModel: null, download: null,
@@ -140,7 +145,7 @@ async function peopleWithdraw() {
   People.withdrawing = false;
   try {
     await fInvoke("faces_consent", { accept: false });
-    Object.assign(People, { consented: false, record: null, counts: null, persons: [], pending: [], scan: null, facesFor: null, openId: null });
+    Object.assign(People, { consented: false, record: null, counts: null, persons: [], pending: [], scan: null, facesFor: null, openId: null, mergeFrom: 0, mergeInto: 0 });
     await peopleLoad();
   } catch (error) {
     People.error = `withdraw: ${error}`;
@@ -394,20 +399,81 @@ function peopleConsentedView() {
 
   view.append(element("h3", "", "People"));
   if (People.persons.length) {
+    view.append(peopleMergeStrip());
     const grid = element("div", "people-grid");
-    for (const person of People.persons) grid.append(peopleCard(person));
+    // Finding-1 cure (2026-11-23): a cap on CARDS, not a scroll box — the panel
+    // paints the people with the most photos first (the family members you are
+    // looking for), the PAGE scrolls. The store keeps everyone; this is paint.
+    const sorted = People.persons.length > GRID_CAP
+      ? [...People.persons].sort((a, b) => b.count - a.count || a.id - b.id)
+      : People.persons;
+    for (const person of sorted.slice(0, GRID_CAP)) grid.append(peopleCard(person));
     view.append(grid);
+    if (sorted.length > GRID_CAP) {
+      view.append(element("p", "note",
+        `Showing the top ${GRID_CAP.toLocaleString()} of ${People.persons.length.toLocaleString()} people — the most-photo people first.`));
+    }
   } else {
     view.append(element("p", "note", "Nothing found yet — press Scan now. One press runs the whole folder; files already recorded are skipped."));
   }
 
   if (People.pending.length) {
     view.append(element("h3", "", "To review"));
+    view.append(element("p", "note",
+      "Faces with the closest candidate lead the queue — the top rows are the ones you can confirm."));
     const list = element("div", "people-pending");
     for (const item of People.pending) list.append(peoplePendingRow(item));
     view.append(list);
   }
   return view;
+}
+
+/* The merge picker (finding-1 cure 2026-11-23): the strip renders ONCE per panel.
+   The card used to carry a "Merge into…" select listing EVERY other person —
+   N² options (37,513 cards × 37,512 options ≈ 1.4 billion nodes: the panel
+   cannot paint, "Nothing found yet" with 37k people in the store). Two selects
+   in one strip = 2N options, linear. Merge is the human's act; the engine
+   relays the counts. */
+function peopleMergeStrip() {
+  const strip = element("div", "people-merge-strip");
+  const from = element("select", "field merge-from");
+  from.setAttribute("aria-label", "Merge which person");
+  from.append(element("option", "", "Merge this person…"));
+  for (const p of People.persons) {
+    const option = element("option", "", `${personLabel(p)} (${p.count})`);
+    option.value = String(p.id);
+    from.append(option);
+  }
+  from.value = String(People.mergeFrom || "");
+  from.addEventListener("change", () => {
+    People.mergeFrom = Number(from.value) || 0;
+    People.mergeInto = 0;
+    peopleRender();
+  });
+  const into = element("select", "field merge-into");
+  into.setAttribute("aria-label", "into which person");
+  into.append(element("option", "", "into this person…"));
+  for (const p of People.persons) {
+    if (p.id === People.mergeFrom) continue;
+    const option = element("option", "", `${personLabel(p)} (${p.count})`);
+    option.value = String(p.id);
+    into.append(option);
+  }
+  into.disabled = !People.mergeFrom;
+  into.addEventListener("change", () => {
+    People.mergeInto = Number(into.value) || 0;
+    go.disabled = !People.mergeInto;
+  });
+  const go = element("button", "", "Merge");
+  go.disabled = !People.mergeFrom || !People.mergeInto;
+  go.onclick = () => {
+    const fromId = People.mergeFrom, intoId = People.mergeInto;
+    People.mergeFrom = 0;
+    People.mergeInto = 0;
+    peopleVerb("faces_merge", { into: intoId, from: fromId }, "merge");
+  };
+  strip.append(from, into, go);
+  return strip;
 }
 
 function peopleConfirm(text, label, go, cancel) {
@@ -444,22 +510,8 @@ function peopleCard(person) {
   const facts = element("span", "people-facts");
   facts.append(peopleBadge(`${person.count} photo${person.count === 1 ? "" : "s"}`, person.count > 1));
   card.append(facts);
-  const others = People.persons.filter((x) => x.id !== person.id);
-  const merge = element("select", "field person-merge");
-  merge.setAttribute("aria-label", `Merge ${personLabel(person)} into…`);
-  merge.disabled = others.length === 0;
-  merge.append(element("option", "", "Merge into…"));
-  for (const other of others) {
-    const option = element("option", "", personLabel(other));
-    option.value = String(other.id);
-    merge.append(option);
-  }
-  merge.addEventListener("change", () => {
-    const into = Number(merge.value);
-    merge.value = "";                    // the picker is one-shot
-    if (into) peopleVerb("faces_merge", { into, from: person.id }, "merge");
-  });
-  card.append(merge);
+  // (finding-1 cure 2026-11-23: the merge picker lives in the section strip, not
+  // in the card — a card-side select listed EVERY other person, N² options.)
   const del = element("button", "person-delete", "Delete");
   del.title = "Dissolve this person — their faces move to the review queue, no photo is deleted";
   del.onclick = () => { People.deleting = person.id; peopleRender(); };

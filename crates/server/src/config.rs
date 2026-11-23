@@ -181,6 +181,13 @@ pub struct ServerConfig {
     /// what a threshold does (the 2008↔2013 pair joins at 0.45, splits at 0.5).
     pub faces_merge: f64,
     pub faces_collision: f64,
+    /// The core law and the score floor (FACES.md 2026-11-23 — Immich's
+    /// `minFaces`/`minScore` laws): `DIGUP_SERVER_FACE_MIN_FACES` (3) — a person
+    /// exists from this many faces up, lower counts stay in the review queue;
+    /// `DIGUP_SERVER_FACE_MIN_SCORE` (0.5) — the detection-score floor for
+    /// recorded faces (Immich runs 0.7; the detector's own SCRFD gate is 0.5).
+    pub faces_min_faces: usize,
+    pub faces_min_score: f64,
     /// `DIGUP_SERVER_FACE_MODEL_IDLE_S` (60): the daemon unloads the face
     /// models after this idle window — the encoder's rule.
     pub faces_model_idle: f64,
@@ -429,6 +436,9 @@ impl ServerConfig {
                 .map(PathBuf::from),
             faces_merge: knob_float("DIGUP_SERVER_FACE_MERGE", 0.5)?,
             faces_collision: knob_float("DIGUP_SERVER_FACE_COLLISION", 0.10)?,
+            faces_min_faces: knob_float("DIGUP_SERVER_FACE_MIN_FACES", 3.0)?.clamp(1.0, 1_000.0)
+                as usize,
+            faces_min_score: knob_float("DIGUP_SERVER_FACE_MIN_SCORE", 0.5)?.clamp(0.0, 1.0),
             faces_model_idle: knob_float("DIGUP_SERVER_FACE_MODEL_IDLE_S", 60.0)?,
             faces_scan_timeout_s: knob_float("DIGUP_SERVER_FACE_SCAN_TIMEOUT_S", 3600.0)?,
             faces_workers: knob_float("DIGUP_SERVER_FACE_WORKERS", 0.0)? as usize,

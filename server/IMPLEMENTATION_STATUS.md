@@ -159,6 +159,38 @@ node **20/20**, clippy zero both shapes. Machine-side fact: the sharedembedder i
 ONCE in a whole-suite run (debug 200k-loop RSS measurement racing suite threads; 3/3 green solo
 ×3 — seam untouched).
 
+**Round three — the core law (2026-11-23, the full-library scan's verdict):** the whole-library
+scan LANDED: 133,789 files · 195,604 faces · 37,513 persons · 23,492 queued in 11.2 h at
+3.31 photos/s (pool 764–790 % CPU, unbounded session, skip list honored — the law held end to
+end). The user's screen exposed the twin bugs: the panel's per-card merge select listed EVERY
+other person (37,513 × 37,512 ≈ 1.4 billion option nodes — the panel cannot paint, it answered
+"Nothing found yet" with a healthy 37k-person store) and the headcount itself: full-store
+re-clusters on copies measured thresholds 0.40 → 24,887 persons and 0.45 → 31,163, with 46 %
+of cards 1- and 2-face clusters. Immich (researched at source): defaults `maxDistance 0.5`
+(= our merge line — the threshold is NOT the cause), `minFaces: 3`, `minScore: 0.7`; the
+twin-guide 0.4–0.45 is for lookalike libraries. **The cure is the core law, shipped:**
+`run_clustering(min_faces=3)` — a person exists from 3 faces up; centroids a pass opens with
+fewer stay provisional (faces stay queued); unnamed persons below the law dissolve (faces
+requeue; NAMED persons survive any count); the service loops passes (≤6) so dissolved faces
+absorb into the persons they formed (Immich's nightly re-run, same reason).
+`--faces-min-faces` / `DIGUP_SERVER_FACE_MIN_FACES` (3), `--faces-min-score` /
+`DIGUP_SERVER_FACE_MIN_SCORE` (0.5, record-side only — the SCRFD parity gate stays). Row ids
+are read via `centroids_with_ids()` (dissolve leaves gaps; `index+1` is not a row id). The
+review queue is **best-match-first** (window 1,000 scored against all centroids, top 500 by
+best candidate cosine desc, ties by face identity). Panels: merge strip (2 selects, linear) +
+300-card paint cap, most-photo first, page scrolls (no scroller, round-7 law).
+Gates: daemon 5/5 LIVE re-pinned on the law (scan assigned 3 / persons 1 / pending 2; queue
+sorted best-first with "no close person" cosines under the line; confirm-person as the human
+override; cluster keeps a no-close singleton queued; cluster verb rebuilds from an EMPTY
+persons table); core 12/12 with `the_core_law_opens_persons_only_from_min_faces_up`; plain
+workspace 42-block 0-failed; faces 0-failed with the sharedembedder info() gate hit ONCE in
+the busy-box whole-suite run (1.88 MiB arena growth over the 1 MiB bar; **3/3 green solo ×3
+again** — the documented load artifact, seam untouched); shell cargo 34/0; node 20/20; vitest
+79/79 + build (the strip test pins 2 selects, source-exclusion, no card-side select); clippy
+zero both shapes (faces shape now includes digup-server). The contract suite's faces/mcp
+deployments opt `DIGUP_SERVER_FACE_MIN_FACES=1` (their fixtures pin the singleton shape — the
+law is engine-pinned; the opt-out live-tests the env→argv→daemon chain).
+
 ## 2026-11-21 — v0.8.1 recut at the Stage-3 tip; the apps' update feed moves to this repo (`792f1d1`)
 
 v0.8.1 now carries the coding-agent CLI verbs (the `4c72f85` #178/#189 contract) alongside

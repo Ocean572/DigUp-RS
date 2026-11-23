@@ -33,7 +33,7 @@ struct Arguments {
 }
 
 /// `Arguments.valued`: flags that need a value.
-const VALUED: [&str; 25] = [
+const VALUED: [&str; 27] = [
     "--index",
     "--limit",
     "--kind",
@@ -56,6 +56,8 @@ const VALUED: [&str; 25] = [
     "--collision-margin",
     "--model-idle",
     "--faces-workers",
+    "--faces-min-faces",
+    "--faces-min-score",
     "--time-limit",
     "--tries",
     "--when-quiet",
@@ -264,6 +266,18 @@ fn main() {
                     .value("--faces-workers")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0),
+                // The core law and the score floor (FACES.md 2026-11-23, Immich's
+                // minFaces/minScore laws): defaults are Immich's shipped values
+                // for the core law (3), and the detector's own gate for the
+                // score floor (0.5 — a knob, not a change).
+                min_faces: args
+                    .value("--faces-min-faces")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(3),
+                min_score: args
+                    .value("--faces-min-score")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.5),
                 excluded_folders: args
                     .list("--exclude")
                     .iter()
