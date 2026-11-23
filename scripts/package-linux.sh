@@ -19,22 +19,35 @@ scripts/build-ffmpeg.sh
 # Faces (FACES.md): the shell's People tab spawns `digup faces-service`, so the shipped helper compiles the faces
 # verbs in — the flag ships code, never weights: the face packs stay user-supplied, the consent record gates every
 # verb. A helper built without it answers faces-service with the usage text and exit 2.
+# Build the helper: DIGUP_SKIP_BUILD=1 uses the binary already in target/release
+# (the CUDA payload flow builds it in the CUDA devel container first — glibc-
+# matched, linked against the CUDA-flavored llama — and this script only bundles).
+if [ "${DIGUP_SKIP_BUILD:-0}" != 1 ]; then
 cargo build --release -p digup-cli --features digup-cli/faces
+fi
 
 # What the packages carry beside the shell (shell/src-tauri/helper): the helper finds llama.cpp's backends and ffmpeg
 # in its own folder, and each library finds the others there ($ORIGIN, not the build's folders).
+# GPU payload (2026-11-23): DIGUP_LLAMA_LIB names the CUDA-flavored llama tree and
+# DIGUP_CUDA_LIBS the staged CUDA runtime libraries (gpu-handoff.md §4's recipe:
+# cp -a from the CUDA runtime base — the toolkit and libcuda.so.1 are never
+# bundled). Unset both and the AppImage ships the CPU payload verbatim.
+llama_lib=${DIGUP_LLAMA_LIB:-Vendor/llama/lib}
 helper=shell/src-tauri/helper
 rm -rf "$helper"
 mkdir -p "$helper"
 cp target/release/digup Vendor/pdfium/lib/libpdfium.so Vendor/ffmpeg/bin/ffmpeg Vendor/ffmpeg/bin/ffprobe "$helper/"
-for file in Vendor/llama/lib/*.so*; do
+for file in "$llama_lib"/*.so*; do
   name=${file##*/}
   if [[ -L $file && $name =~ \.so\.[0-9]+$ ]]; then
     cp -L "$file" "$helper/"   # once, under the name the helper asks for (libllama.so.0)
   elif [[ ! -L $file && $name == *.so ]]; then
-    cp "$file" "$helper/"      # llama.cpp's backends (libggml-cpu-*.so), loaded by path
+    cp "$file" "$helper/"      # llama.cpp's backends (libggml-cpu-*.so, libggml-cuda.so), loaded by path
   fi
 done
+if [ -n "${DIGUP_CUDA_LIBS:-}" ]; then
+  cp -a "${DIGUP_CUDA_LIBS}"/lib* "$helper/"
+fi
 for file in "$helper"/digup "$helper"/*.so*; do
   patchelf --set-rpath '$ORIGIN' "$file"
 done
@@ -54,6 +67,20 @@ if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
 fi
 # The license of everything the packages carry, beside the app (and the .deb's copyright file, below).
 python3 scripts/notices.py linux shell/src-tauri/THIRD-PARTY-NOTICES.txt
+if [ -n "${DIGUP_CUDA_LIBS:-}" ]; then
+  cat >> shell/src-tauri/THIRD-PARTY-NOTICES.txt <<'NOTICE'
+
+CUDA runtime libraries (libcudart, libcublas, libcublasLt, libnvrtc, libnvrtc-builtins)
+  license: NVIDIA License Agreement for CUDA Toolkit (redistributable components)
+  https://docs.nvidia.com/cuda/eula/index.html
+libnccl
+  license: NVIDIA Slackware Public License / BSD 3-Clause (NCCL 2.x)
+  https://github.com/NVIDIA/nccl
+Shipped per the server CUDA image recipe (docs/implementation/gpu-handoff.md §4):
+the runtime libraries only, `cp -a`'d from the CUDA runtime base — the toolkit and
+libcuda.so.1 (the host driver's own) are never bundled.
+NOTICE
+fi
 # GStreamer's plugins for the AppImage, which then loads only its own (tauri.linux.conf.json's bundleMediaFramework
 # copies every plugin in GSTREAMER_PLUGINS_DIR): the ones WebKit's media player needs for sound and video. Not the build
 # system's whole folder, which also holds cameras, CDs, network streams and encoders, some linking GPL libraries.

@@ -78,3 +78,17 @@ dist/
 # A box's own compose overlay (the bench stack's local file): it names the machine's real
 # paths and mounts — personal data, like every other deploy/data*/ shape. Local-only by design.
 deploy/docker-compose.rust.yml
+
+# The CUDA-flavored Vendor tree for the app's GPU payload (Gate B flavor on disk,
+# built in the CUDA 11.8 devel container): a working artifact, like Vendor/.
+/Vendor-cuda/
+
+# Staged CUDA runtime libraries for the GPU payload (cp -a'd from the CUDA runtime
+# base per gpu-handoff.md §4): a working artifact, like Vendor/.
+/cuda-libs/
+/cuda-libs118/
+
+# CUDA 11.8 flavored Vendor tree + staged libs (the Gate B recipe on disk, built
+# in the 11.8 devel container — the flavor the host's 580 driver pairs with):
+# working artifacts, like Vendor/.
+/Vendor-cuda118/

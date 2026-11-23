@@ -22,12 +22,23 @@ scripts/build-ffmpeg.sh
 # Faces (FACES.md): the desktop People tab needs the faces verbs compiled in —
 # the flag ships code, never weights: the face packs stay user-supplied, the
 # consent record gates every verb.
+# Build the engine binaries: DIGUP_SKIP_BUILD=1 uses the binaries already in
+# target/release (the CUDA payload flow builds them in the CUDA devel container
+# first — glibc-matched, linked against the CUDA-flavored llama — and the host
+# script only assembles the payload).
+if [ "${DIGUP_SKIP_BUILD:-0}" != 1 ]; then
 cargo build --release -p digup-cli -p digup-server --features digup-cli/faces
+fi
 
 # The engine asks for its C libraries by name (libllama.so.0 …): before the payload
 # exists, the probe points at Vendor/; inside the payload it needs nothing, because
 # patchelf gives every binary the $ORIGIN rpath.
 probe_env() { LD_LIBRARY_PATH="$PWD/Vendor/llama/lib:$PWD/Vendor/pdfium/lib" PATH="$PWD/Vendor/ffmpeg/bin:$PATH" "$@"; }
+# The llama tree to ship: default Vendor/llama/lib (the CPU flavor — the default
+# build stays byte-identical). A GPU payload names the CUDA-flavored Vendor tree
+# (built with the CUDA devel container) and stages the CUDA runtime libraries from
+# the CUDA RUNTIME base (docs/implementation/gpu-handoff.md's measured recipe).
+llama_lib=${DIGUP_LLAMA_LIB:-Vendor/llama/lib}
 arch=$(uname -m)
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 [ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
@@ -37,15 +48,24 @@ rm -rf "$out"
 mkdir -p "$payload"
 cp target/release/digup target/release/digup-server \
    Vendor/pdfium/lib/libpdfium.so Vendor/ffmpeg/bin/ffmpeg Vendor/ffmpeg/bin/ffprobe "$payload/"
-for file in Vendor/llama/lib/*.so*; do
+for file in "$llama_lib"/*.so*; do
   name=${file##*/}
   case "$name" in
     # Once, under the name the binary asks for (libllama.so.0), not the full version.
     *.so.[0-9]*) [ -L "$file" ] && cp -L "$file" "$payload/$name" ;;
-    # llama.cpp's backends (libggml-cpu-*.so, …), loaded by path at run time.
+    # llama.cpp's backends (libggml-cpu-*.so, libggml-cuda.so …), loaded by path at run time.
     *.so) [ ! -L "$file" ] && cp "$file" "$payload/" ;;
   esac
 done
+# CUDA payload (GPU indexing, 2026-11-23): exactly the runtime libraries
+# libggml-cuda.so asks for — libcudart, libcublas, libcublasLt, libnvrtc,
+# libnvrtc-builtins + libnccl — staged from the CUDA RUNTIME base with `cp -a`
+# (symlink + target: the server CUDA image's measured recipe, gpu-handoff.md §4).
+# Never the toolkit, never a second libggml*, never libcuda.so.1 (the host
+# driver's own). Opt-in: an unset DIGUP_CUDA_LIBS keeps the CPU payload verbatim.
+if [ -n "${DIGUP_CUDA_LIBS:-}" ]; then
+  cp -a "${DIGUP_CUDA_LIBS}"/lib* "$payload/"
+fi
 for file in "$payload"/*; do
   case "$file" in *.so*) patchelf --set-rpath '$ORIGIN' "$file" ;; esac
 done
@@ -54,6 +74,20 @@ patchelf --set-rpath '$ORIGIN' "$payload/digup" "$payload/digup-server"
 # Every library the payload carries, with its license, beside the binaries — the
 # Rust twin of scripts/notices.py (the crate graph of this workspace, not the shell's).
 python3 scripts/rust/notices-rust.py linux "$payload/THIRD-PARTY-NOTICES.txt"
+if [ -n "${DIGUP_CUDA_LIBS:-}" ]; then
+  cat >> "$payload/THIRD-PARTY-NOTICES.txt" <<'NOTICE'
+
+CUDA runtime libraries (libcudart, libcublas, libcublasLt, libnvrtc, libnvrtc-builtins)
+  license: NVIDIA License Agreement for CUDA Toolkit (redistributable components)
+  https://docs.nvidia.com/cuda/eula/index.html
+libnccl
+  license: NVIDIA Slackware Public License / BSD 3-Clause (NCCL 2.x)
+  https://github.com/NVIDIA/nccl
+Shipped per the server CUDA image recipe (docs/implementation/gpu-handoff.md §4):
+the runtime libraries only, `cp -a`'d from the CUDA runtime base — the toolkit and
+libcuda.so.1 (the host driver's own) are never bundled.
+NOTICE
+fi
 cp LICENSE "$payload/LICENSE"
 
 # The gate is the payload answering from its own folder: PATH points at it alone,
