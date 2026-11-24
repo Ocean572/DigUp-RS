@@ -33,6 +33,8 @@ const $query = $("query"), $content = $("content"), $side = $("side"), $kinds = 
 const state = {
   query: "",
   filter: null,         // a FILTERS key, "code", or null for everything
+  person: null,         // the People filter (round six, 2026-11-23): a person id, null = everyone
+  people: [],           // the store's NAMED people (the dropdown's list; empty = no consent, hidden)
   text: "",             // what was searched (without "code:")
   ranked: [],           // the strong results, best first
   weaker: [],           // below half the best one's score: folded
@@ -95,8 +97,26 @@ function run() {
         const key = FILTER_OF_KIND[hit.kind];
         counts[key] = (counts[key] || 0) + 1;
       }
+      let ranked = shown.hits.slice(0, shown.strong);
+      let weaker = shown.hits.slice(shown.strong);
+      // The People filter (round six): ask the face store which of THESE paths carry the
+      // person's face and drop the whole rows it does not name. The engine's z's ride
+      // verbatim — membership relayed, numbers untouched. A closed store (no consent)
+      // is a plain search: the dropdown is gone and the filter quietly steps aside.
+      if (state.person && !code) {
+        try {
+          const reply = await invoke("faces_paths",
+                                     { person: state.person, paths: shown.hits.map((hit) => hit.path) });
+          const keep = new Set(reply.paths || []);
+          ranked = ranked.filter((hit) => keep.has(hit.path));
+          weaker = weaker.filter((hit) => keep.has(hit.path));
+        } catch (error) {
+          state.person = null;
+        }
+        if (generation !== state.generation) return;
+      }
       Object.assign(state, { counts, text, meaning: shown.meaning, hasResults: true, showWeaker: false,
-                             ranked: shown.hits.slice(0, shown.strong), weaker: shown.hits.slice(shown.strong) });
+                             ranked, weaker });
       if (!rows().some((hit) => hit.path === state.selection)) state.selection = rows()[0]?.path ?? null;
       render();
       if (debugPending) report();
@@ -134,6 +154,30 @@ function setFilter(key) {
   run();
 }
 
+/// The People dropdown's act (round six, the user's design): the search itself stays PURE —
+/// the same query re-runs and the face store filters the rows it answers. faces_paths relays
+/// the store's own membership fact (which of THESE paths carry the person's face); the z's
+/// ride verbatim, nothing is re-scored.
+function setPerson(id) {
+  if (state.person === id) return;
+  state.person = id;
+  run();
+}
+
+/// The dropdown's list: the named people only (`?named` law) — names the human has given are
+/// the filter options. No consent (or no named people yet) → the list is empty → the dropdown
+/// is not rendered. Reloaded on focus so names named in the panel show up without a restart.
+async function loadPeople() {
+  try {
+    const reply = await invoke("faces_persons", { named: true });
+    state.people = (reply.persons || []).filter((person) => person.name)
+      .map((person) => ({ id: person.id, name: person.name, count: person.count }));
+  } catch (error) {
+    state.people = [];
+  }
+  renderBar();
+}
+
 /// Every result shown, in order: the strong ones, then the weaker ones once they're unfolded.
 function rows() {
   return [...state.ranked, ...(state.showWeaker ? state.weaker : [])];
@@ -166,6 +210,26 @@ function renderBar() {
     $kinds.append(chip(filter.title, filter.icon, code ? null : state.counts[filter.key], selected,
                        () => setFilter(selected ? null : filter.key), index + 2));
   });
+  // Round six (2026-11-23, the user's design): the People dropdown sits RIGHT OF THE KIND
+  // CHIPS. It lists the store's named people; picking one filters THIS SEARCH's rows down
+  // to the photos whose faces the store says are that person's. The engine's ranking rides
+  // untouched (faces_paths relays membership); no consent → loadPeople found nothing →
+  // the dropdown is not rendered at all.
+  if (state.people.length && !code) {
+    $kinds.append(element("span", "divider"));
+    const box = element("select", "people-filter");
+    box.title = "Show only the photos with this person's face";
+    box.setAttribute("aria-label", "Filter by person");
+    box.append(element("option", "", "People: everyone"));
+    for (const person of state.people) {
+      const option = element("option", "", `${person.name} (${person.count.toLocaleString()})`);
+      option.value = String(person.id);
+      box.append(option);
+    }
+    box.value = state.person ? String(state.person) : "";
+    box.onchange = () => setPerson(Number(box.value) || null);
+    $kinds.append(box);
+  }
   if (state.info.hasCode) {
     $kinds.append(element("span", "divider"));
     $kinds.append(chip("Code", "code", code ? state.counts.code : null, code,
@@ -1112,7 +1176,7 @@ tauri.event.listen("window-search", ({ payload }) => {
   $query.focus();
 });
 
-window.addEventListener("focus", () => ask({ op: "prewarm" }).catch(() => {}));
+window.addEventListener("focus", () => { ask({ op: "prewarm" }).catch(() => {}); loadPeople(); });
 
 // Its size, for the next time it opens (the shell keeps it when the window closes).
 let sizeTimer = null;
@@ -1160,6 +1224,7 @@ async function start() {
   updatePreviewButton();
   render();
   loadIndexed();
+  loadPeople();
   $query.focus();
   if (state.query) run();
   ask({ op: "prewarm" }).catch(() => {});

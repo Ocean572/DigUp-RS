@@ -118,6 +118,39 @@ describe("digup-search", () => {
     expect(el.shadowRoot.getElementById("q").value).toBe("a campfire");
   });
 
+  // The People dropdown (round six, 2026-11-23, the user's design): right of the kind chips,
+  // listing the store's named people; a pick rides the SAME search event with `person`, and
+  // the server answers which of the search's paths carry that person's face (relay — the
+  // engine's z's ride verbatim). No names (no consent, no names yet) → no dropdown. Code
+  // mode hides it: faces live on photos, not on code rows.
+  it("the People dropdown: named people right of the chips, a pick emits person", async () => {
+    expect(el.shadowRoot.getElementById("people-filter")).toBe(null);   // no names: hidden
+    el.names = [{ id: 3, name: "Angela", count: 12 }, { id: 7, name: "Zora", count: 4 }];
+    await el.updateComplete;
+    const box = el.shadowRoot.getElementById("people-filter");
+    expect(box).not.toBe(null);
+    const options = [...box.querySelectorAll("option")].map((o) => o.textContent);
+    expect(options[0]).toBe("People: everyone");
+    expect(options[1]).toBe("Angela (12)");
+    const p = onceEvent(document, "digup:query-change");
+    box.value = "3";
+    box.dispatchEvent(new Event("change"));
+    expect((await p).detail.person).toBe(3);
+    // Back to everyone: the filter goes away on the same route.
+    const p2 = onceEvent(document, "digup:query-change");
+    box.value = "";
+    box.dispatchEvent(new Event("change"));
+    expect((await p2).detail.person).toBe(null);
+  });
+
+  it("the People dropdown hides in code mode", async () => {
+    el.names = [{ id: 3, name: "Angela", count: 12 }];
+    el.isCode = true;
+    await el.updateComplete;
+    await el.updateComplete;
+    expect(el.shadowRoot.getElementById("people-filter")).toBe(null);
+  });
+
   it("in-field keys: ↑↓ nav, ↩ activate, Space previews only after navigation", async () => {
     const nav = onceEvent(document, "digup:nav");
     key(el.shadowRoot.getElementById("q"), "ArrowDown");

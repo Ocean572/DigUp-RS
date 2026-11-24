@@ -127,40 +127,50 @@ describe("digup-people", () => {
       .toBe("/api/v1/media/bbb/preview?pixels=512");
   });
 
-  it("the card controls: the name rides the rename, the merge strip is ONE strip (2 selects, not N² per card), Delete emits", async () => {
-    el = await mount(CONSENTED);
+  it("the card controls: the name box is the datalist merge act (round six: no strips), Delete emits", async () => {
+    el = await mount({ ...CONSENTED, names: [{ id: 1, name: "Angela", count: 2 },
+                                             { id: 2, name: "Zora", count: 1 }] });
     const [card1, card2] = [...el.shadowRoot.querySelectorAll("#people-grid .person-card")];
     expect(card1.querySelector(".person-name").value).toBe("Angela");
     expect(card2.querySelector(".person-name").getAttribute("placeholder")).toBe("Person 2");
-    // Finding-1 cure (2026-11-23): NO merge select in any card — the picker is
-    // one strip per panel: two selects = 2N options, never N² (the 37k-card
-    // panel answered "Nothing found yet" at 1.4 billion option nodes).
+    // Round six (the user's law 2026-11-23): the merge strip is GONE — typing the same
+    // name IS the merge. No selects anywhere, no merge-strip, no per-card picker.
+    expect(el.shadowRoot.querySelector(".merge-strip")).toBe(null);
     expect(card1.querySelector("select")).toBe(null);
-    const strip = el.shadowRoot.querySelector(".merge-strip");
-    const from = strip.querySelector(".merge-from");
-    const into = strip.querySelector(".merge-into");
-    expect([...from.querySelectorAll("option")].map((o) => o.textContent))
-      .toEqual(["Merge this person…", "Angela (2)", "Person 2 (1)"]);
-    expect(into.disabled).toBe(true);                          // a source must be chosen first
-    let seen = onceEvent(el, "digup:name");
-    card1.querySelector(".person-name").value = "Angela M";
-    card1.querySelector(".person-name").dispatchEvent(new Event("change"));
-    expect((await seen).detail).toEqual({ person: 1, name: "Angela M" });
-    from.value = "1";
-    from.dispatchEvent(new Event("change"));
-    await el.updateComplete;                                     // Lit state re-render is a microtask
-    expect([...into.querySelectorAll("option")].map((o) => o.textContent))
-      .toEqual(["into this person…", "Person 2 (1)"]);         // the target excludes the source
-    expect(into.disabled).toBe(false);
-    seen = onceEvent(el, "digup:merge");
-    into.value = "2";
-    into.dispatchEvent(new Event("change"));
-    await el.updateComplete;                                     // the Merge button wakes
-    strip.querySelector(".merge-go").click();
-    expect((await seen).detail).toEqual({ into: 2, from: 1 });
+    // The datalist carries the named people except the card's own id.
+    expect([...card2.querySelectorAll("datalist option")].map((o) => o.value)).toEqual(["Angela"]);
+    // Exact match on a known name: merge THIS card INTO the one carrying that name.
+    let seen = onceEvent(el, "digup:merge");
+    card2.querySelector(".person-name").value = "Angela";
+    card2.querySelector(".person-name").dispatchEvent(new Event("change"));
+    expect((await seen).detail).toEqual({ into: 1, from: 2 });
+    // A name the store does not have is the plain name act (it creates the label).
+    seen = onceEvent(el, "digup:name");
+    card2.querySelector(".person-name").value = "Angela M";
+    card2.querySelector(".person-name").dispatchEvent(new Event("change"));
+    expect((await seen).detail).toEqual({ person: 2, name: "Angela M" });
     seen = onceEvent(el, "digup:delete");
     card2.querySelector(".person-delete").click();
     expect((await seen).detail).toEqual({ person: 2 });
+  });
+
+  it("the person's own view: the gallery fills the panel, grid and queue yield, the foot loads more", async () => {
+    el = await mount({ ...CONSENTED, facesFor: { person: 1, faces: [COVER, PLAIN], more: true, loading: false } });
+    el.openId = 1;
+    await el.updateComplete;
+    expect(el.shadowRoot.getElementById("people-grid")).toBe(null);   // the grid yields to the view
+    expect(el.shadowRoot.getElementById("pending-sec").hasAttribute("hidden")).toBe(true); // the queue too
+    const head = el.shadowRoot.querySelector(".detail-head");
+    expect(head.textContent).toContain("Angela");
+    expect(head.querySelector(".person-name").value).toBe("Angela");  // nameable from inside the view
+    expect(el.shadowRoot.querySelectorAll(".detail-grid .crop, .detail-grid img.plain").length).toBe(2); // the map + the width-0 fallback
+    expect(el.shadowRoot.querySelector(".detail-sentinel")).not.toBe(null); // infinite-scroll foot
+    const seen = onceEvent(el, "digup:more-person");
+    el.shadowRoot.querySelector(".face-more").click();
+    expect((await seen).detail).toEqual({ person: 1 });
+    const closed = onceEvent(el, "digup:close-person");
+    head.querySelector("button").click();                             // "← People"
+    expect((await closed).detail).toEqual({ person: 1 });
   });
 
   it("a card crop opens the face grid (digup:open-person)", async () => {

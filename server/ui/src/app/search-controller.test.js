@@ -150,6 +150,20 @@ describe("search-controller — the name: prefix rides the text", () => {
     expect(JSON.parse(calls[1].options.body).q).toBe("name: in");
   });
 
+  // The People filter (round six, 2026-11-23): a person id rides the search body (both
+  // keyword-first calls); the SERVER answers which paths carry the face — the UI relays.
+  // Code mode drops it: faces live on photos, never on code rows.
+  it("the person filter rides the search body; code mode drops it", async () => {
+    const { calls, c } = setup();
+    c.queryChanged("dog", { ...filters, person: 3 });
+    expect(JSON.parse(calls[0].options.body).person).toBe(3);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(JSON.parse(calls[2].options.body).person).toBe(3);
+    calls.length = 0;
+    c.queryChanged("rope", { ...filters, code: true, person: 3 });
+    expect(JSON.parse(calls[0].options.body).person).toBe(undefined);
+  });
+
   it("code wins a text carrying both prefixes: the code prefix is the flag, names is off", async () => {
     const { store, calls, c } = setup();
     c.queryChanged("code: name: in", { ...filters, names: true });

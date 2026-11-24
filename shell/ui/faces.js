@@ -27,11 +27,11 @@ const fURL = (path) => window.__TAURI__.core.convertFileSrc(path);
 const People = {
   consented: false, record: null, models: [], counts: null,
   persons: [], pending: [],
-  mergeFrom: 0, mergeInto: 0,
   scan: null,                       // the last finished scan's {files,faces,skipped,fresh,assigned}
   scanning: false, progress: null,  // the engine's scan events, relayed as they stream
   ack: false, embModel: null, download: null,
   openId: null, facesFor: null,
+  detail: null,                     // the person whose gallery fills the panel (round-six view)
   names: [],                        // the named people (autocomplete/merge targets, ?named=1 law)
   withdrawing: false, deleting: null,
   error: null,
@@ -163,7 +163,7 @@ async function peopleWithdraw() {
   People.withdrawing = false;
   try {
     await fInvoke("faces_consent", { accept: false });
-    Object.assign(People, { consented: false, record: null, counts: null, persons: [], pending: [], names: [], scan: null, facesFor: null, openId: null, mergeFrom: 0, mergeInto: 0 });
+    Object.assign(People, { consented: false, record: null, counts: null, persons: [], pending: [], names: [], scan: null, facesFor: null, openId: null, detail: null });
     await peopleLoad();
   } catch (error) {
     People.error = `withdraw: ${error}`;
@@ -201,22 +201,20 @@ async function peopleScan() {
 }
 
 async function peopleOpenPerson(person) {
-  if (People.openId === person) {
-    People.openId = null;
-    People.facesFor = null;
-    peopleRender();
-    return;
-  }
+  People.openId = person;
+  People.detail = person;          // round-six (the user's law): the gallery FILLS the view,
+  peopleRender();                  // the grid is not squeezed by an inline strip
   try {
     // The painted page (2026-11-23): newest photos first (`order:"photo"` = the photos'
     // own dates), PAGE at a time. A mega-cluster card (7,294 photos) never reads its
     // whole gallery at once — the pages are the UI's law, the engine relays them.
     const { faces } = await fInvoke("faces_person", { person, limit: PAGE, offset: 0, order: "photo" });
-    People.openId = person;
     People.facesFor = { person, faces: faces || [],
                         more: (faces || []).length === PAGE, loading: false };
     peopleRender();
   } catch (error) {
+    People.facesFor = null;
+    People.detail = null;
     People.error = `person ${person}: ${error}`;
     peopleRender();
   }
@@ -251,6 +249,90 @@ async function peopleDownload() {
     People.download = { state: "failed", message: String(error) };
     peopleRender();
   }
+}
+
+/// The gallery's infinite scroll (round six, the user's law: keep scrolling, load as you go,
+/// nothing loads until you scroll): the sentinel at the gallery's foot, watched by the page's
+/// own viewport. A hit fires the engine's next page — relayed, never prefetched.
+let galleryObserver = null;
+
+function watchGallerySentinel(sentinel, person) {
+  if (galleryObserver) galleryObserver.disconnect();
+  galleryObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) if (entry.isIntersecting) peopleMorePerson(person);
+  }, { rootMargin: "600px 0px" });
+  galleryObserver.observe(sentinel);
+}
+
+/// The card's name box (the autocomplete law, 2026-11-23): datalist over the store's named
+/// people — picking a known name is the human's merge act (merge this person INTO the one
+/// carrying that name); a fresh name is the plain name act. The panel relays; the engine merges.
+function peopleNameBox(person) {
+  const name = element("input", "field person-name");
+  name.type = "text";
+  name.value = person.name || "";
+  name.placeholder = `Person ${person.id}`;
+  name.setAttribute("aria-label", `Name for person ${person.id}`);
+  const list = element("datalist");
+  list.id = `names-${person.id}`;
+  for (const n of People.names) {
+    if (n.id === person.id || !n.name) continue;
+    const opt = element("option");
+    opt.value = n.name;
+    opt.label = `${n.name} (${n.count})`;
+    list.append(opt);
+  }
+  name.setAttribute("list", list.id);
+  name.addEventListener("change", () => {
+    const text = name.value.trim();
+    const target = People.names.find((n) => n.name === text && n.id !== person.id);
+    if (target) peopleVerb("faces_merge", { into: target.id, from: person.id }, "merge");
+    else peopleVerb("faces_name", { person: person.id, name: name.value }, "name");
+  });
+  return { name, list };
+}
+
+/// The person's OWN view (round six, the user's brief): the gallery fills the panel —
+/// newest photo first, 50 at a time, the page scrolls, the next page loads when you reach
+/// the foot. The grid's rows are never squeezed by an inline strip.
+function peopleDetailView(person) {
+  const view = element("div", "people-detail");
+  const head = element("div", "detail-head");
+  const back = element("button", "", "← People");
+  back.title = "Back to the people grid";
+  back.onclick = () => {
+    People.detail = null; People.facesFor = null; People.openId = null;
+    if (galleryObserver) galleryObserver.disconnect();
+    peopleRender();
+  };
+  head.append(back, element("h3", "", personLabel(person)));
+  const badges = element("span", "people-facts");
+  badges.append(peopleBadge(`${person.count} photo${person.count === 1 ? "" : "s"}`, person.count > 1));
+  head.append(badges);
+  const nameBox = peopleNameBox(person);
+  head.append(nameBox.name, nameBox.list);
+  view.append(head);
+  const grid = element("div", "detail-grid");
+  for (const face of People.facesFor.faces) grid.append(faceCrop(face, 512));
+  view.append(grid);
+  if (People.facesFor.loading) view.append(element("p", "note", "Loading the next photos…"));
+  else if (People.facesFor.more) {
+    view.append(element("p", "note",
+      `Keep scrolling — the next ${PAGE} photos load as you go (${People.facesFor.faces.length.toLocaleString()} of ${person.count.toLocaleString()} shown).`));
+    const sentinel = element("div", "detail-sentinel");
+    view.append(sentinel);
+    if (typeof IntersectionObserver !== "undefined") {
+      watchGallerySentinel(sentinel, person.id);
+    } else {
+      const more = element("button", "face-more", "Show 50 more");
+      more.onclick = () => peopleMorePerson(person.id);
+      view.append(more);
+    }
+  } else {
+    view.append(element("p", "note",
+      `All ${People.facesFor.faces.length.toLocaleString()} photos shown — newest first.`));
+  }
+  return view;
 }
 
 // MARK: events (the engine's scan stream and the packs' download, relayed)
@@ -438,9 +520,17 @@ function peopleConsentedView() {
   if (People.error) view.append(element("p", "note problem", People.error));
   peopleProgressLine();
 
+  // Round six (the user's brief): a clicked person FILLS the view — the gallery scrolls
+  // the page and loads on scroll; the grid and the queue come back with "← People".
+  const detailRow = People.detail ? People.persons.find((x) => x.id === People.detail) : null;
+  if (People.detail && !detailRow) { People.detail = null; People.facesFor = null; }
+  if (detailRow && People.facesFor && People.facesFor.person === detailRow.id) {
+    view.append(peopleDetailView(detailRow));
+    return view;
+  }
+
   view.append(element("h3", "", "People"));
   if (People.persons.length) {
-    view.append(peopleMergeStrip());
     const grid = element("div", "people-grid");
     // Finding-1 cure (2026-11-23): a cap on CARDS, not a scroll box — the panel
     // paints the people with the most photos first (the family members you are
@@ -472,54 +562,6 @@ function peopleConsentedView() {
   return view;
 }
 
-/* The merge picker (finding-1 cure 2026-11-23): the strip renders ONCE per panel.
-   The card used to carry a "Merge into…" select listing EVERY other person —
-   N² options (37,513 cards × 37,512 options ≈ 1.4 billion nodes: the panel
-   cannot paint, "Nothing found yet" with 37k people in the store). Two selects
-   in one strip = 2N options, linear. Merge is the human's act; the engine
-   relays the counts. */
-function peopleMergeStrip() {
-  const strip = element("div", "people-merge-strip");
-  const from = element("select", "field merge-from");
-  from.setAttribute("aria-label", "Merge which person");
-  from.append(element("option", "", "Merge this person…"));
-  for (const p of People.persons) {
-    const option = element("option", "", `${personLabel(p)} (${p.count})`);
-    option.value = String(p.id);
-    from.append(option);
-  }
-  from.value = String(People.mergeFrom || "");
-  from.addEventListener("change", () => {
-    People.mergeFrom = Number(from.value) || 0;
-    People.mergeInto = 0;
-    peopleRender();
-  });
-  const into = element("select", "field merge-into");
-  into.setAttribute("aria-label", "into which person");
-  into.append(element("option", "", "into this person…"));
-  for (const p of People.persons) {
-    if (p.id === People.mergeFrom) continue;
-    const option = element("option", "", `${personLabel(p)} (${p.count})`);
-    option.value = String(p.id);
-    into.append(option);
-  }
-  into.disabled = !People.mergeFrom;
-  into.addEventListener("change", () => {
-    People.mergeInto = Number(into.value) || 0;
-    go.disabled = !People.mergeInto;
-  });
-  const go = element("button", "", "Merge");
-  go.disabled = !People.mergeFrom || !People.mergeInto;
-  go.onclick = () => {
-    const fromId = People.mergeFrom, intoId = People.mergeInto;
-    People.mergeFrom = 0;
-    People.mergeInto = 0;
-    peopleVerb("faces_merge", { into: intoId, from: fromId }, "merge");
-  };
-  strip.append(from, into, go);
-  return strip;
-}
-
 function peopleConfirm(text, label, go, cancel) {
   const box = element("div", "confirm");
   box.append(element("p", "", text));
@@ -544,31 +586,8 @@ function peopleCard(person) {
   crop.onclick = () => peopleOpenPerson(person.id);
   crop.onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); peopleOpenPerson(person.id); } };
   card.append(crop);
-  const name = element("input", "field person-name");
-  name.type = "text";
-  name.value = person.name || "";
-  name.placeholder = `Person ${person.id}`;
-  name.setAttribute("aria-label", `Name for person ${person.id}`);
-  // Autocomplete law (2026-11-23): typing a prefix of a name the store already has and
-  // picking it from the named list is the human's merge act — this person joins the one
-  // carrying that name. An unrecognized name is the plain name act: it creates the label.
-  const list = element("datalist");
-  list.id = `names-${person.id}`;
-  for (const n of People.names) {
-    if (n.id === person.id || !n.name) continue;
-    const opt = element("option");
-    opt.value = n.name;
-    opt.label = `${n.name} (${n.count})`;
-    list.append(opt);
-  }
-  name.setAttribute("list", list.id);
-  card.append(name, list);
-  name.addEventListener("change", () => {
-    const text = name.value.trim();
-    const target = People.names.find((n) => n.name === text && n.id !== person.id);
-    if (target) peopleVerb("faces_merge", { into: target.id, from: person.id }, "merge");
-    else peopleVerb("faces_name", { person: person.id, name: name.value }, "name");
-  });
+  const nameBox = peopleNameBox(person);
+  card.append(nameBox.name, nameBox.list);
   const facts = element("span", "people-facts");
   facts.append(peopleBadge(`${person.count} photo${person.count === 1 ? "" : "s"}`, person.count > 1));
   card.append(facts);
@@ -584,19 +603,6 @@ function peopleCard(person) {
       "Delete",
       () => { People.deleting = null; peopleVerb("faces_delete", { person: person.id }, "delete"); },
       () => { People.deleting = null; peopleRender(); }));
-  }
-  if (expanded) {
-    const strip = element("div", "face-strip");
-    for (const face of People.facesFor.faces) strip.append(faceCrop(face, 512));
-    if (People.facesFor.more) {
-      const more = element("button", "face-more",
-        People.facesFor.loading ? "Loading…" : `Show ${PAGE} more`);
-      more.title = `The next ${PAGE} photos, newest first`;
-      more.disabled = People.facesFor.loading;
-      more.onclick = () => peopleMorePerson(person.id);
-      strip.append(more);
-    }
-    card.append(strip);
   }
   return card;
 }

@@ -52,6 +52,7 @@ pub struct SearchReq {
     pub code: bool,
     pub meaning: bool,
     pub prefix_last: bool,
+    pub person: Option<i64>,
 }
 
 pub struct EmbedAheadReq {
@@ -226,8 +227,58 @@ fn check_kinds(body: &Value, errors: &mut Vec<Value>) -> Option<Vec<String>> {
     }
 }
 
+/// `person: int | None = Field(default=None, ge=1)` — the round-six People filter
+/// (2026-11-23, the user's design): the search stays pure, the face store answers
+/// which of the reply's paths carry this person's face. Same lax int rules as
+/// `limit` (ints, numeric strings, lossless floats), the lower bound only; null
+/// means "no filter".
+fn check_person(body: &Value, errors: &mut Vec<Value>) -> Option<i64> {
+    let value = match body.get("person") {
+        None | Some(Value::Null) => return None,
+        Some(Value::Number(number)) => match number.as_i64() {
+            Some(value) => value,
+            None => {
+                errors.push(item(
+                    "int_from_float",
+                    vec![json!("body"), json!("person")],
+                    "Input should be a valid integer, got a number with a fractional part",
+                ));
+                return None;
+            }
+        },
+        Some(Value::String(text)) => match text.parse::<i64>() {
+            Ok(value) => value,
+            Err(_) => {
+                errors.push(item(
+                    "int_parsing",
+                    vec![json!("body"), json!("person")],
+                    "Input should be a valid integer, unable to parse string as an integer",
+                ));
+                return None;
+            }
+        },
+        Some(_) => {
+            errors.push(item(
+                "int_type",
+                vec![json!("body"), json!("person")],
+                "Input should be a valid integer",
+            ));
+            return None;
+        }
+    };
+    if value < 1 {
+        errors.push(item(
+            "greater_than_equal",
+            vec![json!("body"), json!("person")],
+            "Input should be greater than or equal to 1",
+        ));
+        return None;
+    }
+    Some(value)
+}
+
 /// POST /search — the field order is `SearchRequest`'s declarations: q, kinds,
-/// limit, code, meaning, prefix_last (FastAPI reports errors in that order).
+/// limit, code, meaning, prefix_last, person (FastAPI reports errors in that order).
 pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
     let mut errors = Vec::new();
     if !body_is_object(body, &mut errors) {
@@ -239,6 +290,7 @@ pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
     let code = check_bool(body, "code", false, &mut errors);
     let meaning = check_bool(body, "meaning", true, &mut errors);
     let prefix_last = check_bool(body, "prefix_last", false, &mut errors);
+    let person = check_person(body, &mut errors);
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -249,6 +301,7 @@ pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
         code,
         meaning,
         prefix_last,
+        person,
     })
 }
 

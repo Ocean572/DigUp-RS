@@ -1647,6 +1647,7 @@ async fn search(
         Err(errors) => return detail_response(errors),
     };
     let target = request_target(&ctx);
+    let filter_target = target.clone();
     let result = in_scope(app.clone(), target, move |scope| {
         let reply = scope.service.search(
             &req.q,
@@ -1666,27 +1667,80 @@ async fn search(
             }
         }
         row.entry("warning".to_string()).or_insert(Value::Null);
-        let hits: Vec<Value> = match row.get("hits").and_then(Value::as_array) {
+        let rows: Vec<Value> = match row.get("hits").and_then(Value::as_array) {
             // `for hit in stripped["hits"]` (api.py:619): a hits value that is
             // not a list is the model's ValidationError on the way in - 500.
-            Some(rows) => rows
-                .iter()
-                .map(|hit| {
-                    let fields = hit_fields(hit, req.code)?;
-                    // api.py:281 mints the media id with `uuid.uuid4()` inside
-                    // the search loop: an os.urandom failure is an uncaught
-                    // OSError — the plain 500 (the id mint is NOT a default
-                    // path, F-11).
-                    let media_id = app.hit_cache.put(fields).map_err(|_| ApiError::Internal)?;
-                    // Python splats the hit itself ({**hit, "media_id": ...}):
-                    // every engine field rides, nothing is defaulted.
-                    let mut row = hit.as_object().ok_or(ApiError::Internal)?.clone();
-                    row.insert("media_id".into(), json!(media_id));
-                    Ok(Value::Object(row))
-                })
-                .collect::<Result<Vec<Value>, ApiError>>()?,
+            Some(rows) => rows.clone(),
             None => return Err(ApiError::Internal),
         };
+        // The People filter (round six, 2026-11-23, the user's design): the semantic
+        // search stays PURE — the engine answers its ranking untouched (every search
+        // pin stays byte-identical with the field absent). The face store answers
+        // which of THOSE paths carry the person's face; membership is relayed,
+        // nothing is re-scored. The filter runs BEFORE the media-id mint, so dropped
+        // rows never flood the LRU. No consent record is the faces wall — 400,
+        // the same body every faces route answers (never a silent unfiltered pass).
+        let rows = match req.person {
+            None => rows,
+            Some(person) => {
+                let (consent, record) = faces_consent_guard(&app, &filter_target)?;
+                let mut fields = Map::new();
+                fields.insert("person".into(), json!(person));
+                fields.insert(
+                    "paths".into(),
+                    Value::Array(
+                        rows.iter()
+                            .filter_map(|hit| hit.get("path").and_then(Value::as_str))
+                            .map(|path| json!(path))
+                            .collect(),
+                    ),
+                );
+                let reply = faces::faces_call(
+                    &scope.cfg,
+                    &app.cfg,
+                    &consent,
+                    &record,
+                    "paths",
+                    fields,
+                    Duration::from_secs(120),
+                )
+                .map_err(faces_call_error)?;
+                let keep: std::collections::HashSet<String> = reply
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .map(|paths| {
+                        paths
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                rows.into_iter()
+                    .filter(|hit| {
+                        hit.get("path")
+                            .and_then(Value::as_str)
+                            .is_some_and(|path| keep.contains(path))
+                    })
+                    .collect()
+            }
+        };
+        let hits = rows
+            .iter()
+            .map(|hit| {
+                let fields = hit_fields(hit, req.code)?;
+                // api.py:281 mints the media id with `uuid.uuid4()` inside
+                // the search loop: an os.urandom failure is an uncaught
+                // OSError — the plain 500 (the id mint is NOT a default
+                // path, F-11).
+                let media_id = app.hit_cache.put(fields).map_err(|_| ApiError::Internal)?;
+                // Python splats the hit itself ({**hit, "media_id": ...}):
+                // every engine field rides, nothing is defaulted.
+                let mut row = hit.as_object().ok_or(ApiError::Internal)?.clone();
+                row.insert("media_id".into(), json!(media_id));
+                Ok(Value::Object(row))
+            })
+            .collect::<Result<Vec<Value>, ApiError>>()?;
         row.insert("hits".into(), Value::Array(hits));
         Ok(Value::Object(row))
     })

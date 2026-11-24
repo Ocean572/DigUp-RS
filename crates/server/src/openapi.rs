@@ -129,7 +129,8 @@ fn paths() -> Value {
                         "q": { "type": "string", "maxLength": 512 },
                         "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 40 },
                         "kinds": { "type": "array", "items": { "type": "string", "enum": ["doc", "image", "video", "code"] } },
-                        "meaning": { "type": "boolean", "default": true }
+                        "meaning": { "type": "boolean", "default": true },
+                        "person": { "type": "integer", "minimum": 1, "description": "People filter (faces store, consent-gated): keep only hits whose photo carries this person's face; the engine's z-scores ride verbatim" }
                     }
                 })
             )

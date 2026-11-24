@@ -39,8 +39,7 @@ const personLabel = (p) => p.name || `Person ${p.id}`;
 const GRID_CAP = 300;
 
 class DigupPeople extends LitElement {
-  static properties = { ack: { state: true }, openId: { state: true },
-    mergeFrom: { state: true }, mergeInto: { state: true } };
+  static properties = { ack: { state: true }, openId: { state: true } };
 
   static styles = [controlCss, badgeCss, spinCss, noteCss, css`
     /* The gear panel's measured frame, restated for this panel (component CSS owns the
@@ -89,8 +88,13 @@ class DigupPeople extends LitElement {
     /* The merge strip (finding-1 cure 2026-11-23): one row of two native selects +
        the Merge act — native dropdowns, no scroller, no height cap (the panel's
        round-7 law). */
-    .merge-strip { display: flex; gap: 0.45rem; align-items: center; }
-    .merge-strip select { flex: 1 1 0; min-width: 0; }
+    /* Round six (2026-11-23): the merge strip is GONE (typing the same name is the merge
+       act — the datalist). The person's own view: photo-sized crops, the page scrolls. */
+    .detail-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .detail-head .person-name { flex: 1 1 8rem; min-width: 0; }
+    .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+      gap: 0.5rem; }
+    .detail-sentinel { height: 1px; }
     .person-card { display: grid; gap: 0.35rem; padding: 0.5rem; min-width: 0;
       border: 1px solid var(--edge); border-radius: var(--radius-lg); background: var(--bg); }
     .crop { position: relative; display: block; overflow: hidden; width: 100%;
@@ -103,8 +107,6 @@ class DigupPeople extends LitElement {
       background: var(--field); color: var(--text); border: 1px solid var(--edge);
       border-radius: var(--radius-md); padding: 0.42rem 0.6rem; }
     .person-card select, .person-card input, .person-card button { width: 100%; box-sizing: border-box; }
-    .face-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(4rem, 1fr));
-      gap: 0.3rem; }
 
     /* The review queue: a face + the engine's candidate cosines, one row per item. */
     .pending-item { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr);
@@ -132,6 +134,26 @@ class DigupPeople extends LitElement {
   get store() { return this._store; }
 
   _p() { return this._sel ? this._sel.value() : null; }
+
+  /* Infinite scroll (round six, the user's law: keep scrolling, load as you go, nothing
+     loads until you scroll): the gallery's foot sentinel, watched by the PAGE viewport —
+     the panel never scrolls (round-seven law stands), the page does. jsdom has no
+     IntersectionObserver (tests click "Show 50 more"); browsers have it. */
+  updated() {
+    const sentinel = this.shadowRoot.querySelector(".detail-sentinel");
+    if (this._io) { this._io.disconnect(); this._io = null; }
+    if (!sentinel || typeof IntersectionObserver === "undefined") return;
+    this._io = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) this.#emit("digup:more-person", { person: this.openId });
+      }
+    }, { rootMargin: "600px 0px" });
+    this._io.observe(sentinel);
+  }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._io) { this._io.disconnect(); this._io = null; }
+  }
 
   #emit(type, detail) {
     this.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true, detail }));
@@ -239,24 +261,25 @@ class DigupPeople extends LitElement {
       </section>
 
       <section class="set-sec" aria-labelledby="people-people">
-        <span class="set-title" id="people-people">${USERS_ICON} People</span>
-        ${p.persons.length ? html`
-          ${this.#mergeStrip(p)}
-          <div id="people-grid">
-            ${(p.persons.length > GRID_CAP
-              ? [...p.persons].sort((a, b) => b.count - a.count || a.id - b.id)
-              : p.persons
-            ).slice(0, GRID_CAP).map((person) => this.#card(person, p))}
-          </div>
-          ${(p.counts?.persons ?? p.persons.length) > GRID_CAP ? html`
-            <p class="note">Showing the top ${GRID_CAP.toLocaleString()} of
-            ${(p.counts?.persons ?? p.persons.length).toLocaleString()} people — the most-photo people first.</p>` : nothing}`
-        : html`<p class="note">Nothing found yet — press Scan now. A scan runs on the
-            engine's clock; files already recorded are skipped.</p>`}
+        ${p.facesFor && p.facesFor.person === this.openId ? this.#detail(p) : html`
+          <span class="set-title" id="people-people">${USERS_ICON} People</span>
+          ${p.persons.length ? html`
+            <div id="people-grid">
+              ${(p.persons.length > GRID_CAP
+                ? [...p.persons].sort((a, b) => b.count - a.count || a.id - b.id)
+                : p.persons
+              ).slice(0, GRID_CAP).map((person) => this.#card(person, p))}
+            </div>
+            ${(p.counts?.persons ?? p.persons.length) > GRID_CAP ? html`
+              <p class="note">Showing the top ${GRID_CAP.toLocaleString()} of
+              ${(p.counts?.persons ?? p.persons.length).toLocaleString()} people — the most-photo people first.</p>` : nothing}`
+          : html`<p class="note">Nothing found yet — press Scan now. A scan runs on the
+              engine's clock; files already recorded are skipped.</p>`}
+        `}
       </section>
 
       <section class="set-sec" id="pending-sec" aria-labelledby="people-pending"
-               ?hidden=${p.pending.length === 0}>
+               ?hidden=${p.pending.length === 0 || Boolean(p.facesFor && p.facesFor.person === this.openId)}>
         <span class="set-title" id="people-pending">${QUEUE_ICON} To review</span>
         <p class="note">Faces with the closest candidate lead the queue — the top rows are the ones you can confirm.</p>
         <div id="pending-list">
@@ -280,85 +303,77 @@ class DigupPeople extends LitElement {
       </section>`;
   }
 
-  #mergeStrip(p) {
-    // Finding-1 cure (2026-11-23): the merge picker renders ONCE per panel.
-    // The card used to carry a "Merge into…" select listing EVERY other
-    // person — N² options (37,513 cards × 37,512 options ≈ 1.4 billion nodes;
-    // the panel could not paint, answering "Nothing found yet" with 37k
-    // people in the store). Two selects in one strip = 2N options, linear.
-    // Merge is the human's act; the panel relays, the engine merges.
-    const label = (o) => `${personLabel(o)} (${o.count})`;
+  /* The person's OWN view (round six, the user's brief 2026-11-23): the gallery fills the
+     panel — newest photo first, 50 at a time; the PAGE scrolls (the panel-never-scrolls law
+     stands — no scroller, no height cap), the next page loads when the foot sentinel
+     reaches the viewport. The grid's rows are never squeezed by an inline strip; the merge
+     picker is GONE (typing the same name is the merge act — the datalist, not a strip). */
+  #detail(p) {
+    const person = p.persons.find((x) => x.id === this.openId);
+    if (!person) return nothing;
+    const shown = p.facesFor.faces.length;
     return html`
-      <div class="merge-strip">
-        <select class="merge-from" aria-label="Merge which person"
-                @change=${(ev) => { this.mergeFrom = Number(ev.target.value) || 0; this.mergeInto = 0; }}>
-          <option value="">Merge this person…</option>
-          ${p.persons.map((o) => html`<option value=${String(o.id)}>${label(o)}</option>`)}
-        </select>
-        <select class="merge-into" aria-label="into which person"
-                ?disabled=${!this.mergeFrom}
-                @change=${(ev) => { this.mergeInto = Number(ev.target.value) || 0; }}>
-          <option value="">into this person…</option>
-          ${p.persons.filter((o) => o.id !== this.mergeFrom).map(
-            (o) => html`<option value=${String(o.id)}>${label(o)}</option>`)}
-        </select>
-        <button type="button" class="merge-go"
-                ?disabled=${!this.mergeFrom || !this.mergeInto}
-                @click=${() => {
-                  const from = this.mergeFrom, into = this.mergeInto;
-                  this.mergeFrom = 0;
-                  this.mergeInto = 0;
-                  this.#emit("digup:merge", { into, from });
-                }}>Merge</button>
-      </div>`;
+      <div class="detail-head">
+        <button type="button" title="Back to the people grid"
+                @click=${() => this.#toggle(person.id)}>← People</button>
+        <span class="set-title">${personLabel(person)}</span>
+        <span class="badge ${person.count > 1 ? "ok" : "off"}">${person.count.toLocaleString()} photo${person.count === 1 ? "" : "s"}</span>
+        ${this.#nameInput(person, p)}
+      </div>
+      <div class="detail-grid">
+        ${p.facesFor.faces.map((f) => faceCrop(f))}
+      </div>
+      ${p.facesFor.loading ? html`<p class="note">Loading the next photos…</p>`
+        : p.facesFor.more ? html`
+          <p class="note">Keep scrolling — the next 50 photos load as you go
+          (${shown.toLocaleString()} of ${person.count.toLocaleString()} shown).</p>
+          <button class="face-more" type="button" title="The next 50 photos, newest first"
+                  ?disabled=${p.facesFor.loading}
+                  @click=${() => this.#emit("digup:more-person", { person: this.openId })}>
+            ${p.facesFor.loading ? "Loading…" : "Show 50 more"}</button>
+          <div class="detail-sentinel"></div>`
+        : html`<p class="note">All ${shown.toLocaleString()} photos shown — newest first.</p>`}`;
+  }
+
+  #nameInput(person, p) {
+    return html`
+      <input class="person-name" type="text" .value=${person.name || ""}
+             list=${`names-${person.id}`}
+             placeholder=${`Person ${person.id}`} aria-label=${`Name for person ${person.id}`}
+             @change=${(ev) => {
+               const text = ev.target.value.trim();
+               // Autocomplete law (2026-11-23): picking a name the store already has
+               // (exact match from the named list) is the human's merge act — merge
+               // this person INTO the one that carries the name. A fresh name is the
+               // plain name act. The panel relays; the engine merges.
+               const target = (p.names || []).find((n) => n.name === text && n.id !== person.id);
+               if (target) this.#emit("digup:merge", { into: target.id, from: person.id });
+               else this.#emit("digup:name", { person: person.id, name: ev.target.value });
+             }}>
+      <datalist id=${`names-${person.id}`}>
+        ${(p.names || []).filter((n) => n.id !== person.id)
+          .map((n) => html`<option value=${n.name}>${`${n.name} (${n.count})`}</option>`)}
+      </datalist>`;
   }
 
   #card(person, p) {
-    const expanded = p.facesFor && p.facesFor.person === person.id;
     return html`
       <div class="person-card" id=${`person-${person.id}`}>
         <span class="crop" role="button" tabindex="0"
-              aria-expanded=${String(Boolean(expanded))}
               title=${`Show the ${person.count} photo${person.count === 1 ? "" : "s"} of ${personLabel(person)}`}
               @click=${() => this.#toggle(person.id)}
               @keydown=${(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); this.#toggle(person.id); } }}>
           ${faceCrop(person.cover_face)}
         </span>
-        <input class="person-name" type="text" .value=${person.name || ""}
-               list=${`names-${person.id}`}
-               placeholder=${`Person ${person.id}`} aria-label=${`Name for person ${person.id}`}
-               @change=${(ev) => {
-                 const text = ev.target.value.trim();
-                 // Autocomplete law (2026-11-23): picking a name the store already has
-                 // (exact match from the named list) is the human's merge act — merge
-                 // this person INTO the one that carries the name. A fresh name is the
-                 // plain name act. The panel relays; the engine merges.
-                 const target = (p.names || []).find((n) => n.name === text && n.id !== person.id);
-                 if (target) this.#emit("digup:merge", { into: target.id, from: person.id });
-                 else this.#emit("digup:name", { person: person.id, name: ev.target.value });
-               }}>
-        <datalist id=${`names-${person.id}`}>
-          ${(p.names || []).filter((n) => n.id !== person.id)
-            .map((n) => html`<option value=${n.name}>${`${n.name} (${n.count})`}</option>`)}
-        </datalist>
+        ${this.#nameInput(person, p)}
         <span class="set-facts">
           <span class="badge ${person.count > 1 ? "ok" : "off"}">${person.count} photo${person.count === 1 ? "" : "s"}</span>
         </span>
-        <!-- (finding-1 cure 2026-11-23: the merge picker lives in the section strip,
-             not in the card — a card-side select listed EVERY other person, N² options.) -->
+        <!-- Round six (2026-11-23): NO inline strip and NO merge strip — the gallery is
+             the person's own view (no row-squeeze) and typing the same name IS the merge. -->
         <button class="person-delete" type="button"
                 title="Dissolve this person — their faces move to the review queue, no photo is deleted"
                 @click=${() => this.#emit("digup:delete", { person: person.id })}>Delete</button>
-        ${expanded ? html`
-          <div class="face-strip">
-            ${p.facesFor.faces.map((f) => faceCrop(f))}
-            ${p.facesFor.more ? html`
-              <button class="face-more" type="button"
-                      title="The next 50 photos, newest first"
-                      ?disabled=${p.facesFor.loading}
-                      @click=${() => this.#emit("digup:more-person", { person: person.id })}>
-                ${p.facesFor.loading ? "Loading…" : "Show 50 more"}</button>` : nothing}
-          </div>` : nothing}
       </div>`;
   }
 

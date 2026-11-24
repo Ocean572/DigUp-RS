@@ -758,7 +758,11 @@ fn faces_service_persons_answers_the_paintable_window() {
             .and_then(Value::as_f64)
             .partial_cmp(&a.get("mtime").and_then(Value::as_f64))
             .unwrap()
-            .then(b.get("id").and_then(Value::as_i64).cmp(&a.get("id").and_then(Value::as_i64)))
+            .then(
+                b.get("id")
+                    .and_then(Value::as_i64)
+                    .cmp(&a.get("id").and_then(Value::as_i64)),
+            )
     });
     let page = daemon.request(
         "person",
@@ -788,6 +792,99 @@ fn faces_service_persons_answers_the_paintable_window() {
         photo.iter().map(|r| r["id"].clone()).collect::<Vec<_>>(),
         "the photo-date order: mtime DESC, id DESC"
     );
+
+    daemon.quit();
+}
+
+// 8. The search filter's question (round six, 2026-11-23, the user's design): the
+//    semantic search answers its rows, and the People filter asks which of THOSE
+//    paths carry the person's face. The face rows are the store's own facts — the
+//    verb relays membership and invents nothing: it never touches search scoring.
+#[test]
+fn faces_service_paths_answers_which_of_the_asked_paths_carry_the_person() {
+    let Some(models) = face_models_dir() else {
+        eprintln!("SKIP: the pinned face models are absent (faces_service gate)");
+        return;
+    };
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/faces");
+    let work = tempfile::tempdir().expect("a work folder");
+    let index = work.path().join("index");
+    std::fs::create_dir_all(&index).expect("the index folder");
+    let consent = consent_file(work.path());
+
+    let mut daemon = Daemon::start_with(&index, &models, &consent, &["--faces-min-faces", "1"]);
+    assert_eq!(
+        daemon.request("scan", json!({"roots": [fixtures.to_string_lossy()]}), 600)["ok"],
+        true,
+        "scan answers"
+    );
+
+    // The count-desc window (persons gate, 2026-11-23): the trio leads, a singleton second.
+    let persons = daemon.request("persons", json!({"limit": 2}), 60);
+    let rows = persons["persons"].as_array().expect("a persons array");
+    assert_eq!(rows[0]["count"], 3, "the trio leads: {}", rows[0]);
+    let trio = rows[0]["id"].as_i64().expect("the trio id");
+    let singleton = rows[1]["id"].as_i64().expect("a singleton id");
+
+    // The trio's photos, from its own gallery page — the store's facts, verb to verb.
+    let gallery = daemon.request("person", json!({"person": trio, "limit": 10}), 60);
+    let mut trio_paths: Vec<String> = gallery["faces"]
+        .as_array()
+        .expect("a faces array")
+        .iter()
+        .map(|f| f["path"].as_str().expect("a face path").to_string())
+        .collect();
+    assert_eq!(trio_paths.len(), 3);
+    trio_paths.sort();
+
+    // 1. The filter's exact question: the search's paths + a stranger the search never
+    //    answered → the store answers exactly the trio's photos, the stranger dropped.
+    let mut asked: Vec<Value> = trio_paths.iter().map(|p| json!(p)).collect();
+    asked.push(json!("/a/photo/the-search-never-answered.jpg"));
+    let reply = daemon.request("paths", json!({"person": trio, "paths": asked}), 60);
+    assert_eq!(reply["ok"], true, "the verb answers");
+    let mut answered: Vec<String> = reply["paths"]
+        .as_array()
+        .expect("a paths array")
+        .iter()
+        .map(|p| p.as_str().expect("a path").to_string())
+        .collect();
+    answered.sort();
+    assert_eq!(
+        answered, trio_paths,
+        "membership relayed, the stranger dropped"
+    );
+
+    // 2. A singleton asked against EVERY fixture photo: exactly its one photo.
+    let all: Vec<Value> = std::fs::read_dir(&fixtures)
+        .expect("the fixture folder")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("jpg") | Some("jpeg") | Some("png")
+            )
+        })
+        .map(|path| json!(path.to_string_lossy()))
+        .collect();
+    assert!(all.len() >= 5, "the fixtures are photos: {all:?}");
+    let reply = daemon.request("paths", json!({"person": singleton, "paths": all}), 60);
+    assert_eq!(
+        reply["paths"].as_array().expect("a paths array").len(),
+        1,
+        "one photo carries the singleton's face: {reply}"
+    );
+
+    // 3. An empty ask answers empty, and a person the store does not have answers
+    //    empty: the verb relays membership, it never invents a row.
+    let reply = daemon.request("paths", json!({"person": trio, "paths": []}), 60);
+    assert_eq!(reply["paths"].as_array().expect("an array").len(), 0);
+    let reply = daemon.request(
+        "paths",
+        json!({"person": 9999, "paths": [trio_paths[0]]}),
+        60,
+    );
+    assert_eq!(reply["paths"].as_array().expect("an array").len(), 0);
 
     daemon.quit();
 }

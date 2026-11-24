@@ -317,6 +317,33 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     assert page["structuredContent"] == rest_page, "the tool answers what REST answers, page included"
     assert len(rest_page["faces"]) == 1, rest_page
 
+    # The People filter on the search tool (round six, 2026-11-23): the `person` arg
+    # rides the REST search body, and the answer is the REST answer — the faces-store
+    # membership relay, rows dropped whole, the engine's numbers untouched.
+    q = "name: corpus"   # the roots' folder token hits every corpus file's name segment
+    plain = call(mcp_open, None, "search", {"q": q, "limit": 100})
+    assert plain["isError"] is False
+    plain_paths = {h["path"] for h in plain["structuredContent"]["hits"]}
+    assert plain_paths, "the corpus answers its own folder token"
+    owned = {f["path"] for f in one["structuredContent"]["faces"]}
+    person = persons[0]["id"]
+    rest_filtered = mcp_open.post("/api/v1/search", json={"q": q, "limit": 100, "person": person}).json()
+    tool_filtered = call(mcp_open, None, "search", {"q": q, "limit": 100, "person": person})
+    assert tool_filtered["isError"] is False
+    relayed = dict(tool_filtered["structuredContent"])
+    rest = dict(rest_filtered)
+    for row in relayed.get("hits", []) + rest.get("hits", []):
+        row.pop("media_id", None)
+    relayed.pop("ms", None), rest.pop("ms", None)
+    relayed.pop("warning", None), rest.pop("warning", None)
+    assert relayed == rest, "the tool answers what REST answers, filter included"
+    kept = {h["path"] for h in rest["hits"]}
+    assert kept == plain_paths & owned, (kept, plain_paths, owned)  # membership relayed
+    assert all(h["media_id"] for h in tool_filtered["structuredContent"]["hits"])
+    # The 422 law rides the tool as the REST body's own item.
+    bad = call(mcp_open, None, "search", {"q": q, "person": 0})
+    assert bad["isError"] is True and bad["structuredContent"]["detail"][0]["loc"] == ["body", "person"], bad
+
 
 def test_the_show_tool_reads_a_segments_stored_text(mcp_scoped):
     hits = mcp_scoped.post("/api/v1/search", json={"q": "wakeboarding", "limit": 5},

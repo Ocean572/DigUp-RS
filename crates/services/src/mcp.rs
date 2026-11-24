@@ -92,7 +92,10 @@ pub fn tool_defs(surface: Surface, allow_admin: bool) -> Vec<Value> {
             "search",
             "Semantic + keyword search over the DigUp index. The answer rows are the \
              engine's own: path, kind, segment, score, z, loc, excerpt and timings relay \
-             verbatim — no server-side filtering, re-ranking, or invented numbers.",
+             verbatim — no server-side re-ranking or invented numbers. The optional \
+             `person` filter drops whole rows on the faces store's own membership fact \
+             (which photos carry that person's face); the surviving rows' numbers ride \
+             unchanged.",
             object(
                 vec![
                     ("q", serde_json::json!({"type": "string", "description": "the words to search for"})),
@@ -121,6 +124,27 @@ pub fn tool_defs(surface: Surface, allow_admin: bool) -> Vec<Value> {
         ),
     ];
     if surface == Surface::Api {
+        // Round six (2026-11-23, the user's design): the People filter rides the
+        // API's search — `person` keeps only the rows whose photo carries that
+        // person's face (the face store's own membership facts, relayed; the
+        // engine's z-scores ride verbatim, untouched). stdio has no consent seam
+        // (the same rule as the `people` tool below), so the param is invisible
+        // on the stdio surface.
+        if let Some(search) = defs
+            .iter_mut()
+            .find(|def| def.get("name").and_then(Value::as_str) == Some("search"))
+        {
+            if let Some(props) = search
+                .get_mut("inputSchema")
+                .and_then(|schema| schema.get_mut("properties"))
+                .and_then(Value::as_object_mut)
+            {
+                props.insert(
+                    "person".to_string(),
+                    serde_json::json!({"type": "integer", "minimum": 1, "description": "People filter: keep only rows whose photo carries this person's face (faces-store membership, relayed verbatim; omit = no filter). 400-shape text when the deployment is not consented"}),
+                );
+            }
+        }
         // The People tab (faces, FACES.md Phase 3). API surface only: the faces
         // verbs ride the server's own config (the consent record lives in the
         // server's config folder, the scan serializes on the server's faces writer

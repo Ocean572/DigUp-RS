@@ -148,6 +148,8 @@ digup --help                          # List all available subcommands
 
 All frontends (the web UI and Tauri desktop shell) communicate with `digup` strictly over documented JSON-lines protocols. All ranking, scoring, and filtering happen exclusively inside the Rust engine.
 
+UI work is evaluated on the **desktop app** (the Tauri shell), not on the container image — the contract container is a CI checkpoint, never the test target. Every UI change lands on every front in the same round: the shell (`shell/`, which Windows and macOS ride at packaging time) and the web UI (`server/ui/`).
+
 ---
 
 ## Supported File Formats & Indexing Scope

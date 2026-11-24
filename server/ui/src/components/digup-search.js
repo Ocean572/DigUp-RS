@@ -8,7 +8,7 @@
 // (digup:nav), ↩ opens the pick (digup:activate), Space previews only after navigation
 // (digup:preview). Markup and strings ride the vanilla index.html verbatim — test_media_ui
 // greps them from the bundle.
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, nothing } from "lit";
 import { controlCss } from "../styles/controls.js";
 
 const KINDS = [["screenshot", "Screenshots"], ["image", "Images"], ["pdf", "PDFs"],
@@ -20,10 +20,12 @@ class DigupSearch extends LitElement {
     isNames: {},
     navigated: {},
     hasSelection: {},
+    names: {},
     _code: { state: true },
     _names: { state: true },
     _limit: { state: true },
     _kinds: { state: true },
+    _person: { state: true },
   };
 
   static styles = [controlCss, css`
@@ -58,6 +60,11 @@ class DigupSearch extends LitElement {
     #find .kind[data-kind="audio"] { --kc: var(--kind-audio); }
     #find .kind[data-kind="pdf"], #find .kind[data-kind="doc"] { --kc: var(--kind-doc); }
     #kinds-all { padding: 0.1rem 0.6rem; font-size: 0.78rem; border-radius: var(--radius-pill); }
+    /* The People dropdown (round six, 2026-11-23): a chip-shaped select right of the kind
+       chips. Names ride the faces store's own list; picking one filters the shown rows. */
+    #people-filter { padding: 0.28rem 0.6rem; font-size: 0.85rem; border-radius: var(--radius-pill);
+      border: 1px solid var(--edge); background: var(--panel); color: var(--text); max-width: 14rem; }
+    #people-filter:hover { border-color: var(--accent); }
     /* the all button is a TOGGLE (round-7 brief): pressed state while all six are on */
     #kinds-all[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
     @media (max-width: 720px) {
@@ -74,7 +81,9 @@ class DigupSearch extends LitElement {
     this._names = false;
     this._limit = 40;
     this._kinds = new Set(KINDS.map(([k]) => k));   // all ticked = null = all kinds
+    this._person = null;                            // round six: null = everyone
     this._text = "";
+    this.names = [];
   }
 
   #emit() {
@@ -82,7 +91,11 @@ class DigupSearch extends LitElement {
       bubbles: true, composed: true,
       detail: { text: this._text, code: this._code, names: this._names,
                 kinds: KINDS.filter(([k]) => this._kinds.has(k)).map(([k]) => k),
-                limit: this._limit },
+                limit: this._limit,
+                // The People filter (round six, the user's design): a person id or null —
+                // the search stays pure, the SERVER answers which of its paths carry the
+                // person's face (faces store membership, relayed; z's untouched).
+                person: this._person },
     }));
   }
 
@@ -145,6 +158,14 @@ class DigupSearch extends LitElement {
             <input type="checkbox" data-kind=${kind} .checked=${this._kinds.has(kind)}
                    @change=${(e) => { e.target.checked ? this._kinds.add(kind) : this._kinds.delete(kind);
                                       this._kinds = new Set(this._kinds); this.#emit(); }}> ${label}</label>`)}
+        ${this.isCode || !(this.names || []).length ? nothing : html`
+          <select id="people-filter" title="Show only the photos with this person's face"
+                  aria-label="Filter by person" .value=${this._person ? String(this._person) : ""}
+                  @change=${(e) => { this._person = Number(e.target.value) || null; this.#emit(); }}>
+            <option value="">People: everyone</option>
+            ${this.names.filter((n) => n.name).map((n) => html`
+              <option value=${String(n.id)}>${`${n.name} (${n.count.toLocaleString()})`}</option>`)}
+          </select>`}
         <button id="kinds-all" type="button" aria-pressed=${String(this._kinds.size === KINDS.length)}
                 title=${this._kinds.size === KINDS.length
                   ? "All kinds on — click to clear them all" : "Turn all kinds on"}

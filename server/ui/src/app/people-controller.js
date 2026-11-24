@@ -199,6 +199,14 @@ export function createPeopleController({ api, store, confirm = (m) => window.con
     }
   }
 
+  /* Round six (2026-11-23): the search window's People dropdown needs the names at BOOT —
+     on the web the dropdown ships on the main page, not behind the People panel. One
+     status read; names load only behind consent (an unconsented deployment answers status
+     itself — no daemon spawn, and the dropdown stays hidden with the empty list). */
+  (async () => {
+    if (await loadStatus()) loadNames();
+  })();
+
   return { open, accept, withdraw, scanNow, namePerson, merge, deletePerson, confirmFace,
            openPerson, closePerson, morePerson, loadNames, close,
            get scanToken() { return seq.scan; } };

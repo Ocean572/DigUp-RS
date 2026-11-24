@@ -807,7 +807,7 @@ fn main() {
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, relative_path_text, copy_text, drag_out, set_hotkey, hold_hotkey,
             set_tray_click, check_for_updates, offer_update, set_update_checks, set_mcp_claude, open_licenses,
             faces_status, faces_consent, faces_scan, faces_persons, faces_person, faces_pending,
-            faces_name, faces_merge, faces_delete, faces_confirm, faces_download
+            faces_name, faces_merge, faces_delete, faces_confirm, faces_download, faces_paths
         ])
         .build(tauri::generate_context!())
         .expect("DigUp couldn't start");
@@ -1901,6 +1901,20 @@ async fn faces_person(
         fields.insert("order".into(), json!(o));
     }
     faces_verb(shell.inner().clone(), "person", fields).await
+}
+
+/// The search window's People filter (round six, 2026-11-23, the user's design): asks the
+/// engine which of the GIVEN search-result paths carry this person's face. The face rows are
+/// the store's own facts — membership relayed, no scores, no re-ranking; the search's own
+/// numbers ride untouched. Empty paths answer empty (nothing to filter).
+#[tauri::command]
+async fn faces_paths(shell: State<'_, Arc<Shell>>, person: i64, paths: Vec<String>) -> Result<Value, String> {
+    faces_id("person", person)?;
+    let fields = faces_fields(&[
+        ("person", &json!(person)),
+        ("paths", &json!(paths)),
+    ]);
+    faces_verb(shell.inner().clone(), "paths", fields).await
 }
 
 /// The review queue: faces with no confident person, each with the engine's top candidates.

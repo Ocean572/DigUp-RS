@@ -440,6 +440,29 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .collect();
             Ok(serde_json::json!({"ok": true, "faces": faces}))
         }
+        "paths" => {
+            // The search filter (round six, 2026-11-23, the user's design): the semantic
+            // search answers its rows; the People filter asks which of THOSE paths carry
+            // the person's face. The face rows are the engine's own facts — this relays
+            // membership and invents nothing: the search's z-scores are untouched.
+            let id = need_num(request, "person")?;
+            let empty = Vec::new();
+            let wanted: std::collections::HashSet<String> = request
+                .get("paths")
+                .and_then(Value::as_array)
+                .unwrap_or(&empty)
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            let hits = state
+                .store
+                .lock()
+                .unwrap()
+                .person_paths_among(id, &wanted)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"ok": true, "paths": hits}))
+        }
         "name" => {
             // `person` names the row, not `id`: the protocol's reply key is `id`
             // (every JSON-lines daemon reserves it — SearchService/IndexService).

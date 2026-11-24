@@ -27,6 +27,9 @@ export function createSearchController({ api, store, pause = TYPING_PAUSE }) {
     if (!s.isCode) {
       const kinds = f.kinds;
       body.kinds = (kinds.length === 0 || kinds.length === 6) ? null : kinds;   // none ticked = all
+      // The People filter (round six, 2026-11-23): the server keeps only hits whose photo
+      // carries the person's face (faces-store membership, relayed — the z's ride verbatim).
+      if (f.person) body.person = f.person;
     }
     return body;
   }

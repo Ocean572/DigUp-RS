@@ -429,6 +429,29 @@ impl FaceStore {
         self.face_rows("WHERE id = ?1", [Sql::Int(id)])
     }
 
+    /// The search filter (round six, 2026-11-23, the user's design): which of the GIVEN
+    /// paths carry this person's face. The face rows are the engine's own facts — the
+    /// filter relays membership, invents nothing, touches no search scoring.
+    pub fn person_paths_among(
+        &self,
+        person: i64,
+        paths: &std::collections::HashSet<String>,
+    ) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        self.db.query(
+            "SELECT DISTINCT path FROM faces WHERE person = ?1",
+            [Sql::Int(person)],
+            |r| {
+                let path = r.text(0).unwrap_or_default();
+                if paths.contains(&path) {
+                    out.push(path);
+                }
+                Ok(())
+            },
+        )?;
+        Ok(out)
+    }
+
     /// A face's stored unit vector (fp16 round trip, the store's own numbers).
     pub fn face_vector(&self, id: i64) -> Result<Option<Vec<f32>>> {
         let mut out = None;

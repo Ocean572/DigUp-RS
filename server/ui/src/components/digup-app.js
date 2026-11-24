@@ -292,6 +292,7 @@ class DigupApp extends LitElement {
       <main>
         <digup-search .isCode=${Boolean(s.isCode)} .isNames=${Boolean(s.isNames)} .navigated=${Boolean(s.navigated)}
                       .hasSelection=${Boolean(r.selection)}
+                      .names=${(s.people && s.people.names) || []}
                       @digup:query-change=${(e) => this._ctl?.search?.queryChanged(e.detail.text, e.detail)}
                       @digup:nav=${(e) => this._ctl?.search?.move(e.detail.step)}
                       @digup:activate=${() => {

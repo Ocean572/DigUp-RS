@@ -485,6 +485,46 @@ def test_confirm_answers_a_queued_face(faces):
     assert counts["faces"] == FACE_COUNT and counts["persons"] == 1, counts
 
 
+# ── the search window's People filter (round six, 2026-11-23, the user's design) ─
+
+def test_search_person_filter_relays_the_faces_membership(faces):
+    # The search stays PURE: the engine answers its ranking untouched, and the face
+    # store answers WHICH of those paths carry the person's face. The server drops
+    # whole rows the store does not name — z, kind, score, excerpt ride verbatim,
+    # nothing is re-scored (the rows compare field-for-field with the unfiltered
+    # answer; the per-call minted media_id is the only difference).
+    target = faces.persons()[0]["id"]
+    gallery = faces.client.get(f"/api/v1/faces/person/{target}").json()["faces"]
+    owned = {f["path"] for f in gallery}
+    assert len(owned) == FACE_COUNT, gallery  # one person owns the three face photos
+    # The folder token hits EVERY corpus photo's name segment (FTS splits the path):
+    # 12 hits, three of them the face photos.
+    q = "name: faces"
+    plain = faces.client.post("/api/v1/search", json={"q": q}).json()
+    plain_paths = {h["path"] for h in plain["hits"]}
+    assert len(plain_paths) == PHOTO_COUNT, plain["hits"]
+    assert plain_paths > owned, "the face photos are a proper subset of the hits"
+
+    filtered = faces.client.post("/api/v1/search", json={"q": q, "person": target}).json()
+    kept = {h["path"] for h in filtered["hits"]}
+    assert kept == plain_paths & owned, filtered["hits"]  # exactly the face-photo rows
+    plain_rows = {h["path"]: {k: v for k, v in h.items() if k != "media_id"}
+                  for h in plain["hits"]}
+    for h in filtered["hits"]:
+        row = {k: v for k, v in h.items() if k != "media_id"}
+        assert row == plain_rows[h["path"]], (row, plain_rows[h["path"]])
+    # `person: null` is the pure search — the same rows, the same numbers.
+    nulled = faces.client.post("/api/v1/search", json={"q": q, "person": None}).json()
+    assert {h["path"] for h in nulled["hits"]} == plain_paths
+    # The pydantic law of the field (SearchRequest's declarations put person last):
+    # the 422 items carry loc ["body", "person"] and the pydantic kinds.
+    for bad in (0, -1, "abc", 1.5, []):
+        reply = faces.client.post("/api/v1/search", json={"q": q, "person": bad})
+        assert reply.status_code == 422, (bad, reply.text)
+        item = reply.json()["detail"][0]
+        assert item["loc"] == ["body", "person"], item
+
+
 # ── one writer, answered busy (the index writer's flock law) ──────────────────
 
 def test_a_second_scan_is_answered_busy(faces, faces_corpus):
@@ -540,6 +580,11 @@ def test_withdrawing_consent_closes_every_verb(faces):
         assert refused.status_code == 400, refused.text
         assert CONSENT_SENTENCE in refused.json()["detail"], refused.json()
     assert faces.scan().status_code == 400
+    # The search's People filter rides the SAME consent wall (round six): the search
+    # answers 400 with the faces-wall body — never a silent unfiltered pass.
+    refused = faces.client.post("/api/v1/search", json={"q": "name: faces", "person": 1})
+    assert refused.status_code == 400, refused.text
+    assert CONSENT_SENTENCE in refused.json()["detail"], refused.json()
     # Opting out is not deleting the faces: the store stays on disk, the user's data.
     assert (faces.index / "face.sqlite").is_file()
     # Re-consenting is the same affirmative act, and the store is the same store.

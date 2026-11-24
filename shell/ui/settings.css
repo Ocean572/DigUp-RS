@@ -117,6 +117,14 @@ select.people-emb { margin-top: 4px; }
 .crop img.plain { position: static; width: 100%; }
 .person-name { min-width: 0; }
 .face-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; grid-column: 1 / -1; }
+/* The person's own gallery (round six, the user's brief): the view fills the panel, the
+   crops are photo-sized, the page scrolls, the foot sentinel loads the next page. */
+.people-detail { display: grid; gap: 10px; margin-top: 6px; }
+.detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.detail-head h3 { margin: 0; }
+.detail-head .person-name { width: 12rem; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.detail-sentinel { height: 1px; }
 
 /* The review queue: a face + the engine's candidate cosines, one row per item. */
 .people-pending { display: flex; flex-direction: column; margin-top: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
