@@ -214,6 +214,29 @@ $ORIGIN), deb 1.37 GB. linuxdeploy's failure mode pinned: squashfs dies "No spac
 device" (mksquashfs writes the full tree before compressing) — disk is the constraint on this
 box (97 %+ daily), the AppImage leg needs headroom before it starts.
 
+ **Round four — the People tab goes live on the app (2026-11-23, measured):** the app panel read
+ "Nothing found yet" over a verified store (8,868 persons / 47,292 queued, daemon round-trip in
+ seconds). The hunt: the bundle's faces.log untouched ⇒ the bridge never spawned a daemon (the
+ screenshot's app = the old 12.8-helper build whose faces daemon died at backend startup — device 0
+ = the busy 4070); a strace of a relaunched traced app showed consent + face.sqlite opens fine and
+ four daemons per panel load. The real wall: the `persons` verb with `covers:true` pays **one
+ cover query per person** — 8,868 per-person queries measured **34.0 s cold**, the daemon killed
+ mid-read over the shell's 120 s verb clock — the panel's `Promise.all` rejects, the grid empties,
+ the queue hides, while the fast counts verb paints real numbers. Cure = **the paintable window**:
+ `persons` takes `limit` — top N by photo count (ties by id), covers paid for the returned rows
+ only; no `limit` keeps the byte-parity full list (id order), so every existing thin client and
+ suite pin is untouched. Measured on the live store: `limit=300` + covers = **300 rows, tops
+ 7,294 / 6,914 / 2,997, all covers, 14.3 s** (load 13.8). Server: `?limit=` 1..=1000000 (the
+ `similar?limit=` 422 law), MCP `limit` arg relaying the route (422 included), openapi param; the
+ server UI asks the grid cap and counts the store in the cap note. App: `faces_persons` takes the
+ limit, the panel asks GRID_CAP=300. Gates: daemon faces_service **6/6** (new window test), shell
+ **34/34**, node **20/20**, vitest **79/79** + build, clippy `-D warnings` all-targets, fmt clean;
+ suite pins added (`test_faces.py` window + validation, `test_mcp.py` tool-window + 422 relay) for
+ the contract-suite run. Box seams learned the hard way: the model pins sat uid-990 group-read
+ (suite worker died "can't load …gguf" → chown via a root container), and the host engine suite
+ needs **DIGUP_BACKENDS=Vendor/llama/lib** on top of LD_LIBRARY_PATH (missing it = the worker's
+ "no backends are loaded" inside a "can't load" message).
+
 ## 2026-11-21 — v0.8.1 recut at the Stage-3 tip; the apps' update feed moves to this repo (`792f1d1`)
 
 v0.8.1 now carries the coding-agent CLI verbs (the `4c72f85` #178/#189 contract) alongside
