@@ -192,21 +192,43 @@ svg { display: block; }
 .chip .number { opacity: 0.6; font-variant-numeric: tabular-nums; }
 .chip.selected { background: var(--accent); color: var(--on-accent); }
 .kinds .divider { width: 1px; height: 16px; margin: 0 4px; background: var(--line); }
-/* The People dropdown (round six, 2026-11-23): the chip-shaped select right of the kind
-   chips — the pill line continues with the named people; a pick filters the rows shown. */
-.people-filter {
-  height: 24px;
-  padding: 0 8px;
+/* The People control (round six, 2026-11-23; the custom-dropdown cure 2026-11-24 — the
+   native select popup is dead under this app's webview pins): a chip-shaped button riding
+   the kind-chip row + its own anchored panel. */
+.people-filter { max-width: 220px; }
+.people-filter .people-caret { opacity: 0.55; font-size: 10px; }
+.people-menu {
+  position: fixed;
+  z-index: 900;
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  min-width: 210px;
+  max-width: 300px;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+.people-menu-row {
+  display: block;
+  padding: 6px 10px;
   border: 0;
-  border-radius: 99px;
-  background: var(--fill);
+  border-radius: 7px;
+  background: none;
   color: inherit;
   font: inherit;
   font-size: 12px;
-  font-weight: 500;
-  max-width: 200px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
 }
-.people-filter:hover { background: var(--fill-strong); }
+.people-menu-row:hover { background: var(--fill-strong); }
+.people-menu-row.selected { background: var(--accent); color: var(--on-accent); }
 
 /* Results and the preview beside them */
 

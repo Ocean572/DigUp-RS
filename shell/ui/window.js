@@ -178,6 +178,44 @@ async function loadPeople() {
   renderBar();
 }
 
+/* The People dropdown's OWN panel (the native-select cure, 2026-11-24): one element on the
+   page, anchored under the chip by its real rectangle (fixed = no clipping by the bar),
+   closed by every exit: a pick, an outside click, Escape, a page scroll, a re-render. */
+let peopleMenu = null;
+let peopleMenuDismiss = null;
+
+function closePeopleMenu() {
+  if (!peopleMenu) return;
+  peopleMenu.remove();
+  peopleMenu = null;
+  if (peopleMenuDismiss) { document.removeEventListener("click", peopleMenuDismiss, true); peopleMenuDismiss = null; }
+}
+
+function openPeopleMenu(button) {
+  closePeopleMenu();
+  const menu = element("div", "people-menu");
+  menu.setAttribute("role", "listbox");
+  const rows = [{ id: null, label: "People: everyone" }].concat(
+    state.people.map((p) => ({ id: p.id, label: `${p.name} (${p.count.toLocaleString()})` })));
+  for (const row of rows) {
+    const selected = row.id === null ? !state.person : row.id === state.person;
+    const item = element("button", "people-menu-row" + (selected ? " selected" : ""), row.label);
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(selected));
+    item.onclick = () => { closePeopleMenu(); setPerson(row.id); };
+    menu.append(item);
+  }
+  document.body.append(menu);
+  const at = button.getBoundingClientRect();
+  const width = Math.max(at.width, 210);
+  menu.style.left = `${Math.max(6, Math.min(window.innerWidth - width - 6, at.left))}px`;
+  menu.style.top = `${Math.min(at.bottom + 6, window.innerHeight - menu.offsetHeight - 6)}px`;
+  peopleMenu = menu;
+  // The outside click lands on the NEXT tick (this click is the button's own).
+  peopleMenuDismiss = (event) => { if (!menu.contains(event.target)) closePeopleMenu(); };
+  setTimeout(() => document.addEventListener("click", peopleMenuDismiss, true), 0);
+}
+
 /// Every result shown, in order: the strong ones, then the weaker ones once they're unfolded.
 function rows() {
   return [...state.ranked, ...(state.showWeaker ? state.weaker : [])];
@@ -198,6 +236,7 @@ function render() {
 }
 
 function renderBar() {
+  closePeopleMenu();   // a re-render replaces the chips: its anchored panel goes with them
   const code = isCode();
   $("glass").innerHTML = code ? ICONS.code : SEARCH_ICON;
   $query.placeholder = state.filter === "code" ? "Describe the code: “retry a request with backoff”, a name in it…"
@@ -210,24 +249,27 @@ function renderBar() {
     $kinds.append(chip(filter.title, filter.icon, code ? null : state.counts[filter.key], selected,
                        () => setFilter(selected ? null : filter.key), index + 2));
   });
-  // Round six (2026-11-23, the user's design): the People dropdown sits RIGHT OF THE KIND
+  // Round six (2026-11-23, the user's design): the People filter sits RIGHT OF THE KIND
   // CHIPS. It lists the store's named people; picking one filters THIS SEARCH's rows down
   // to the photos whose faces the store says are that person's. The engine's ranking rides
   // untouched (faces_paths relays membership); no consent → loadPeople found nothing →
-  // the dropdown is not rendered at all.
+  // the control is not rendered at all.
+  // The measured law (2026-11-24, the user's live check): the native <select> popup is a
+  // dead seam in this app's webview — WebKitGTK's combo popup does not open under the
+  // WEBKIT_DISABLE_COMPOSITING_MODE/DMABUF pins this box's rendering needs. So the app's
+  // dropdown is its OWN: a chip-shaped button + a fixed-position panel, the same act,
+  // webview-independent. (The web UI keeps the native select — real browsers open those.)
   if (state.people.length && !code) {
     $kinds.append(element("span", "divider"));
-    const box = element("select", "people-filter");
+    const picked = state.person && state.people.find((p) => p.id === state.person);
+    const box = element("button", "chip people-filter" + (picked ? " selected" : ""));
+    box.append(element("span", "", picked ? picked.name : "People: everyone"),
+               element("span", "people-caret", "▾"));
     box.title = "Show only the photos with this person's face";
     box.setAttribute("aria-label", "Filter by person");
-    box.append(element("option", "", "People: everyone"));
-    for (const person of state.people) {
-      const option = element("option", "", `${person.name} (${person.count.toLocaleString()})`);
-      option.value = String(person.id);
-      box.append(option);
-    }
-    box.value = state.person ? String(state.person) : "";
-    box.onchange = () => setPerson(Number(box.value) || null);
+    box.setAttribute("aria-haspopup", "listbox");
+    box.setAttribute("aria-expanded", String(Boolean(peopleMenu)));
+    box.onclick = () => (peopleMenu ? closePeopleMenu() : openPeopleMenu(box));
     $kinds.append(box);
   }
   if (state.info.hasCode) {
@@ -1062,6 +1104,7 @@ document.addEventListener("keydown", (event) => {
   if (state.composing || event.isComposing) return;   // an input method is composing: its keys
   const modifier = isMac ? event.metaKey : event.ctrlKey;
   const plain = !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey;
+  if (peopleMenu && event.key === "Escape") { event.preventDefault(); closePeopleMenu(); return; }
   if (!$menu.hidden && event.key === "Escape") {
     event.preventDefault();
     hideMenu();
@@ -1177,6 +1220,8 @@ tauri.event.listen("window-search", ({ payload }) => {
 });
 
 window.addEventListener("focus", () => { ask({ op: "prewarm" }).catch(() => {}); loadPeople(); });
+// A page scroll moves the content, not the anchored panel: the menu closes with it.
+window.addEventListener("scroll", () => closePeopleMenu(), { passive: true, capture: true });
 
 // Its size, for the next time it opens (the shell keeps it when the window closes).
 let sizeTimer = null;
