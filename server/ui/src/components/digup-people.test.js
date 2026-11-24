@@ -115,7 +115,7 @@ describe("digup-people", () => {
     const cards = [...el.shadowRoot.querySelectorAll("#people-grid .person-card")];
     expect(cards.length).toBe(2);
     const crop = cards[0].querySelector(".crop");
-    expect(crop.querySelector("img").getAttribute("src")).toBe("/api/v1/media/aaa/preview?pixels=256");
+    expect(crop.querySelector("img").getAttribute("src")).toBe("/api/v1/media/aaa/preview?pixels=512");
     // box [10,10,60,60] in 200×100, padded head-and-shoulders and clamped: the window
     // is cw 82.5 × ch 100 (the shoulders padding hits the photo's bottom edge), the
     // photo enlarged by W/cw, offsets 0 (pure geometry, pinned on the numbers — jsdom's
@@ -124,7 +124,7 @@ describe("digup-people", () => {
     expect(cropGeometry(PLAIN)).toBe(null);                // width 0: the whole-photo fallback
     expect(cards[1].querySelector("img.plain")).not.toBe(null);
     expect(cards[1].querySelector("img.plain").getAttribute("src"))
-      .toBe("/api/v1/media/bbb/preview?pixels=256");
+      .toBe("/api/v1/media/bbb/preview?pixels=512");
   });
 
   it("the card controls: the name rides the rename, the merge strip is ONE strip (2 selects, not N² per card), Delete emits", async () => {

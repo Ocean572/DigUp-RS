@@ -187,14 +187,23 @@ async fn execute(
             let response = match action {
                 "status" => crate::faces_status(State(app.clone()), Extension(ctx.clone())).await,
                 "persons" => {
-                    // The paintable window rides the route's own query law: an optional
-                    // `limit` arg becomes the route's `?limit=` (the route answers its
-                    // own 422 for a bad one — the tool relays, never edits).
-                    let uri = match args.get("limit") {
-                        Some(n) => format!("/api/v1/faces/persons?limit={n}")
+                    // The paintable window + the names list ride the route's own query
+                    // law: `limit`/`named` args become the route's `?limit=`/`?named=`
+                    // (the route answers its own 422 for a bad one — the tool relays,
+                    // never edits).
+                    let mut query = Vec::new();
+                    if let Some(n) = args.get("limit").and_then(Value::as_i64) {
+                        query.push(format!("limit={n}"));
+                    }
+                    if args.get("named").and_then(Value::as_bool) == Some(true) {
+                        query.push("named=1".to_string());
+                    }
+                    let uri = if query.is_empty() {
+                        Uri::from_static("/api/v1/faces/persons")
+                    } else {
+                        format!("/api/v1/faces/persons?{}", query.join("&"))
                             .parse()
-                            .unwrap_or_else(|_| Uri::from_static("/api/v1/faces/persons?limit=x")),
-                        None => Uri::from_static("/api/v1/faces/persons"),
+                            .unwrap_or_else(|_| Uri::from_static("/api/v1/faces/persons?limit=x"))
                     };
                     crate::faces_persons(State(app.clone()), Extension(ctx.clone()), uri).await
                 }
@@ -206,10 +215,30 @@ async fn execute(
                             "action=person needs person".to_string(),
                         ));
                     };
+                    // The painted page: `limit`/`offset`/`order` args become the route's
+                    // query (same relay law as the window above).
+                    let mut query = Vec::new();
+                    if let Some(n) = args.get("limit").and_then(Value::as_i64) {
+                        query.push(format!("limit={n}"));
+                    }
+                    if let Some(n) = args.get("offset").and_then(Value::as_i64) {
+                        query.push(format!("offset={n}"));
+                    }
+                    if let Some(o) = args.get("order").and_then(Value::as_str) {
+                        query.push(format!("order={o}"));
+                    }
+                    let uri = if query.is_empty() {
+                        Uri::from_static("/api/v1/faces/person")
+                    } else {
+                        format!("/api/v1/faces/person?{}", query.join("&"))
+                            .parse()
+                            .unwrap_or_else(|_| Uri::from_static("/api/v1/faces/person?limit=x"))
+                    };
                     crate::faces_person_show(
                         State(app.clone()),
                         Extension(ctx.clone()),
                         axum::extract::Path(person.to_string()),
+                        uri,
                     )
                     .await
                 }

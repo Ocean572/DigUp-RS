@@ -15,6 +15,8 @@ const DETECTOR = "scrfd_10g_bnkps.onnx";
 // measured on the bench library: a full 37k-card grid is unpaintable — the
 // cap is on PAINT, the store keeps every person; most-photo people first).
 const GRID_CAP = 300;
+const PAGE = 50;                    // the gallery's page (the user's 2026-11-23 law: ~ten-to-fifty
+                                    // photos at a time, newest photo first, scroll loads more)
 const fInvoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 const fAsk = (request) => fInvoke("ask", { request });
 const fURL = (path) => window.__TAURI__.core.convertFileSrc(path);
@@ -30,6 +32,7 @@ const People = {
   scanning: false, progress: null,  // the engine's scan events, relayed as they stream
   ack: false, embModel: null, download: null,
   openId: null, facesFor: null,
+  names: [],                        // the named people (autocomplete/merge targets, ?named=1 law)
   withdrawing: false, deleting: null,
   error: null,
 };
@@ -65,7 +68,8 @@ function renderedFace(path, pixels) {
 }
 
 /// The face crop: a cw/ch window over the enlarged photo (the server's faceCrop law, DOM-built).
-function faceCrop(row, pixels = 256) {
+/// 512 pixels (2026-11-23, the user's sharpness brief): the card crop is the face you judge.
+function faceCrop(row, pixels = 512) {
   const box = element("span", "crop");
   const geometry = cropGeometry(row);
   renderedFace(row.path, pixels).then((url) => {
@@ -114,6 +118,7 @@ async function peopleRows() {
     const [p, q, st] = await Promise.all([fInvoke("faces_persons", { limit: GRID_CAP }), fInvoke("faces_pending"), fInvoke("faces_status")]);
     Object.assign(People, { persons: p.persons || [], pending: q.pending || [], counts: st.counts, consented: st.consented });
     peopleRender();
+    loadNames(); // the datalist loads behind the grid — the cards never wait for it
   } catch (error) {
     People.error = String(error);
     peopleRender();
@@ -132,6 +137,16 @@ async function peopleVerb(command, args, label) {
   }
 }
 
+/// The autocomplete law (2026-11-23): the names the user has given are the merge targets —
+/// faces_persons with named:true answers the named people only, photo count first. Cheap:
+/// the named set is small, and covers are paid for its rows only.
+async function loadNames() {
+  try {
+    const { persons } = await fInvoke("faces_persons", { named: true });
+    People.names = (persons || []).map((p) => ({ id: p.id, name: p.name, count: p.count }));
+  } catch { /* the datalist is a convenience: a failed read keeps the plain name box */ }
+}
+
 // MARK: the acts
 
 async function peopleAccept() {
@@ -148,7 +163,7 @@ async function peopleWithdraw() {
   People.withdrawing = false;
   try {
     await fInvoke("faces_consent", { accept: false });
-    Object.assign(People, { consented: false, record: null, counts: null, persons: [], pending: [], scan: null, facesFor: null, openId: null, mergeFrom: 0, mergeInto: 0 });
+    Object.assign(People, { consented: false, record: null, counts: null, persons: [], pending: [], names: [], scan: null, facesFor: null, openId: null, mergeFrom: 0, mergeInto: 0 });
     await peopleLoad();
   } catch (error) {
     People.error = `withdraw: ${error}`;
@@ -193,14 +208,37 @@ async function peopleOpenPerson(person) {
     return;
   }
   try {
-    const { faces } = await fInvoke("faces_person", { person });
+    // The painted page (2026-11-23): newest photos first (`order:"photo"` = the photos'
+    // own dates), PAGE at a time. A mega-cluster card (7,294 photos) never reads its
+    // whole gallery at once — the pages are the UI's law, the engine relays them.
+    const { faces } = await fInvoke("faces_person", { person, limit: PAGE, offset: 0, order: "photo" });
     People.openId = person;
-    People.facesFor = { person, faces: faces || [] };
+    People.facesFor = { person, faces: faces || [],
+                        more: (faces || []).length === PAGE, loading: false };
     peopleRender();
   } catch (error) {
     People.error = `person ${person}: ${error}`;
     peopleRender();
   }
+}
+
+/// The gallery scroll: the next PAGE, appended in the engine's photo-date order. A short
+/// page means the store is drained — the button disappears with it (no invented counts).
+async function peopleMorePerson(person) {
+  const ff = People.facesFor;
+  if (!ff || ff.person !== person || ff.loading || !ff.more) return;
+  People.facesFor = { ...ff, loading: true };
+  peopleRender();
+  try {
+    const { faces } = await fInvoke("faces_person", { person, limit: PAGE, offset: ff.faces.length, order: "photo" });
+    const rows = faces || [];
+    People.facesFor = { person, faces: [...ff.faces, ...rows],
+                        more: rows.length === PAGE, loading: false };
+  } catch (error) {
+    People.facesFor = { ...ff, loading: false };
+    People.error = `person ${person}: ${error}`;
+  }
+  peopleRender();
 }
 
 async function peopleDownload() {
@@ -498,7 +536,7 @@ function peopleConfirm(text, label, go, cancel) {
 function peopleCard(person) {
   const card = element("div", "person-card");
   const expanded = People.facesFor && People.facesFor.person === person.id;
-  const crop = faceCrop(person.cover_face, 256);
+  const crop = faceCrop(person.cover_face, 512);
   crop.setAttribute("role", "button");
   crop.setAttribute("tabindex", "0");
   crop.setAttribute("aria-expanded", String(Boolean(expanded)));
@@ -511,8 +549,26 @@ function peopleCard(person) {
   name.value = person.name || "";
   name.placeholder = `Person ${person.id}`;
   name.setAttribute("aria-label", `Name for person ${person.id}`);
-  name.addEventListener("change", () => peopleVerb("faces_name", { person: person.id, name: name.value }, "name"));
-  card.append(name);
+  // Autocomplete law (2026-11-23): typing a prefix of a name the store already has and
+  // picking it from the named list is the human's merge act — this person joins the one
+  // carrying that name. An unrecognized name is the plain name act: it creates the label.
+  const list = element("datalist");
+  list.id = `names-${person.id}`;
+  for (const n of People.names) {
+    if (n.id === person.id || !n.name) continue;
+    const opt = element("option");
+    opt.value = n.name;
+    opt.label = `${n.name} (${n.count})`;
+    list.append(opt);
+  }
+  name.setAttribute("list", list.id);
+  card.append(name, list);
+  name.addEventListener("change", () => {
+    const text = name.value.trim();
+    const target = People.names.find((n) => n.name === text && n.id !== person.id);
+    if (target) peopleVerb("faces_merge", { into: target.id, from: person.id }, "merge");
+    else peopleVerb("faces_name", { person: person.id, name: name.value }, "name");
+  });
   const facts = element("span", "people-facts");
   facts.append(peopleBadge(`${person.count} photo${person.count === 1 ? "" : "s"}`, person.count > 1));
   card.append(facts);
@@ -531,7 +587,15 @@ function peopleCard(person) {
   }
   if (expanded) {
     const strip = element("div", "face-strip");
-    for (const face of People.facesFor.faces) strip.append(faceCrop(face, 192));
+    for (const face of People.facesFor.faces) strip.append(faceCrop(face, 512));
+    if (People.facesFor.more) {
+      const more = element("button", "face-more",
+        People.facesFor.loading ? "Loading…" : `Show ${PAGE} more`);
+      more.title = `The next ${PAGE} photos, newest first`;
+      more.disabled = People.facesFor.loading;
+      more.onclick = () => peopleMorePerson(person.id);
+      strip.append(more);
+    }
     card.append(strip);
   }
   return card;
@@ -539,7 +603,7 @@ function peopleCard(person) {
 
 function peoplePendingRow(item) {
   const row = element("div", "pending-item");
-  row.append(faceCrop(item.face, 256));
+  row.append(faceCrop(item.face, 512));
   const side = element("span", "pending-side");
   side.append(element("span", "pending-file", nameOf(item.face.path)));
   const cands = element("span", "pending-cands");

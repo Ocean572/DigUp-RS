@@ -325,9 +325,22 @@ class DigupPeople extends LitElement {
           ${faceCrop(person.cover_face)}
         </span>
         <input class="person-name" type="text" .value=${person.name || ""}
+               list=${`names-${person.id}`}
                placeholder=${`Person ${person.id}`} aria-label=${`Name for person ${person.id}`}
-               @change=${(ev) => this.#emit("digup:name",
-                 { person: person.id, name: ev.target.value })}>
+               @change=${(ev) => {
+                 const text = ev.target.value.trim();
+                 // Autocomplete law (2026-11-23): picking a name the store already has
+                 // (exact match from the named list) is the human's merge act — merge
+                 // this person INTO the one that carries the name. A fresh name is the
+                 // plain name act. The panel relays; the engine merges.
+                 const target = (p.names || []).find((n) => n.name === text && n.id !== person.id);
+                 if (target) this.#emit("digup:merge", { into: target.id, from: person.id });
+                 else this.#emit("digup:name", { person: person.id, name: ev.target.value });
+               }}>
+        <datalist id=${`names-${person.id}`}>
+          ${(p.names || []).filter((n) => n.id !== person.id)
+            .map((n) => html`<option value=${n.name}>${`${n.name} (${n.count})`}</option>`)}
+        </datalist>
         <span class="set-facts">
           <span class="badge ${person.count > 1 ? "ok" : "off"}">${person.count} photo${person.count === 1 ? "" : "s"}</span>
         </span>
@@ -339,6 +352,12 @@ class DigupPeople extends LitElement {
         ${expanded ? html`
           <div class="face-strip">
             ${p.facesFor.faces.map((f) => faceCrop(f))}
+            ${p.facesFor.more ? html`
+              <button class="face-more" type="button"
+                      title="The next 50 photos, newest first"
+                      ?disabled=${p.facesFor.loading}
+                      @click=${() => this.#emit("digup:more-person", { person: person.id })}>
+                ${p.facesFor.loading ? "Loading…" : "Show 50 more"}</button>` : nothing}
           </div>` : nothing}
       </div>`;
   }

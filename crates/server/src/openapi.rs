@@ -72,8 +72,8 @@ fn post_op(summary: &str, id: &str, body: Value) -> Value {
 
 /// Path → operations, pinned to `main.rs`'s router. Keep in step.
 fn paths() -> Value {
-    // The one entry with query parameters is built outside the big table's
-    // `json!` (its nesting pushes the macro past the default recursion limit).
+    // The entries with query parameters are built outside the big table's
+    // `json!` (their nesting pushes the macro past the default recursion limit).
     let faces_similar = json!({
         "tags": ["api"],
         "summary": "Faces similar to one face (the engine's brute-force cosine rank)",
@@ -85,6 +85,25 @@ fn paths() -> Value {
         ],
         "responses": {
             "200": { "description": "Faces similar to one face (the engine's brute-force cosine rank)" },
+            "401": { "description": "bearer token required (www-authenticate: Bearer)" },
+            "403": { "description": "the token's scope does not cover this" },
+            "422": { "description": "validation: a list of {type, loc, msg} objects" },
+            "502": { "description": "the engine CLI failed" },
+            "503": { "description": "the engine's refusal, relayed verbatim" }
+        }
+    });
+    let faces_person_show = json!({
+        "tags": ["api"],
+        "summary": "One person's faces: engine rows with box/kps/score + preview media handles",
+        "operationId": "faces_person_show",
+        "parameters": [
+            target_param(),
+            { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 10000 } },
+            { "name": "offset", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 0 } },
+            { "name": "order", "in": "query", "required": false, "schema": { "type": "string", "enum": ["photo", "scan"] } }
+        ],
+        "responses": {
+            "200": { "description": "One person's faces: engine rows with box/kps/score + preview media handles" },
             "401": { "description": "bearer token required (www-authenticate: Bearer)" },
             "403": { "description": "the token's scope does not cover this" },
             "422": { "description": "validation: a list of {type, loc, msg} objects" },
@@ -283,7 +302,8 @@ fn paths() -> Value {
                 "operationId": "faces_persons",
                 "parameters": [
                     target_param(),
-                    { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 1000000 } }
+                    { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 1000000 } },
+                    { "name": "named", "in": "query", "required": false, "schema": { "type": "boolean" } }
                 ],
                 "responses": {
                     "200": { "description": "The person cards: id, name, count, cover face (with its media handle)" },
@@ -296,7 +316,7 @@ fn paths() -> Value {
             })
         },
         "/api/v1/faces/person/{id}": {
-            "get": get_op("One person's faces: engine rows with box/kps/score + preview media handles", "faces_person_show")
+            "get": faces_person_show
         },
         "/api/v1/faces/name": {
             "post": post_op(

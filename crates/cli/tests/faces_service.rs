@@ -722,6 +722,72 @@ fn faces_service_persons_answers_the_paintable_window() {
         rows[0].get("cover_face").is_none(),
         "covers stay unpaid when not asked"
     );
+    let leader = rows[0]["id"].as_i64().expect("the leader's id");
+
+    // 6. The autocomplete list (`named: true`): only the named people, count first.
+    //    Zero named today → an empty list; naming the leader answers exactly it.
+    let persons = daemon.request("persons", json!({"named": true}), 60);
+    assert_eq!(
+        persons["persons"].as_array().expect("rows").len(),
+        0,
+        "an unnamed store has no merge targets"
+    );
+    daemon.request("name", json!({"person": leader, "name": "Angela"}), 60);
+    let persons = daemon.request("persons", json!({"named": true}), 60);
+    let rows = persons["persons"].as_array().expect("rows");
+    assert_eq!(rows.len(), 1, "the named list is the merge targets");
+    assert_eq!(rows[0]["id"].as_i64(), Some(leader));
+    assert_eq!(rows[0]["name"].as_str(), Some("Angela"));
+    // named:false (absent flag) keeps the full list — the filter never invents rows.
+    let persons = daemon.request("persons", json!({"named": false}), 60);
+    assert_eq!(persons["persons"].as_array().expect("rows").len(), 3);
+
+    // 7. The gallery page (`person` verb + order/limit/offset, 2026-11-23): a mega-
+    //    cluster's full read (7,294 rows measured) is what no panel can render at
+    //    once — the pages are the UI's law. The trio's three faces page cleanly.
+    let full = daemon.request("person", json!({"person": leader}), 60);
+    let faces = full["faces"].as_array().expect("a faces array");
+    assert_eq!(
+        faces.len(),
+        3,
+        "no fields = the full list, the verb's shape"
+    );
+    let mut photo = faces.clone();
+    photo.sort_by(|a, b| {
+        b.get("mtime")
+            .and_then(Value::as_f64)
+            .partial_cmp(&a.get("mtime").and_then(Value::as_f64))
+            .unwrap()
+            .then(b.get("id").and_then(Value::as_i64).cmp(&a.get("id").and_then(Value::as_i64)))
+    });
+    let page = daemon.request(
+        "person",
+        json!({"person": leader, "order": "photo", "limit": 1, "offset": 0}),
+        60,
+    );
+    let rows = page["faces"].as_array().expect("a faces array");
+    assert_eq!(rows.len(), 1, "one photo at a time");
+    assert_eq!(rows[0]["id"], photo[0]["id"], "the newest photo leads");
+    let page = daemon.request(
+        "person",
+        json!({"person": leader, "order": "photo", "limit": 1, "offset": 1}),
+        60,
+    );
+    let rows2 = page["faces"].as_array().expect("a faces array");
+    assert_eq!(rows2.len(), 1);
+    assert_ne!(rows2[0]["id"], rows[0]["id"], "the pages are disjoint");
+    // A page over the whole store answers every row, photo order intact.
+    let page = daemon.request(
+        "person",
+        json!({"person": leader, "order": "photo", "limit": 9}),
+        60,
+    );
+    let rows = page["faces"].as_array().expect("a faces array");
+    assert_eq!(
+        rows.iter().map(|r| r["id"].clone()).collect::<Vec<_>>(),
+        photo.iter().map(|r| r["id"].clone()).collect::<Vec<_>>(),
+        "the photo-date order: mtime DESC, id DESC"
+    );
 
     daemon.quit();
 }

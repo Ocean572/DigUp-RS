@@ -60,7 +60,7 @@ test('faceCrop asks the helper’s own render verb and paints the scale-cancelli
   const { context, asked } = peopleView();
   const box = context.faceCrop(COVER);
   await settle();
-  assert.deepEqual(asked[0], { op: 'render', path: '/p/a.jpg', kind: 'image', loc: null, pixels: 256 });
+  assert.deepEqual(asked[0], { op: 'render', path: '/p/a.jpg', kind: 'image', loc: null, pixels: 512 });
   assert.equal(box.style.aspectRatio, '82.5 / 100');
   const img = box.children[0];
   assert.ok(img.src.startsWith('asset://'), img.src);

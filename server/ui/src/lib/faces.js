@@ -26,7 +26,7 @@ export function cropGeometry(row) {
 }
 
 /* The face crop: a cw/ch window over the enlarged photo (see header). */
-export const faceCrop = (row, pixels = 256) => {
+export const faceCrop = (row, pixels = 512) => {
   const src = `/api/v1/media/${row.media_id}/preview?pixels=${pixels}`;
   const g = cropGeometry(row);
   if (!g) return html`<img class="plain" src=${src} alt=${""} loading="lazy">`;

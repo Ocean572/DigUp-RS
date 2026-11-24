@@ -284,6 +284,7 @@ class DigupApp extends LitElement {
                       @digup:delete=${(e) => this._ctl?.people?.deletePerson(e.detail.person)}
                       @digup:confirm=${(e) => this._ctl?.people?.confirmFace(e.detail.face, e.detail.person)}
                       @digup:open-person=${(e) => this._ctl?.people?.openPerson(e.detail.person)}
+                      @digup:more-person=${(e) => this._ctl?.people?.morePerson(e.detail.person)}
                       @digup:close-person=${() => this._ctl?.people?.closePerson()}>
         </digup-people>
       </header>

@@ -1848,7 +1848,11 @@ async fn faces_scan(app: AppHandle, shell: State<'_, Arc<Shell>>, limit: Option<
 /// `limit` is the panel's paint window (GRID_CAP): the cover query is paid per returned row, so
 /// an unbounded asks for every person on the store (34 s measured for 8,868, over the read clock).
 #[tauri::command]
-async fn faces_persons(shell: State<'_, Arc<Shell>>, limit: Option<i64>) -> Result<Value, String> {
+async fn faces_persons(
+    shell: State<'_, Arc<Shell>>,
+    limit: Option<i64>,
+    named: Option<bool>,
+) -> Result<Value, String> {
     if let Some(n) = limit.filter(|n| *n < 0 || *n > 1_000_000) {
         return Err(format!("faces: the persons window must be 0..=1000000, got {n}"));
     }
@@ -1856,13 +1860,47 @@ async fn faces_persons(shell: State<'_, Arc<Shell>>, limit: Option<i64>) -> Resu
     if let Some(n) = limit {
         fields.insert("limit".into(), json!(n));
     }
+    // `named: true` — the autocomplete list: the named people only, photo count first
+    // (the names the user has given are the merge targets, the datalist's law).
+    if named == Some(true) {
+        fields.insert("named".into(), json!(true));
+    }
     faces_verb(shell.inner().clone(), "persons", fields).await
 }
 
+/// One person's face rows as a PAINTED page (the gallery, 2026-11-23): `order:"photo"` =
+/// the photos' own dates newest first, `limit`/`offset` walks the window the panel scrolls.
+/// The validation mirrors the server route's law — a mega-cluster card (7,294 photos) never
+/// reads its whole gallery at once.
 #[tauri::command]
-async fn faces_person(shell: State<'_, Arc<Shell>>, person: i64) -> Result<Value, String> {
+async fn faces_person(
+    shell: State<'_, Arc<Shell>>,
+    person: i64,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    order: Option<String>,
+) -> Result<Value, String> {
     faces_id("person", person)?;
-    faces_verb(shell.inner().clone(), "person", faces_fields(&[("person", &json!(person))])).await
+    if let Some(n) = limit.filter(|n| *n < 1 || *n > 10_000) {
+        return Err(format!("faces: the gallery page must be 1..=10000, got {n}"));
+    }
+    if let Some(n) = offset.filter(|n| *n < 0) {
+        return Err(format!("faces: the gallery offset must be ≥ 0, got {n}"));
+    }
+    if let Some(o) = order.as_deref().filter(|o| !matches!(*o, "photo" | "scan")) {
+        return Err(format!("faces: the gallery order must be photo or scan, got {o}"));
+    }
+    let mut fields = faces_fields(&[("person", &json!(person))]);
+    if let Some(n) = limit {
+        fields.insert("limit".into(), json!(n));
+    }
+    if let Some(n) = offset {
+        fields.insert("offset".into(), json!(n));
+    }
+    if let Some(o) = order {
+        fields.insert("order".into(), json!(o));
+    }
+    faces_verb(shell.inner().clone(), "person", fields).await
 }
 
 /// The review queue: faces with no confident person, each with the engine's top candidates.

@@ -2192,12 +2192,30 @@ async fn faces_persons(
             }
         }
     }
+    // `?named=1` (the People tab's autocomplete: the names the user has given are the
+    // merge targets). Validation rides the query law: a present named must be a bool.
+    let named = match query_param(&uri, "named").as_deref() {
+        Some("1") | Some("true") | Some("True") => Some(true),
+        Some("0") | Some("false") | Some("False") => Some(false),
+        Some(raw) => {
+            return detail_response(vec![json!({
+                "type": "bool_parsing",
+                "loc": ["query", "named"],
+                "msg": "Input should be a valid boolean, unable to interpret input",
+                "input": raw
+            })]);
+        }
+        None => None,
+    };
     let outcome = in_scope(app.clone(), target.clone(), move |scope| {
         let (consent, record) = faces_consent_guard(&app, &target)?;
         let mut fields = Map::new();
         fields.insert("covers".into(), json!(true));
         if let Some(n) = window {
             fields.insert("limit".into(), json!(n));
+        }
+        if named == Some(true) {
+            fields.insert("named".into(), json!(true));
         }
         let reply = faces::faces_call(
             &scope.cfg,
@@ -2243,6 +2261,7 @@ async fn faces_person_show(
     State(app): State<Shared>,
     Extension(ctx): Extension<Ctx>,
     axum::extract::Path(id): axum::extract::Path<String>,
+    uri: Uri,
 ) -> Response {
     let person = match id.parse::<i64>() {
         Ok(id) if id > 0 => id,
@@ -2255,11 +2274,71 @@ async fn faces_person_show(
             })])
         }
     };
+    // The painted page (the People tab's gallery, 2026-11-23): `?limit=&offset=`
+    // walks the window, `?order=photo` sorts by the photos' own dates newest first.
+    // Absent = the full list, the verb's exact shape. Validation rides the faces
+    // query law (the `similar?limit=` 422 shape).
+    let mut errors = Vec::new();
+    let limit = match query_param(&uri, "limit") {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(n) if (1..=10000).contains(&n) => Some(n),
+            _ => {
+                errors.push(json!({
+                    "type": "less_than_equal",
+                    "loc": ["query", "limit"],
+                    "msg": "Input should be between 1 and 10000",
+                    "input": raw
+                }));
+                None
+            }
+        },
+        None => None,
+    };
+    let offset = match query_param(&uri, "offset") {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(n) if n >= 0 => Some(n),
+            _ => {
+                errors.push(json!({
+                    "type": "int_parsing",
+                    "loc": ["query", "offset"],
+                    "msg": "Input should be a valid integer, a number greater than or equal to 0",
+                    "input": raw
+                }));
+                None
+            }
+        },
+        None => None,
+    };
+    let order = match query_param(&uri, "order") {
+        Some(raw) if matches!(raw.as_str(), "photo" | "scan") => Some(raw),
+        Some(raw) => {
+            errors.push(json!({
+                "type": "enum",
+                "loc": ["query", "order"],
+                "msg": "Input should be 'photo' or 'scan'",
+                "input": raw
+            }));
+            None
+        }
+        None => None,
+    };
+    if !errors.is_empty() {
+        return detail_response(errors);
+    }
     let target = request_target(&ctx);
     let outcome = in_scope(app.clone(), target.clone(), move |scope| {
         let (consent, record) = faces_consent_guard(&app, &target)?;
         let mut fields = Map::new();
         fields.insert("person".into(), json!(person));
+        if let Some(n) = limit {
+            fields.insert("limit".into(), json!(n));
+        }
+        if let Some(n) = offset {
+            fields.insert("offset".into(), json!(n));
+        }
+        if let Some(o) = order {
+            fields.insert("order".into(), json!(o));
+        }
         let reply = faces::faces_call(
             &scope.cfg,
             &app.cfg,

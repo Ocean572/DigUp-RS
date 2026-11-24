@@ -364,6 +364,17 @@ this route has always answered). A present limit outside 1..=1000000 is a 422, t
 
 The person's face rows (same row shape as `cover_face`, each with its minted `media_id`).
 
+`?order=photo` sorts by the photos' own dates newest first (`mtime`, id on ties);
+`?limit=&offset=` walks the painted window the UI scrolls. The gallery's law (2026-11-23):
+a mega-cluster's full read (7,294 rows measured 4.2 s + every row rendered) is what no
+panel paints at once — a 50-row page answers in 0.07 s on the live store. Absent params
+answer every row (the shape this route has always answered). Validation: limit
+1..=10000, offset ≥ 0, order ∈ `photo`/`scan` — the faces query law.
+
+`?named=1` on `GET /api/v1/faces/persons` answers the **named people only**, photo count
+first — the autocomplete list of the People tab's name box (picking one of these names on
+another card is the human's merge act). `named=0`/absent answers the full list.
+
 ### `POST /api/v1/faces/name` · `merge` · `delete` · `confirm` (admin operations)
 
 ```sh

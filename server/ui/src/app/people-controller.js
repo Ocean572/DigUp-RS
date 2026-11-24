@@ -16,7 +16,7 @@
  *  to it. The store starts with `people: null` (main.js) — the controller seeds this. */
 export const PEOPLE_SLICE = {
   consented: false, record: null, models: [], counts: null,
-  persons: [], pending: [], facesFor: null,
+  persons: [], pending: [], facesFor: null, names: [],
   scan: { spinning: false, result: null, error: null },
   error: null,
 };
@@ -61,7 +61,10 @@ export function createPeopleController({ api, store, confirm = (m) => window.con
 
   async function open() {
     const consented = await loadStatus();
-    if (consented) await loadRows();
+    if (consented) {
+      await loadRows();
+      loadNames(); // the datalist loads behind the grid — the cards never wait for it
+    }
     return consented;
   }
 
@@ -144,18 +147,45 @@ export function createPeopleController({ api, store, confirm = (m) => window.con
     return verb("delete", { person }, "delete");
   }
 
-  /* A card's face grid: GET /faces/person/{id} (the minted preview handles ride the
-     rows — the panel crops them with each row's box/width/height). */
+  /* A card's face grid: GET /faces/person/{id} as a PAINTED page (2026-11-23): the
+     newest photos first (`order=photo` = the photos' own dates), 50 at a time; the
+     panel keeps scrolling as the user scrolls (the minted preview handles ride the
+     rows — the panel crops them with each row's box/width/height). A mega-cluster
+     card (7,294 photos) never loads its whole gallery at once — the pages are the
+     UI's law, the engine relays them. */
+  const PAGE = 50;
   async function openPerson(person) {
     try {
-      const { faces } = await api(`/api/v1/faces/person/${person}`);
-      patch({ facesFor: { person, faces } });
+      const { faces } = await api(
+        `/api/v1/faces/person/${person}?limit=${PAGE}&offset=0&order=photo`);
+      patch({ facesFor: { person, faces, more: faces.length === PAGE, loading: false } });
     } catch (error) {
       patch({ error: `person ${person}: ${error.message}` });
     }
   }
+  async function morePerson(person) {
+    const ff = (store.get().people || PEOPLE_SLICE).facesFor;
+    if (!ff || ff.person !== person || ff.loading || !ff.more) return;
+    patch({ facesFor: { ...ff, loading: true } });
+    try {
+      const { faces } = await api(
+        `/api/v1/faces/person/${person}?limit=${PAGE}&offset=${ff.faces.length}&order=photo`);
+      patch({ facesFor: { person: ff.person, faces: [...ff.faces, ...faces],
+                           more: faces.length === PAGE, loading: false } });
+    } catch (error) {
+      patch({ facesFor: { ...ff, loading: false }, error: `person ${person}: ${error.message}` });
+    }
+  }
   function closePerson() {
     patch({ facesFor: null });
+  }
+  /* The autocomplete law (2026-11-23): the names the user has given are the merge
+     targets — GET /faces/persons?named=1 answers the named people only, count-desc. */
+  async function loadNames() {
+    try {
+      const { persons } = await api("/api/v1/faces/persons?named=1");
+      patch({ names: persons.map((p) => ({ id: p.id, name: p.name, count: p.count })) });
+    } catch { /* the datalist is a convenience: a failed read keeps the plain name box */ }
   }
 
   /* Closing the panel: the in-flight scan (if any) is invalidated — its late reply
@@ -170,5 +200,6 @@ export function createPeopleController({ api, store, confirm = (m) => window.con
   }
 
   return { open, accept, withdraw, scanNow, namePerson, merge, deletePerson, confirmFace,
-           openPerson, closePerson, close, get scanToken() { return seq.scan; } };
+           openPerson, closePerson, morePerson, loadNames, close,
+           get scanToken() { return seq.scan; } };
 }

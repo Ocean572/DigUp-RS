@@ -304,6 +304,18 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     assert one["isError"] is False
     assert [f["id"] for f in one["structuredContent"]["faces"]] == \
            [f["id"] for f in mcp_open.get(f"/api/v1/faces/person/{persons[0]['id']}").json()["faces"]]
+    # The painted page rides the tool too (same relay law as the window above).
+    page = call(mcp_open, None, "people",
+                {"action": "person", "person": persons[0]["id"], "limit": 1, "offset": 0, "order": "photo"})
+    assert page["isError"] is False
+    rest_page = mcp_open.get(
+        f"/api/v1/faces/person/{persons[0]['id']}",
+        params={"limit": 1, "offset": 0, "order": "photo"},
+    ).json()
+    for face in page["structuredContent"]["faces"] + rest_page["faces"]:
+        face.pop("media_id")
+    assert page["structuredContent"] == rest_page, "the tool answers what REST answers, page included"
+    assert len(rest_page["faces"]) == 1, rest_page
 
 
 def test_the_show_tool_reads_a_segments_stored_text(mcp_scoped):

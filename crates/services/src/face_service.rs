@@ -361,12 +361,24 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             // more than its cap — the window is what it asked for. Without `limit` the
             // reply keeps its exact shape: every person, id order, covers on all of them.
             let window = request.get("limit").and_then(Value::as_u64);
+            // `named: true` (the People tab's autocomplete list, 2026-11-23): answer
+            // only the named people, ordered by photo count — the names the user has
+            // given are the merge targets. Cheap: the named set is small; covers are
+            // paid only for the rows returned.
+            let named_only = request
+                .get("named")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let mut all = state
                 .store
                 .lock()
                 .unwrap()
                 .list_persons()
                 .map_err(|e| e.to_string())?;
+            if named_only {
+                all.retain(|p| p.name.as_deref().is_some_and(|s| !s.is_empty()));
+                all.sort_by(|a, b| b.count.cmp(&a.count).then(a.id.cmp(&b.id)));
+            }
             if let Some(n) = window {
                 all.sort_by(|a, b| b.count.cmp(&a.count).then(a.id.cmp(&b.id)));
                 all.truncate(n as usize);
@@ -389,11 +401,26 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
         }
         "person" => {
             let id = need_num(request, "person")?;
+            // The painted page (People-tab gallery, 2026-11-23): `order: "photo"` =
+            // the photos' own dates newest first (`mtime`, id on ties); any other
+            // value keeps the verb's row order. `limit`/`offset` is the window the
+            // thin client scrolls. No fields = the full list, the exact shape the
+            // verb has always answered.
+            let order = request
+                .get("order")
+                .and_then(Value::as_str)
+                .unwrap_or("scan");
+            let limit = request
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n.min(i64::MAX as u64) as i64)
+                .unwrap_or(i64::MAX);
+            let offset = request.get("offset").and_then(Value::as_u64).unwrap_or(0) as i64;
             let faces: Vec<Value> = state
                 .store
                 .lock()
                 .unwrap()
-                .person_faces(id)
+                .person_faces_page(id, order, limit, offset)
                 .map_err(|e| e.to_string())?
                 .iter()
                 .map(row_json)

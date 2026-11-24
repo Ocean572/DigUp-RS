@@ -44,7 +44,12 @@ function routes(over = {}) {
     "POST /api/v1/faces/delete": mockReply(200, { ok: true }),
     "POST /api/v1/faces/confirm": mockReply(200, { ok: true }),
     "DELETE /api/v1/faces/consent": mockReply(200, { ok: true, consented: false, removed: true }),
-    "/api/v1/faces/person/1": mockReply(200, { ok: true, faces: PENDING[0].face }),
+    // The autocomplete list (names = merge targets) and the painted gallery page
+    // (controller PAGE=50, newest photo first): openPerson's page answers 1 row.
+    "/api/v1/faces/persons?named=1": mockReply(200, { ok: true,
+      persons: [{ id: 1, name: "Angela", count: 2 }] }),
+    "/api/v1/faces/person/1?limit=50&offset=0&order=photo": mockReply(200, { ok: true,
+      faces: [PENDING[0].face] }),
     ...over,
   };
 }
@@ -174,12 +179,38 @@ describe("people-controller", () => {
     expect(calls.filter((c) => c.path === "/api/v1/faces/delete").length).toBe(0);
   });
 
-  it("openPerson() loads the face grid; closePerson() drops it", async () => {
-    const { store, ctl } = mount();
+  it("openPerson() loads a gallery page; closePerson() drops it", async () => {
+    const { store, calls, ctl } = mount();
     await ctl.openPerson(1);
-    expect(store.get().people.facesFor).toEqual({ person: 1, faces: PENDING[0].face });
+    expect(store.get().people.facesFor).toEqual({ person: 1, faces: [PENDING[0].face],
+                                                  more: false, loading: false });
+    expect(calls.map((c) => c.path)).toContain("/api/v1/faces/person/1?limit=50&offset=0&order=photo");
     ctl.closePerson();
     expect(store.get().people.facesFor).toBe(null);
+  });
+
+  it("the gallery pages: a full page says more, morePerson appends the next window", async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => ({ ...PENDING[0].face, id: 100 + i }));
+    const page2 = Array.from({ length: 20 }, (_, i) => ({ ...PENDING[0].face, id: 200 + i }));
+    const { store, calls, ctl } = mount({
+      "/api/v1/faces/person/1?limit=50&offset=0&order=photo": mockReply(200, { ok: true, faces: page1 }),
+      "/api/v1/faces/person/1?limit=50&offset=50&order=photo": mockReply(200, { ok: true, faces: page2 }),
+    });
+    await ctl.openPerson(1);
+    expect(store.get().people.facesFor.more).toBe(true);
+    await ctl.morePerson(1);
+    const ff = store.get().people.facesFor;
+    expect(ff.faces.length).toBe(70);
+    expect(ff.more).toBe(false);                          // a short page = the store is drained
+    expect(ff.loading).toBe(false);
+    expect(calls.map((c) => c.path)).toContain("/api/v1/faces/person/1?limit=50&offset=50&order=photo");
+  });
+
+  it("loadNames seeds the datalist from the named list (the merge targets)", async () => {
+    const { store, calls, ctl } = mount();
+    await ctl.loadNames();
+    expect(store.get().people.names).toEqual([{ id: 1, name: "Angela", count: 2 }]);
+    expect(calls.map((c) => c.path)).toContain("/api/v1/faces/persons?named=1");
   });
 
   it("errors ride the api's words: scan keeps spinning false with the message, consent keeps the wall", async () => {

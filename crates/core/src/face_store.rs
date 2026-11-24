@@ -789,6 +789,31 @@ impl FaceStore {
         )
     }
 
+    /// The person's photos as a PAINTED page (the People tab's gallery, 2026-11-23):
+    /// `order = "photo"` sorts by the photo's own date (`mtime`, newest first, id on
+    /// ties — "latest image to oldest"); anything else keeps the row order above.
+    /// `limit`/`offset` is the window the thin client scrolls through; a limit of
+    /// i64::MAX with offset 0 answers the full list in exactly the order above.
+    pub fn person_faces_page(
+        &self,
+        person: i64,
+        order: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<FaceRow>> {
+        let (sort, mut values) = if order == "photo" {
+            ("mtime DESC, id DESC", vec![Sql::Int(person)])
+        } else {
+            ("scanned_at DESC, score DESC", vec![Sql::Int(person)])
+        };
+        values.push(Sql::Int(limit));
+        values.push(Sql::Int(offset));
+        self.face_rows(
+            &format!("WHERE person = ?1 ORDER BY {sort} LIMIT ?2 OFFSET ?3"),
+            values,
+        )
+    }
+
     /// `find-similar-faces`: brute-force cosine over the store (FACES.md §2 —
     /// brute force, no ANN, same law as the main index).
     pub fn find_similar(&self, vector: &[f32], limit: usize) -> Result<Vec<(FaceRow, f64)>> {

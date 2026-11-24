@@ -392,6 +392,22 @@ def test_pending_queue_is_empty_on_a_clean_cluster(faces):
     assert body["count"] == 0
 
 
+def test_persons_named_answers_the_merge_targets(faces):
+    # `?named=1` (the autocomplete list, 2026-11-23): the named people only, photo
+    # count first — the names the user has given are the merge targets.
+    named = faces.client.get("/api/v1/faces/persons", params={"named": 1}).json()["persons"]
+    assert len(named) == 1, named
+    assert named[0]["name"] == "Angela", named
+    assert all(p["name"] for p in named), named
+    assert len(named) == faces.counts()["named"], faces.counts()
+    # named=0 answers the full list (the flag filters, it never invents), and a
+    # present non-bool is a 422 the faces query law.
+    full = faces.client.get("/api/v1/faces/persons", params={"named": 0}).json()["persons"]
+    assert len(full) == len(faces.persons()), full
+    for params in ({"named": "abc"}, {"named": "2"}):
+        assert faces.client.get("/api/v1/faces/persons", params=params).status_code == 422, params
+
+
 def test_merge_joins_two_clusters(faces):
     before = faces.persons()
     into, from_ = before[0]["id"], before[1]["id"]
@@ -409,6 +425,30 @@ def test_merge_refuses_an_identity_and_missing_fields(faces):
     reply = faces.client.post("/api/v1/faces/merge", json={"into": pid, "from": pid})
     assert reply.status_code == 422, reply.text
     assert any(e["loc"] == ["body", "into"] for e in reply.json()["detail"]), reply.json()
+
+
+def test_person_show_pages_the_gallery(faces):
+    # The painted gallery (2026-11-23): `?order=photo` sorts by the photos' own dates
+    # newest first, `?limit=&offset=` scrolls the window (each page mints its media
+    # handles), no params = every row. A big person's full read is what the app could
+    # never render at once (7,294 photos) — the pages are the UI's law.
+    target = [p for p in faces.persons() if p["count"] == 2][0]["id"]
+    full = faces.client.get(f"/api/v1/faces/person/{target}").json()["faces"]
+    assert len(full) == 2, full
+    assert all(f["media_id"] for f in full), "every page mints its handles"
+    page0 = faces.client.get(
+        f"/api/v1/faces/person/{target}", params={"limit": 1, "offset": 0, "order": "photo"}
+    ).json()["faces"]
+    assert len(page0) == 1, page0
+    assert page0[0]["mtime"] == max(f["mtime"] for f in full), "the newest photo leads"
+    page1 = faces.client.get(
+        f"/api/v1/faces/person/{target}", params={"limit": 1, "offset": 1, "order": "photo"}
+    ).json()["faces"]
+    assert len(page1) == 1 and page1[0]["id"] != page0[0]["id"], "the pages are disjoint"
+    # The window over the whole store answers every row, scan order intact.
+    assert faces.client.get(f"/api/v1/faces/person/{target}", params={"limit": 9}).json()["faces"] == full
+    for params in ({"limit": 0}, {"limit": 10001}, {"offset": -1}, {"offset": "x"}, {"order": "date"}):
+        assert faces.client.get(f"/api/v1/faces/person/{target}", params=params).status_code == 422, params
 
 
 def test_delete_dissolves_a_person_into_the_pending_queue(faces):
