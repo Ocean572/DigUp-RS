@@ -248,9 +248,9 @@ class DigupPeople extends LitElement {
               : p.persons
             ).slice(0, GRID_CAP).map((person) => this.#card(person, p))}
           </div>
-          ${p.persons.length > GRID_CAP ? html`
+          ${(p.counts?.persons ?? p.persons.length) > GRID_CAP ? html`
             <p class="note">Showing the top ${GRID_CAP.toLocaleString()} of
-            ${p.persons.length.toLocaleString()} people — the most-photo people first.</p>` : nothing}`
+            ${(p.counts?.persons ?? p.persons.length).toLocaleString()} people — the most-photo people first.</p>` : nothing}`
         : html`<p class="note">Nothing found yet — press Scan now. A scan runs on the
             engine's clock; files already recorded are skipped.</p>`}
       </section>

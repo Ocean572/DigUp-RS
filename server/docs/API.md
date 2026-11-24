@@ -352,6 +352,14 @@ Person cards: `name` is `null` for an unnamed cluster (the UI shows "Person NN")
 recorded before face.sqlite schema 3 carries `width: 0` — the honest fallback (the card
 shows the uncropped photo; a re-scan fills the map).
 
+`?limit=N` answers the paintable window: the top N people by photo count (ties by id),
+covers included, and the cover is paid for the returned rows only. The verb pays one
+cover query per person (measured 34 s cold for 8,868 people on the live store), and the
+People tab paints at most its grid cap — the window is exactly what the client paints.
+Absent `limit` answers every person in the store's id order (the full list, the shape
+this route has always answered). A present limit outside 1..=1000000 is a 422, the
+`similar?limit=` law restated.
+
 ### `GET /api/v1/faces/person/{id}`
 
 The person's face rows (same row shape as `cover_face`, each with its minted `media_id`).

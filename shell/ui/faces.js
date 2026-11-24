@@ -108,7 +108,10 @@ async function peopleLoad() {
 /// answer, never an optimistic client-side edit (the server controller's rule, restated shell-side).
 async function peopleRows() {
   try {
-    const [p, q, st] = await Promise.all([fInvoke("faces_persons"), fInvoke("faces_pending"), fInvoke("faces_status")]);
+    // GRID_CAP window (2026-11-23): the verb pays its cover query per returned row —
+    // the whole store costs minutes on a big library (34 s measured for 8,868 people,
+    // over the 120 s read clock), and the panel paints at most GRID_CAP cards anyway.
+    const [p, q, st] = await Promise.all([fInvoke("faces_persons", { limit: GRID_CAP }), fInvoke("faces_pending"), fInvoke("faces_status")]);
     Object.assign(People, { persons: p.persons || [], pending: q.pending || [], counts: st.counts, consented: st.consented });
     peopleRender();
   } catch (error) {
@@ -409,9 +412,12 @@ function peopleConsentedView() {
       : People.persons;
     for (const person of sorted.slice(0, GRID_CAP)) grid.append(peopleCard(person));
     view.append(grid);
-    if (sorted.length > GRID_CAP) {
+    // The cap note counts the STORE (the counts verb), not the window — the window
+    // is exactly what we asked for, the store keeps everyone.
+    const total = People.counts?.persons ?? People.persons.length;
+    if (total > GRID_CAP) {
       view.append(element("p", "note",
-        `Showing the top ${GRID_CAP.toLocaleString()} of ${People.persons.length.toLocaleString()} people — the most-photo people first.`));
+        `Showing the top ${GRID_CAP.toLocaleString()} of ${total.toLocaleString()} people — the most-photo people first.`));
     }
   } else {
     view.append(element("p", "note", "Nothing found yet — press Scan now. One press runs the whole folder; files already recorded are skipped."));

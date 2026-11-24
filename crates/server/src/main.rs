@@ -2166,12 +2166,39 @@ async fn faces_scan(
     }
 }
 
-async fn faces_persons(State(app): State<Shared>, Extension(ctx): Extension<Ctx>) -> Response {
+async fn faces_persons(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    uri: Uri,
+) -> Response {
     let target = request_target(&ctx);
+    // `?limit=N` (the People tab asks for the window it paints — the grid cap, the
+    // most-photo people first): the verb pays its one cover query per person, so an
+    // unbounded covers:true on a big store overruns the read clock (measured 34 s for
+    // 8,868 people on the live store). The window names what the client paints. No
+    // `limit` = the full list, the verb's exact shape. Validation rides the `similar`
+    // route's law: a present limit must be a number in range, 422 the FastAPI way.
+    let mut window = None;
+    if let Some(raw) = query_param(&uri, "limit") {
+        match raw.parse::<i64>() {
+            Ok(n) if (1..=1_000_000).contains(&n) => window = Some(n),
+            _ => {
+                return detail_response(vec![json!({
+                    "type": "less_than_equal",
+                    "loc": ["query", "limit"],
+                    "msg": "Input should be between 1 and 1000000",
+                    "input": raw
+                })]);
+            }
+        }
+    }
     let outcome = in_scope(app.clone(), target.clone(), move |scope| {
         let (consent, record) = faces_consent_guard(&app, &target)?;
         let mut fields = Map::new();
         fields.insert("covers".into(), json!(true));
+        if let Some(n) = window {
+            fields.insert("limit".into(), json!(n));
+        }
         let reply = faces::faces_call(
             &scope.cfg,
             &app.cfg,

@@ -27,7 +27,7 @@ use std::sync::LazyLock;
 use axum::body::{to_bytes, Bytes};
 use axum::extract::{Extension, State};
 use axum::http::header::HeaderValue;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Map, Value};
@@ -186,7 +186,18 @@ async fn execute(
                 .unwrap_or("status");
             let response = match action {
                 "status" => crate::faces_status(State(app.clone()), Extension(ctx.clone())).await,
-                "persons" => crate::faces_persons(State(app.clone()), Extension(ctx.clone())).await,
+                "persons" => {
+                    // The paintable window rides the route's own query law: an optional
+                    // `limit` arg becomes the route's `?limit=` (the route answers its
+                    // own 422 for a bad one — the tool relays, never edits).
+                    let uri = match args.get("limit") {
+                        Some(n) => format!("/api/v1/faces/persons?limit={n}")
+                            .parse()
+                            .unwrap_or_else(|_| Uri::from_static("/api/v1/faces/persons?limit=x")),
+                        None => Uri::from_static("/api/v1/faces/persons"),
+                    };
+                    crate::faces_persons(State(app.clone()), Extension(ctx.clone()), uri).await
+                }
                 "pending" => crate::faces_pending(State(app.clone()), Extension(ctx.clone())).await,
                 "person" => {
                     let Some(person) = args.get("person").and_then(Value::as_i64) else {

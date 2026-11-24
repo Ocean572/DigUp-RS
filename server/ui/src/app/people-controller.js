@@ -47,7 +47,10 @@ export function createPeopleController({ api, store, confirm = (m) => window.con
   async function loadRows() {
     try {
       const [p, q, st] = await Promise.all([
-        api("/api/v1/faces/persons"), api("/api/v1/faces/pending"), api("/api/v1/faces/status"),
+        // `?limit=300` = the grid cap below: the verb pays its one cover query per
+        // person (34 s for 8,868 people measured on the live store), and the panel
+        // paints at most GRID_CAP cards — ask for exactly the window, count-desc.
+        api("/api/v1/faces/persons?limit=300"), api("/api/v1/faces/pending"), api("/api/v1/faces/status"),
       ]);
       patch({ persons: p.persons, pending: q.pending, counts: st.counts,
               consented: st.consented });

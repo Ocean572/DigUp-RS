@@ -353,8 +353,25 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .get("covers")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let persons: Vec<Value> = state.store.lock().unwrap().list_persons()
-                .map_err(|e| e.to_string())?
+            // `limit: N` (the People tab asks for the window it paints — GRID_CAP cards,
+            // the most-photo people first): the verb answers the top N by photo count and
+            // pays the cover query for exactly those rows. A store of 8,868 people at
+            // covers:true costs one face query per person (measured 34 s cold on the live
+            // store, over the thin client's 120 s read clock), and the panel never paints
+            // more than its cap — the window is what it asked for. Without `limit` the
+            // reply keeps its exact shape: every person, id order, covers on all of them.
+            let window = request.get("limit").and_then(Value::as_u64);
+            let mut all = state
+                .store
+                .lock()
+                .unwrap()
+                .list_persons()
+                .map_err(|e| e.to_string())?;
+            if let Some(n) = window {
+                all.sort_by(|a, b| b.count.cmp(&a.count).then(a.id.cmp(&b.id)));
+                all.truncate(n as usize);
+            }
+            let persons: Vec<Value> = all
                 .iter()
                 .map(|p| {
                     let mut row = serde_json::json!({"id": p.id, "name": p.name, "count": p.count, "cover": p.cover});

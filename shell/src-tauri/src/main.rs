@@ -1845,9 +1845,18 @@ async fn faces_scan(app: AppHandle, shell: State<'_, Arc<Shell>>, limit: Option<
 
 /// The person cards: the engine's rows with their cover faces (the page crops them with each row's
 /// box/width/height over the helper's own `/render` previews — the server's crop law, FACES.md).
+/// `limit` is the panel's paint window (GRID_CAP): the cover query is paid per returned row, so
+/// an unbounded asks for every person on the store (34 s measured for 8,868, over the read clock).
 #[tauri::command]
-async fn faces_persons(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
-    faces_verb(shell.inner().clone(), "persons", faces_fields(&[("covers", &json!(true))])).await
+async fn faces_persons(shell: State<'_, Arc<Shell>>, limit: Option<i64>) -> Result<Value, String> {
+    if let Some(n) = limit.filter(|n| *n < 0 || *n > 1_000_000) {
+        return Err(format!("faces: the persons window must be 0..=1000000, got {n}"));
+    }
+    let mut fields = faces_fields(&[("covers", &json!(true))]);
+    if let Some(n) = limit {
+        fields.insert("limit".into(), json!(n));
+    }
+    faces_verb(shell.inner().clone(), "persons", fields).await
 }
 
 #[tauri::command]

@@ -33,7 +33,7 @@ function routes(over = {}) {
     "/api/v1/faces/status": mockReply(200, { ok: true, consented: true,
       record: { consented: true, accepted_at: 5.0, det_model: "scrfd_10g_bnkps.onnx", emb_model: "w600k_mbf.onnx" },
       models: MODELS, counts: COUNTS }),
-    "/api/v1/faces/persons": mockReply(200, { ok: true, persons: PERSONS }),
+    "/api/v1/faces/persons?limit=300": mockReply(200, { ok: true, persons: PERSONS }),
     "/api/v1/faces/pending": mockReply(200, { ok: true, pending: PENDING, count: 1 }),
     "POST /api/v1/faces/consent": (p, o) => mockReply(200, { ok: true, consented: true,
       record: { consented: true, ...JSON.parse(o.body), accepted_at: 5.0 } }),
@@ -80,14 +80,14 @@ describe("people-controller", () => {
     expect(p.consented).toBe(false);
     expect(p.counts.faces).toBe(0);
     expect(p.persons).toEqual([]);
-    expect(calls.map((c) => c.path)).not.toContain("/api/v1/faces/persons");
+    expect(calls.map((c) => c.path)).not.toContain("/api/v1/faces/persons?limit=300");
   });
 
   it("open() on a consented deployment reads status + persons + pending", async () => {
     const { store, calls, ctl } = mount();
     expect(await ctl.open()).toBe(true);
     const paths = calls.map((c) => c.path);
-    expect(paths).toContain("/api/v1/faces/persons");
+    expect(paths).toContain("/api/v1/faces/persons?limit=300");
     expect(paths).toContain("/api/v1/faces/pending");
     const p = store.get().people;
     expect(p.persons).toEqual(PERSONS);
@@ -119,7 +119,7 @@ describe("people-controller", () => {
     expect(p.scan).toEqual({ spinning: false,
                              result: { files: 12, faces: 3, skipped: 0, fresh: 0, assigned: 3 },
                              error: null });
-    expect(calls.filter((c) => c.path === "/api/v1/faces/persons").length).toBe(1);
+    expect(calls.filter((c) => c.path === "/api/v1/faces/persons?limit=300").length).toBe(1);
   });
 
   it("the scan token: a late first answer writes nothing when a newer scan started, and close invalidates the in-flight one", async () => {

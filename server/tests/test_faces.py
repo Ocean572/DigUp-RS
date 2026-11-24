@@ -294,6 +294,27 @@ def test_cover_faces_preview_through_the_existing_media_handle(faces):
     assert faces.client.get("/api/v1/media/deadbeefcafe/preview", params={"pixels": 256}).status_code == 404
 
 
+def test_persons_limit_answers_the_paintable_window(faces):
+    # The paintable window (2026-11-23): covers:true pays one cover query per person —
+    # 34 s cold for 8,868 people on the live store, over the thin clients' read clock —
+    # and the People tab paints at most GRID_CAP cards. `?limit=N` answers the top N by
+    # photo count (ties by id), covers minted for the returned rows only; the plain
+    # list keeps its exact shape. Validation rides the `similar?limit=` law.
+    persons = faces.persons()
+    ordered = sorted(persons, key=lambda p: (-p["count"], p["id"]))
+    for n in (1, 2, len(persons), len(persons) + 5):
+        reply = faces.client.get("/api/v1/faces/persons", params={"limit": n})
+        assert reply.status_code == 200, reply.text
+        rows = reply.json()["persons"]
+        assert len(rows) == min(n, len(persons)), rows
+        assert [r["id"] for r in rows] == [r["id"] for r in ordered[:n]], rows
+        assert all(r["cover_face"] for r in rows), rows
+    # No params = the full list, id order — the shape every persons() pin above reads.
+    assert [p["id"] for p in faces.persons()] == [p["id"] for p in sorted(persons, key=lambda p: p["id"])]
+    for params in ({"limit": 0}, {"limit": -1}, {"limit": 1_000_001}, {"limit": "abc"}):
+        assert faces.client.get("/api/v1/faces/persons", params=params).status_code == 422, params
+
+
 def test_person_show_lists_its_faces_with_handles(faces):
     for person in faces.persons():
         pid = person["id"]

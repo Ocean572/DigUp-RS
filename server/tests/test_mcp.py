@@ -281,6 +281,17 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
         assert "media_id" in row["cover_face"], row
         row["cover_face"].pop("media_id")
     assert relayed["structuredContent"] == rest, "the tool answers what REST answers"
+    # The paintable window rides the tool too: the `limit` arg becomes the route's
+    # `?limit=` (the tool relays the route, including its 422 for a bad limit).
+    windowed = call(mcp_open, None, "people", {"action": "persons", "limit": 1})
+    assert windowed["isError"] is False
+    rest1 = mcp_open.get("/api/v1/faces/persons", params={"limit": 1}).json()
+    for row in windowed["structuredContent"]["persons"] + rest1["persons"]:
+        row["cover_face"].pop("media_id")
+    assert windowed["structuredContent"] == rest1, "the tool answers what REST answers, window included"
+    assert len(rest1["persons"]) == 1, rest1
+    bad = call(mcp_open, None, "people", {"action": "persons", "limit": 0})
+    assert bad["isError"] is True and bad["structuredContent"]["detail"][0]["loc"] == ["query", "limit"], bad
     persons = rest["persons"]
     # Person law (the suite's law for centroid geometry, FACES.md): every stored
     # face lands in a person, nothing queued, 1 <= persons <= faces.

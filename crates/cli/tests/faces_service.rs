@@ -603,3 +603,125 @@ fn faces_service_without_a_consent_record_refuses_to_serve() {
         "a record with consented:false is no consent"
     );
 }
+
+/// The paintable window (the People tab's shape, 2026-11-23): `covers: true` pays one
+/// cover query per person — the live store measured 34 s cold for 8,868 people, over the
+/// thin client's 120 s read clock, for a panel that paints at most GRID_CAP cards. The
+/// `limit` field answers exactly that window: the most-photo people first, covers paid
+/// for the returned rows only. No `limit` keeps the reply's exact shape (every person,
+/// id order), so every thin client reading the verb today is untouched.
+#[test]
+fn faces_service_persons_answers_the_paintable_window() {
+    let Some(models) = face_models_dir() else {
+        eprintln!("SKIP: the pinned face models are absent (faces_service gate)");
+        return;
+    };
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/faces");
+    let work = tempfile::tempdir().expect("a work folder");
+    let index = work.path().join("index");
+    std::fs::create_dir_all(&index).expect("the index folder");
+    let consent = consent_file(work.path());
+
+    // The trio merges at this daemon's 0.45 pin; min_faces:1 lets the two singletons
+    // be cards too — the fixture's three persons carry counts [3, 1, 1].
+    let mut daemon = Daemon::start_with(&index, &models, &consent, &["--faces-min-faces", "1"]);
+    let roots = json!({"roots": [fixtures.to_string_lossy()]});
+    assert_eq!(
+        daemon.request("scan", roots, 600)["ok"],
+        true,
+        "scan answers"
+    );
+
+    let counts = daemon.request("counts", json!({}), 60);
+    assert_eq!(
+        counts["persons"], 3,
+        "min_faces:1 makes three cards: {counts}"
+    );
+
+    // 1. No limit: every person, id order, no covers asked — no cover fields.
+    let persons = daemon.request("persons", json!({}), 60);
+    let rows = persons["persons"].as_array().expect("a persons array");
+    assert_eq!(rows.len(), 3);
+    let ids: Vec<i64> = rows
+        .iter()
+        .map(|p| p["id"].as_i64().expect("an id"))
+        .collect();
+    assert_eq!(
+        ids,
+        {
+            let mut sorted = ids.clone();
+            sorted.sort();
+            sorted
+        },
+        "the plain list keeps its id order"
+    );
+    assert!(
+        rows.iter().all(|p| p.get("cover_face").is_none()),
+        "no covers asked, none paid"
+    );
+
+    // 2. Covers without a limit: every row pays its cover face (the old shape).
+    let persons = daemon.request("persons", json!({"covers": true}), 60);
+    let rows = persons["persons"].as_array().expect("a persons array");
+    assert_eq!(rows.len(), 3);
+    for row in rows {
+        let cover = row["cover_face"]
+            .as_object()
+            .expect("a cover face per card");
+        assert!(
+            cover.get("box").is_some() && cover.get("path").is_some(),
+            "the cover row: {cover:?}"
+        );
+    }
+
+    // 3. The window: top N by photo count (the panel's paint order), covers included.
+    let persons = daemon.request("persons", json!({"covers": true, "limit": 2}), 60);
+    let rows = persons["persons"].as_array().expect("a persons array");
+    assert_eq!(rows.len(), 2, "the window is what the client asked for");
+    let (first, second) = (rows[0].clone(), rows[1].clone());
+    assert_eq!(
+        rows[0]["count"], 3,
+        "the biggest cluster leads the window: {first}"
+    );
+    assert_eq!(
+        rows[1]["count"], 1,
+        "then the singletons, id order on ties: {second}"
+    );
+    assert!(
+        first["id"].as_i64() < second["id"].as_i64(),
+        "id order breaks the count tie"
+    );
+    for row in rows {
+        assert!(
+            row["cover_face"].as_object().is_some(),
+            "window rows carry their cover"
+        );
+    }
+
+    // 4. A window wider than the store answers every person; limit 0 answers none
+    //    (the engine relays the number it is given — it never edits it).
+    let persons = daemon.request("persons", json!({"limit": 9}), 60);
+    assert_eq!(persons["persons"].as_array().expect("rows").len(), 3);
+    assert_eq!(
+        persons["persons"].as_array().expect("rows")[0]["count"],
+        3,
+        "a window over the whole store is still the count-desc window"
+    );
+    let persons = daemon.request("persons", json!({"limit": 0}), 60);
+    assert_eq!(persons["persons"].as_array().expect("rows").len(), 0);
+
+    // 5. The window pays covers for its rows only: count is the row field, never a cover.
+    let persons = daemon.request("persons", json!({"limit": 1}), 60);
+    let rows = persons["persons"].as_array().expect("a persons array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["count"], 3,
+        "the window leads with the biggest cluster"
+    );
+    assert!(
+        rows[0].get("cover_face").is_none(),
+        "covers stay unpaid when not asked"
+    );
+
+    daemon.quit();
+}

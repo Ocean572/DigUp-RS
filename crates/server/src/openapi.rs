@@ -277,7 +277,23 @@ fn paths() -> Value {
             )
         },
         "/api/v1/faces/persons": {
-            "get": get_op("The person cards: id, name, count, cover face (with its media handle)", "faces_persons")
+            "get": json!({
+                "tags": ["api"],
+                "summary": "The person cards: id, name, count, cover face (with its media handle)",
+                "operationId": "faces_persons",
+                "parameters": [
+                    target_param(),
+                    { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 1000000 } }
+                ],
+                "responses": {
+                    "200": { "description": "The person cards: id, name, count, cover face (with its media handle)" },
+                    "401": { "description": "bearer token required (www-authenticate: Bearer)" },
+                    "403": { "description": "the token's scope does not cover this" },
+                    "422": { "description": "validation: a list of {type, loc, msg} objects" },
+                    "502": { "description": "the engine CLI failed" },
+                    "503": { "description": "the engine's refusal, relayed verbatim" }
+                }
+            })
         },
         "/api/v1/faces/person/{id}": {
             "get": get_op("One person's faces: engine rows with box/kps/score + preview media handles", "faces_person_show")
