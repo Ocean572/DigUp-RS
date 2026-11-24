@@ -121,8 +121,14 @@ fn info_answers_from_the_shape_and_allocates_nothing_per_call() {
         "info() must not restart the model: the shape is decided by the queue and by media calls"
     );
     let grew = after.saturating_sub(before);
+    // The pin is the LEAK, not page residence. Measured 2026-11-23 on a loaded box:
+    // statm's resident field of this very test swings 1.0–1.2 MB run to run under
+    // the indexer's memory pressure (kernel reclaim/refresh of the test's own pages)
+    // — the 1 MiB pin was a coin flip on a busy machine. The defect this gate
+    // catches (audit wave 1 row 13: a `Box::leak` of a WorkerInfo per call) leaves
+    // ~20 MB across 200 k calls — a 20× signal at any floor below 10 MB.
     assert!(
-        grew < 1 << 20,
+        grew < (8 << 20),
         "200 k info() calls grew the process by {grew} bytes; the answer must be the shape's \
          own borrow (at audit-base this seam leaked a WorkerInfo per call)"
     );
