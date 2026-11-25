@@ -150,6 +150,32 @@ def test_keyword_only_search_when_meaning_is_off(client):
     assert reply["hits"]                               # keyword-only still answers
 
 
+def test_name_only_is_the_typed_name_prefix_answer(client):
+    """#66 (2026-11-25): the GUIs' "Names only" control rides the REST field. The daemon
+    seam composes the exact typed `name:` spelling (and only then), so the field's answer
+    is the typed prefix's answer — row for row, same store, same process: the relay is
+    deterministic. `meaning` is false: the model never starts for names. An absent field
+    is the ordinary search, so every pre-round pin rides byte-identical."""
+    typed = client.post("/api/v1/search",
+                        json={"q": "name: wakeboarding", "limit": 10}).json()
+    field = client.post("/api/v1/search",
+                        json={"q": "wakeboarding", "name_only": True, "limit": 10}).json()
+
+    def strip(reply):                                # media ids are per-reply, timings per call
+        return ([{k: v for k, v in hit.items() if k != "media_id"} for hit in reply["hits"]],
+                reply["strong"], reply["meaning"])
+
+    assert strip(field) == strip(typed)
+    assert field["meaning"] is False
+    assert field["hits"], "the suite corpus carries wakeboard-named files"
+    plain = client.post("/api/v1/search", json={"q": "wakeboarding", "limit": 10}).json()
+    assert plain["meaning"] is True                  # absent field = the semantic search, untouched
+    bad = client.post("/api/v1/search", json={"q": "x", "name_only": "maybe"})
+    assert bad.status_code == 422
+    item = bad.json()["detail"][0]
+    assert item["type"] == "bool_parsing" and item["loc"] == ["body", "name_only"]
+
+
 def test_kind_filter_is_the_engines(client):
     reply = client.post("/api/v1/search",
                         json={"q": "wakeboarding", "kinds": ["video"]}).json()
