@@ -221,7 +221,15 @@ function openPeopleMenu(button) {
   menu.style.top = `${at.bottom - box.top + $content.scrollTop + 6}px`;
   peopleMenu = menu;
   // The outside click lands on the NEXT tick (this click is the button's own).
-  peopleMenuDismiss = (event) => { if (!menu.contains(event.target)) closePeopleMenu(); };
+  // The pill click must NOT dismiss: the capture-phase dismiss fires BEFORE the button's
+  // own toggle handler, so dismissing on a pill click closes the panel and the toggle
+  // (peopleMenu ? close : open) immediately reopens it — measured 2026-11-25: "when i
+  // click the people dropdown a second time to close the dropdown it does not close".
+  // The pill's own click is the pill's business; the dismiss ignores it (and the panel).
+  peopleMenuDismiss = (event) => {
+    if (menu.contains(event.target) || button.contains(event.target)) return;
+    closePeopleMenu();
+  };
   setTimeout(() => document.addEventListener("click", peopleMenuDismiss, true), 0);
 }
 
