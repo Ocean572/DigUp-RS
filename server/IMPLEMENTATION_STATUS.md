@@ -2,6 +2,57 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-25 — v0.9.0: the People tab ships; the paint chase closes with the rendering config; the round-eight settings fixes (main `98c2d89`)
+
+**What ships (merged `feature/native-faces` 48 commits + `feature/round-eight`, both
+fast-forward to main; stamps bumped in the release commit: Cargo workspace,
+server/pyproject.toml, tauri.conf.json → 0.9.0):**
+
+- **People tab, all fronts**: native face recognition (detect → embed → cluster →
+  name), the painted gallery with 512-px crops, autocomplete naming, the People
+  filter on search (desktop dropdown, web select), scan worker pool, consent record
+  enforced by app + engine, faces MCP tool, server faces routes + walls.
+- **The measured rendering config** (closes the five-round paint chase): Ubuntu's
+  webkit2gtk 2.52.6-0ubuntu0.26.04.2 ("Use the SHM transport with NVIDIA GPUs",
+  Debian #1142771 / LP #2168736) makes accelerated compositing safe on NVIDIA +
+  GNOME Wayland; the app bakes `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` into its own
+  startup (Linux-only cfg — Windows rides WebView2, macOS rides WKWebView). The old
+  pins (WEBKIT_DISABLE_COMPOSITING_MODE/DMABUF_RENDERER) are RETIRED — they forced
+  the patched-rect painter whose windowed expose repaints produced the stale
+  specks; the JS repaint kick is retired; the People panel rides its own composited
+  layer (translateZ). User-verified on this box (NVIDIA 580.178.04): spotlight-area
+  artifact FIXED; a residual windowed panel bleed is accepted. AppImage bundles copy
+  the system WebKit at package time — this release's bundles carry the fixed `.2`;
+  deb installs get it from the system apt upgrade.
+- **Round eight** (the user's 2026-11-25 brief): both People consent gates explain,
+  before the accept box, why the model packs download (once, from Hugging Face, the
+  only network step; face recognition fully offline after; photos never upload; the
+  face store is local; no account, no cloud) and what acceptance authorizes
+  (detect/describe/group faces in the searched folders with the chosen tier;
+  withdrawable; never deletes photos) plus the tier tradeoff note. The server
+  Settings API-access section is always informative: endpoint (copyable), the
+  server's own browsable docs link (`GET /api/v1/docs` — implemented in the Rust
+  server, linked by the UI for the first time this round), honest env-keyed /
+  tokenless state lines. The desktop MCP section is agent-neutral: "AI agents (MCP
+  server)", the command `digup mcp` over stdio, the checkbox labeled as the Claude
+  Desktop one-click.
+
+**Gates at the merge tip (this box):** engine suite `--workspace --all-targets`
+42 targets 0 failed (shape: LD_LIBRARY_PATH + `DIGUP_BACKENDS` = Vendor llama/lib —
+llama.cpp 0.26 CPU backends load dynamically; the model-pinned gates run with
+`DIGUP_MODELS`, the media suite self-skips on the ffmpeg seam as designed);
+fmt + clippy `-D warnings` clean; server UI vitest 86/86 + vite build green; shell
+UI tests 20/20. CI at `b743435`: CI success; the Server contract suite runs as the
+CI checkpoint at the release tip. Live bench verification: `/api/v1/tokens` answers
+the minted admin key, `/api/v1/docs` 200, the served bundle carries the People
+dropdown + consent copy, `tokens.json` 0600.
+
+**Release chain:** tag `v0.9.0` → Rust release (payload tiles + formula) → Packages
+dispatch **with the tag typed as ref** (ref=main skips the feeds job — the measured
+v0.8.1 lesson) → raw update artifacts attached promptly (exe/AppImage/app.tar.gz,
+names verbatim) → feeds verify 200 with version == tag. Installed copies self-update
+from 0.8.1 on through this repo's feed.
+
 ## 2026-11-22 — Native face recognition: engine → server → People tab (branch `feature/native-faces`, 20 commits)
 
 Faces lands as a fully separate surface from EmbeddingGemma 2: own models (six user-supplied

@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "digup-cli"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "digup-core",
  "digup-native",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "digup-core"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "flate2",
  "half",
@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "digup-native"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "cc",
  "digup-core",
@@ -384,11 +384,11 @@ dependencies = [
 
 [[package]]
 name = "digup-platform"
-version = "0.8.1"
+version = "0.9.0"
 
 [[package]]
 name = "digup-runtime"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "bindgen",
  "digup-core",
@@ -408,7 +408,7 @@ dependencies = [
 
 [[package]]
 name = "digup-server"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "axum",
  "chrono",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "digup-services"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "base64",
  "digup-core",
