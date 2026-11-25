@@ -49,6 +49,17 @@ AGENTS.md
 session-*.md
 ROADMAP.md
 
+# Model weights NEVER live in this repository (user, standing 2026-11-25 — copyright).
+# The embedding pair + the six face packs ship from HuggingFace: the app downloads
+# them on the user's OWN machine, gated on model choice + explicit consent
+# (faces-consent.json; the engine gates the same), and CI fetches the same pinned
+# files into runner temp (destroyed with the job). Nothing model-shaped is ever
+# committed, published, or attached to a release. The .bin fixtures under
+# crates/native/tests/fixtures are synthetic parity data, not weights.
+*.gguf
+*.onnx
+SHA256SUMS
+
 # The architecture map (Rust-port survey): a local working doc, not part of the PR
 docs/ARCHITECTURE_MAP.md
 
