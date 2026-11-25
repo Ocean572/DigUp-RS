@@ -151,6 +151,61 @@ describe("digup-search", () => {
     expect(el.shadowRoot.getElementById("people-filter")).toBe(null);
   });
 
+  // The scope selects (#206/#132/#188, 2026-11-25): a folder scope + a file-type keep right
+  // of the kind chips — the picks ride the SAME search event with `under`/`ext` lists
+  // (null = the field-less, byte-parity verb). The server relays; the engine narrows the
+  // scope inside its OWN roots and drops rows after the ranking — the UI invents no filter.
+  it("scope selects: roots and file types ride the chips row, picks emit under/ext", async () => {
+    expect(el.shadowRoot.getElementById("scope")).toBe(null);   // no roots published: hidden
+    expect(el.shadowRoot.getElementById("ext")).toBe(null);     // no answer yet: hidden
+    el.roots = ["/photos/vienna", "/data/clips"];
+    el.extensions = ["jpg", "webm"];
+    await el.updateComplete;
+    const scope = el.shadowRoot.getElementById("scope");
+    const ext = el.shadowRoot.getElementById("ext");
+    expect([...scope.querySelectorAll("option")].map((o) => o.textContent))
+      .toEqual(["All folders", "vienna", "clips"]);
+    expect([...ext.querySelectorAll("option")].map((o) => o.textContent))
+      .toEqual(["All types", ".jpg", ".webm"]);
+    const p = onceEvent(document, "digup:query-change");
+    scope.value = "/photos/vienna";
+    scope.dispatchEvent(new Event("change"));
+    expect((await p).detail.under).toEqual(["/photos/vienna"]);
+    const p2 = onceEvent(document, "digup:query-change");
+    ext.value = "webm";
+    ext.dispatchEvent(new Event("change"));
+    const d2 = (await p2).detail;
+    expect(d2.ext).toEqual(["webm"]);
+    expect(d2.under).toEqual(["/photos/vienna"]);   // folder + type compose in one detail
+    const p3 = onceEvent(document, "digup:query-change");
+    ext.value = "";
+    ext.dispatchEvent(new Event("change"));
+    expect((await p3).detail.ext).toBe(null);
+  });
+
+  it("the scope drops a folder the roots no longer carry (the server answers only for its roots)", async () => {
+    el.roots = ["/photos/vienna"];
+    await el.updateComplete;
+    const scope = el.shadowRoot.getElementById("scope");
+    scope.value = "/photos/vienna";
+    scope.dispatchEvent(new Event("change"));
+    el.roots = ["/data/clips"];                     // the root left the deployment
+    await el.updateComplete;
+    const p = onceEvent(document, "digup:query-change");
+    el.shadowRoot.getElementById("q").dispatchEvent(new Event("input"));
+    expect((await p).detail.under).toBe(null);
+  });
+
+  it("the scope selects hide in code mode", async () => {
+    el.roots = ["/photos/vienna"];
+    el.extensions = ["jpg"];
+    el.isCode = true;
+    await el.updateComplete;
+    await el.updateComplete;
+    expect(el.shadowRoot.getElementById("scope")).toBe(null);
+    expect(el.shadowRoot.getElementById("ext")).toBe(null);
+  });
+
   it("in-field keys: ↑↓ nav, ↩ activate, Space previews only after navigation", async () => {
     const nav = onceEvent(document, "digup:nav");
     key(el.shadowRoot.getElementById("q"), "ArrowDown");

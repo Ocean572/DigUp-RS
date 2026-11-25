@@ -14,6 +14,9 @@ import { controlCss } from "../styles/controls.js";
 const KINDS = [["screenshot", "Screenshots"], ["image", "Images"], ["pdf", "PDFs"],
                ["doc", "Documents"], ["video", "Video"], ["audio", "Audio"]];
 
+/// A root folder's basename for the scope select ("…/photos" → "photos").
+const folderName = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
+
 class DigupSearch extends LitElement {
   static properties = {
     isCode: {},
@@ -21,11 +24,15 @@ class DigupSearch extends LitElement {
     navigated: {},
     hasSelection: {},
     names: {},
+    roots: {},
+    extensions: {},
     _code: { state: true },
     _names: { state: true },
     _limit: { state: true },
     _kinds: { state: true },
     _person: { state: true },
+    _scope: { state: true },
+    _ext: { state: true },
   };
 
   static styles = [controlCss, css`
@@ -62,9 +69,13 @@ class DigupSearch extends LitElement {
     #kinds-all { padding: 0.1rem 0.6rem; font-size: 0.78rem; border-radius: var(--radius-pill); }
     /* The People dropdown (round six, 2026-11-23): a chip-shaped select right of the kind
        chips. Names ride the faces store's own list; picking one filters the shown rows. */
-    #people-filter { padding: 0.28rem 0.6rem; font-size: 0.85rem; border-radius: var(--radius-pill);
+    /* The dropdown selects (round six People, 2026-11-25 + Scope/extension): chip-shaped
+       selects right of the kind chips. The web UI keeps NATIVE selects — real browsers
+       open those (the shell's webview cannot, see shell/ui/window.css). */
+    #people-filter, #scope, #ext { padding: 0.28rem 0.6rem; font-size: 0.85rem;
+      border-radius: var(--radius-pill);
       border: 1px solid var(--edge); background: var(--panel); color: var(--text); max-width: 14rem; }
-    #people-filter:hover { border-color: var(--accent); }
+    #people-filter:hover, #scope:hover, #ext:hover { border-color: var(--accent); }
     /* the all button is a TOGGLE (round-7 brief): pressed state while all six are on */
     #kinds-all[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
     @media (max-width: 720px) {
@@ -82,8 +93,12 @@ class DigupSearch extends LitElement {
     this._limit = 40;
     this._kinds = new Set(KINDS.map(([k]) => k));   // all ticked = null = all kinds
     this._person = null;                            // round six: null = everyone
+    this._scope = null;                             // #206/#132/#188: null = all folders
+    this._ext = null;                               // null = all types
     this._text = "";
     this.names = [];
+    this.roots = [];
+    this.extensions = [];
   }
 
   #emit() {
@@ -95,7 +110,13 @@ class DigupSearch extends LitElement {
                 // The People filter (round six, the user's design): a person id or null —
                 // the search stays pure, the SERVER answers which of its paths carry the
                 // person's face (faces store membership, relayed; z's untouched).
-                person: this._person },
+                person: this._person,
+                // The scope keeps (#206/#132/#188, 2026-11-25): relayed to the verb fields —
+                // the engine narrows the scope INSIDE its roots and drops rows after the
+                // ranking (z's ride verbatim). A scope path the roots no longer carry is
+                // dropped: the server answers only for its roots, so it can only answer empty.
+                under: this._scope && (this.roots || []).includes(this._scope) ? [this._scope] : null,
+                ext: this._ext ? [this._ext] : null },
     }));
   }
 
@@ -165,6 +186,19 @@ class DigupSearch extends LitElement {
             <option value="">People: everyone</option>
             ${this.names.filter((n) => n.name).map((n) => html`
               <option value=${String(n.id)}>${`${n.name} (${n.count.toLocaleString()})`}</option>`)}
+          </select>`}
+        ${this.isCode || !(this.roots || []).length ? nothing : html`
+          <select id="scope" title="Search only inside a folder — the scope narrows, it never widens"
+                  aria-label="Search scope" .value=${(this.roots || []).includes(this._scope) ? this._scope : ""}
+                  @change=${(e) => { this._scope = e.target.value || null; this.#emit(); }}>
+            <option value="">All folders</option>
+            ${this.roots.map((root) => html`<option value=${root}>${folderName(root)}</option>`)}`}
+        ${this.isCode || !(this.extensions || []).length ? nothing : html`
+          <select id="ext" title="Search only files of these types (the engine keeps its ranked rows verbatim)"
+                  aria-label="File type" .value=${this._ext ?? ""}
+                  @change=${(e) => { this._ext = e.target.value || null; this.#emit(); }}>
+            <option value="">All types</option>
+            ${this.extensions.map((x) => html`<option value=${x}>.${x}</option>`)}
           </select>`}
         <button id="kinds-all" type="button" aria-pressed=${String(this._kinds.size === KINDS.length)}
                 title=${this._kinds.size === KINDS.length

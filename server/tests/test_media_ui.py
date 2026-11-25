@@ -90,6 +90,11 @@ def test_root_serves_the_lit_ui(media_client):
     assert 'id="theme"' in bundle and "system" in bundle
     assert '"screenshot","Screenshots"' in bundle and 'id="code"' in bundle
     assert 'id="names"' in bundle and 'id="names-label"' in bundle
+    # The scope selects (#206/#132/#188, 2026-11-25): folder scope + file type ride the
+    # chips row beside the People select — the web keeps NATIVE selects (real browsers
+    # open those; the shell's webview cannot, and builds its own panel there).
+    assert 'id="scope"' in bundle and 'id="ext"' in bundle
+    assert 'aria-label="Search scope"' in bundle and 'aria-label="File type"' in bundle
     assert "prefix_last" in bundle and "embed_ahead" in bundle
     assert "localStorage" in bundle                          # the theme is kept in the browser
     assert "↑↓" in bundle and "Space" in bundle

@@ -40,6 +40,7 @@ function field(view) {
   vm.runInContext(source.slice(events, source.indexOf('document.addEventListener("keydown"', events)), context);
   return {
     query, requests, visible, errors,
+    call(code) { return vm.runInContext(code, context); },
     event(type, options = {}) { listeners.get(type)?.({ type, ...options }); },
     input(text, options) { query.value = text; this.event('input', options); },
     flush() { const pending = [...timers.values()]; timers.clear(); for (const fn of pending) fn(); },
@@ -125,3 +126,58 @@ for (const view of ['panel', 'window']) {
     assert.equal(f.requests.filter(r => r.op === 'search' && r.meaning).length, 2);
   });
 }
+
+/* The scope chips (2026-11-25, #66 + #206/#132/#188): the chip state rides the daemon's
+   verb fields — the engine scopes and keeps, the UI invents no filter of its own. An
+   unset chip leaves the field UNDEFINED — JSON.stringify drops it, the verb a plain
+   search ever sent (byte-parity for every existing pin). */
+test('window: the Names + Scope chips ride the search verb fields', async () => {
+  const f = field('window');
+  f.call('FILTERS.push({ key: "images", title: "Images", kinds: ["image"], icon: "image" })');
+  f.call('state.info.folders = ["/photos/vienna"]');
+  f.call('setScope("/photos/vienna"); setExtension("mp4"); setNamesOnly(true); setFilter("images")');
+  f.input('wakeboard');
+  f.flush();
+  f.requests.filter(r => r.op === 'search').at(-1).resolve({ hits: [], strong: 0, meaning: true });
+  await settle();
+  const searches = f.requests.filter(r => r.op === 'search');
+  assert.equal(searches.length, 2, 'the kind filter re-runs the search (the counts law)');
+  for (const search of searches) {
+    assert.equal(search.name_only, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(search.under)), ['/photos/vienna']);
+    assert.deepEqual(JSON.parse(JSON.stringify(search.ext)), ['mp4']);
+  }
+  assert.equal(searches[0].kinds, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(searches[1].kinds)), ['image']);
+});
+
+test('window: an unscoped search stays the field-less verb (byte-parity)', () => {
+  const f = field('window');
+  f.input('dog');
+  f.flush();
+  const search = f.requests.filter(r => r.op === 'search').at(-1);
+  assert.equal(search.name_only, undefined);
+  assert.equal(search.under, undefined);
+  assert.equal(search.ext, undefined);
+});
+
+test('window: code mode drops names-only; a folder out of Settings drops out of scope', () => {
+  const f = field('window');
+  f.call('state.info.hasCode = true; state.info.folders = ["/photos/vienna"]');
+  f.call('setNamesOnly(true)');
+  f.call('setFilter("code")');   // entering code: the Names chip is a file search, it clears
+  f.call('setScope("/photos/vienna")');
+  f.flush();
+  f.input('retry with backoff');
+  f.flush();
+  const code = f.requests.filter(r => r.op === 'search').at(-1);
+  assert.equal(code.code, true);
+  assert.equal(code.name_only, undefined);
+  // The folder left the Settings' list (state.info.folders): run() clears the stale scope.
+  f.call('setFilter(null)');
+  f.call('state.info.folders = []');
+  f.input('dog');
+  f.flush();
+  const plain = f.requests.filter(r => r.op === 'search').at(-1);
+  assert.equal(plain.under, undefined);
+});

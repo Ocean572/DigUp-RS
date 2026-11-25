@@ -32,6 +32,10 @@ const $query = $("query"), $content = $("content"), $side = $("side"), $kinds = 
 const state = {
   query: "",
   filter: null,         // a FILTERS key, "code", or null for everything
+  namesOnly: false,     // #66 (2026-11-25): the Names chip — the engine's names-only path, no model
+  scope: null,          // #206/#132/#188: the folder-scope chip — one folder path, null = all folders
+  ext: null,            // the file-type chip part — one extension, null = all types
+  exts: [],             // the extensions the last answer found (the scope panel's file-types list)
   person: null,         // the People filter (round six, 2026-11-23): a person id, null = everyone
   people: [],           // the store's NAMED people (the dropdown's list; empty = no consent, hidden)
   text: "",             // what was searched (without "code:")
@@ -61,6 +65,18 @@ function isCode() {
   return state.filter === "code" || /^code:/i.test(state.query.trim());
 }
 
+/// A file's extension as the engine spells it (lowercase, no dot); "" when there is none.
+function extensionOf(path) {
+  const base = path.split(/[\\/]/).pop() || "";
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
+}
+
+/// A folder path's basename for the chips and the Scope panel ("…/Vienna" → "Vienna").
+function baseName(path) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
 /// The query or the filter changed: after a short pause in typing, the search (and the same search of one kind, for a
 /// filter), all at once. The query's meaning is embedded on every keystroke, so the pause is the whole wait.
 function run() {
@@ -84,11 +100,20 @@ function run() {
   renderBar();
   if (!state.hasResults) renderContent();
   const filter = FILTERS.find((item) => item.key === state.filter);
+  // The scope chips (#206/#132/#188, 2026-11-25): the folder + file-type keeps ride the
+  // verb fields — the daemon narrows the scope INSIDE its roots and drops rows after the
+  // ranking (the engine's z's ride verbatim; the UI invents no filter of its own). A
+  // folder the Settings dropped leaves scope automatically (the chip shows All folders).
+  if (state.scope && !state.info.folders.includes(state.scope)) state.scope = null;
+  const scope = { name_only: state.namesOnly || undefined,
+                  under: state.scope ? [state.scope] : undefined,
+                  ext: state.ext ? [state.ext] : undefined };
   state.timer = setTimeout(async () => {
     try {
-      const all = await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT });
+      const all = await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT, ...scope });
       const shown = filter && !code
-        ? await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT, kinds: filter.kinds }) : all;
+        ? await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT, ...scope,
+                      kinds: filter.kinds }) : all;
       if (generation !== state.generation) return;
       const counts = {};
       if (code) counts.code = all.strong;
@@ -114,8 +139,12 @@ function run() {
         }
         if (generation !== state.generation) return;
       }
+      // The Scope panel's file-type list (2026-11-25): the extensions the answer's rows
+      // carry, in answer order — observed engine rows, invented nothing. (#206/#132/#188)
+      const exts = code ? []
+        : [...new Set(all.hits.map((hit) => extensionOf(hit.path)).filter(Boolean))].slice(0, 12);
       Object.assign(state, { counts, text, meaning: shown.meaning, hasResults: true, showWeaker: false,
-                             ranked, weaker });
+                             ranked, weaker, exts });
       if (!rows().some((hit) => hit.path === state.selection)) state.selection = rows()[0]?.path ?? null;
       render();
       if (debugPending) report();
@@ -145,11 +174,40 @@ function queryChanged(event) {
 function setFilter(key) {
   if (key === state.filter) return;
   state.filter = key;
-  if (key !== "code" && /^code:/i.test(state.query.trim())) {
-    // Leaving code for files: "code:" goes from the field.
-    $query.value = state.query.trim().slice(5).trim();
+  if (key === "code") state.namesOnly = false;   // names-only is a file search, never a code one
+  if (key !== "code") leaveCodeField();          // leaving code for files: "code:" goes from the field
+  run();
+}
+
+/// "code:" leaves the field when a control leaves code mode (setFilter's law, shared
+/// with the Names chip 2026-11-25: the field text is what the human typed, minus prefix).
+function leaveCodeField() {
+  const typed = state.query.trim();
+  if (/^code:/i.test(typed)) {
+    $query.value = typed.slice(5).trim();
     state.query = $query.value;
   }
+}
+
+/// The scope chips' acts (2026-11-25): each re-runs the search riding the verb fields —
+/// the daemon scopes and keeps, the engine's z's ride verbatim (the UI invents no filter).
+function setScope(folder) {
+  if (state.scope === folder) return;
+  state.scope = folder;
+  run();
+}
+
+function setExtension(ext) {
+  if (state.ext === ext) return;
+  state.ext = ext;
+  run();
+}
+
+function setNamesOnly(on) {
+  if (state.namesOnly === on) return;
+  state.namesOnly = on;
+  if (on && state.filter === "code") state.filter = null;   // the Names chip is for files
+  leaveCodeField();
   run();
 }
 
@@ -177,34 +235,22 @@ async function loadPeople() {
   renderBar();
 }
 
-/* The People dropdown's OWN panel (the native-select cure, 2026-11-24): one element on the
-   page, anchored under the chip by its real rectangle (fixed = no clipping by the bar),
-   closed by every exit: a pick, an outside click, Escape, a page scroll, a re-render. */
-let peopleMenu = null;
-let peopleMenuDismiss = null;
+/* The dropdown chips' OWN panels (the native-select cure, 2026-11-24; one shared law
+   since 2026-11-25: People + Scope): one panel on the page, anchored under the chip by
+   its real rectangle, closed by every exit: a pick, an outside click, Escape, a page
+   scroll, a re-render. */
+let anchored = null;   // { button, menu, dismiss }
 
-function closePeopleMenu() {
-  if (!peopleMenu) return;
-  peopleMenu.remove();
-  peopleMenu = null;
-  if (peopleMenuDismiss) { document.removeEventListener("click", peopleMenuDismiss, true); peopleMenuDismiss = null; }
+function closeAnchored() {
+  if (!anchored) return;
+  anchored.menu.remove();
+  if (anchored.dismiss) document.removeEventListener("click", anchored.dismiss, true);
+  anchored = null;
   flushThumbs();   // the decodes queued behind the panel land once it is gone
 }
 
-function openPeopleMenu(button) {
-  closePeopleMenu();
-  const menu = element("div", "people-menu");
-  menu.setAttribute("role", "listbox");
-  const rows = [{ id: null, label: "People: everyone" }].concat(
-    state.people.map((p) => ({ id: p.id, label: `${p.name} (${p.count.toLocaleString()})` })));
-  for (const row of rows) {
-    const selected = row.id === null ? !state.person : row.id === state.person;
-    const item = element("button", "people-menu-row" + (selected ? " selected" : ""), row.label);
-    item.setAttribute("role", "option");
-    item.setAttribute("aria-selected", String(selected));
-    item.onclick = () => { closePeopleMenu(); setPerson(row.id); };
-    menu.append(item);
-  }
+function openAnchored(button, menu) {
+  closeAnchored();
   // LAW 2026-11-24/25: the panel lives INSIDE #content (the photos' paint layer — a fixed
   // panel paints on the root layer under this app's webview pins, z-index ignored).
   ($content ?? document.body).append(menu);
@@ -215,15 +261,58 @@ function openPeopleMenu(button) {
   const width = Math.max(at.width, 210);
   menu.style.left = `${Math.max(4, Math.min($content.clientWidth - width - 4, at.left - box.left))}px`;
   menu.style.top = `${at.bottom - box.top + $content.scrollTop + 6}px`;
-  peopleMenu = menu;
+  anchored = { button, menu };
   // Dismiss (capture fires BEFORE the pill's own toggle): it must ignore clicks on the
   // panel (scrollbar/rows) and on the pill — dismissing there makes the pill's toggle
   // see a closed panel and REOPEN it (measured 2026-11-25: "a second click does not close").
-  peopleMenuDismiss = (event) => {
+  anchored.dismiss = (event) => {
     if (menu.contains(event.target) || button.contains(event.target)) return;
-    closePeopleMenu();
+    closeAnchored();
   };
-  setTimeout(() => document.addEventListener("click", peopleMenuDismiss, true), 0);
+  setTimeout(() => document.addEventListener("click", anchored.dismiss, true), 0);
+}
+
+function openPeopleMenu(button) {
+  const menu = element("div", "dropdown-menu");
+  menu.setAttribute("role", "listbox");
+  const rows = [{ id: null, label: "People: everyone" }].concat(
+    state.people.map((p) => ({ id: p.id, label: `${p.name} (${p.count.toLocaleString()})` })));
+  for (const row of rows) {
+    const selected = row.id === null ? !state.person : row.id === state.person;
+    const item = element("button", "dropdown-row" + (selected ? " selected" : ""), row.label);
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(selected));
+    item.onclick = () => { closeAnchored(); setPerson(row.id); };
+    menu.append(item);
+  }
+  openAnchored(button, menu);
+}
+
+/* The Scope panel (2026-11-25, #206/#132/#188): one folder + one file type, single picks.
+   The folders are the Settings' chosen ones (window_info law); the file types are the
+   extensions the LAST ANSWER carried — observed engine rows, invented nothing. */
+function openScopeMenu(button) {
+  const menu = element("div", "dropdown-menu scope-menu");
+  menu.setAttribute("role", "listbox");
+  const section = (title) => menu.append(element("div", "dropdown-title", title));
+  const row = (label, selected, act) => {
+    const item = element("button", "dropdown-row" + (selected ? " selected" : ""), label);
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(selected));
+    item.onclick = () => { closeAnchored(); act(); };
+    menu.append(item);
+  };
+  section("Search in");
+  row("All folders", !state.scope, () => setScope(null));
+  for (const folder of state.info.folders) {
+    row(baseName(folder), folder === state.scope, () => setScope(folder));
+  }
+  section("File types");
+  row("All types", !state.ext, () => setExtension(null));
+  for (const ext of state.exts) {
+    row(`.${ext}`, ext === state.ext, () => setExtension(ext));
+  }
+  openAnchored(button, menu);
 }
 
 /// Every result shown, in order: the strong ones, then the weaker ones once they're unfolded.
@@ -246,7 +335,7 @@ function render() {
 }
 
 function renderBar() {
-  closePeopleMenu();   // a re-render replaces the chips: its anchored panel goes with them
+  closeAnchored();   // a re-render replaces the chips: the anchored panel goes with them
   const code = isCode();
   $("glass").classList.toggle("code", code);   // the glyph is CSS masks now (see window.css .glass)
   $query.placeholder = state.filter === "code" ? "Describe the code: “retry a request with backoff”, a name in it…"
@@ -259,6 +348,25 @@ function renderBar() {
     $kinds.append(chip(filter.title, filter.icon, code ? null : state.counts[filter.key], selected,
                        () => setFilter(selected ? null : filter.key), index + 2));
   });
+  // The Names + Scope chips (2026-11-25, #66 + #206/#132/#188): Names-only rides the
+  // daemon's typed name: composition (no model); the Scope panel carries the folder +
+  // file-type keeps — the daemon narrows inside its roots, drops rows after the ranking,
+  // the engine's z's ride verbatim. Code keeps its own search: these chips are for files.
+  if (!code) {
+    $kinds.append(element("span", "divider"));
+    $kinds.append(chip("Names", null, null, state.namesOnly, () => setNamesOnly(!state.namesOnly), 8));
+    const summary = [state.scope && baseName(state.scope),
+                     state.ext && `.${state.ext}`].filter(Boolean).join(" · ");
+    const scopeBox = element("button", "chip dropdown-chip" + (summary ? " selected" : ""));
+    scopeBox.append(element("span", "", summary || "Anywhere"),
+                    element("span", "dropdown-caret", "▾"));
+    scopeBox.title = "Search only in a folder, only among these file types";
+    scopeBox.setAttribute("aria-label", "Search scope");
+    scopeBox.setAttribute("aria-haspopup", "listbox");
+    scopeBox.setAttribute("aria-expanded", String(anchored?.button === scopeBox));
+    scopeBox.onclick = () => (anchored?.button === scopeBox ? closeAnchored() : openScopeMenu(scopeBox));
+    $kinds.append(scopeBox);
+  }
   // Round six (2026-11-23, the user's design): the People filter sits RIGHT OF THE KIND
   // CHIPS. It lists the store's named people; picking one filters THIS SEARCH's rows down
   // to the photos whose faces the store says are that person's. The engine's ranking rides
@@ -274,14 +382,14 @@ function renderBar() {
   if (state.people.length && !code) {
     $kinds.append(element("span", "divider"));
     const picked = state.person && state.people.find((p) => p.id === state.person);
-    const box = element("button", "chip people-filter" + (picked ? " selected" : ""));
+    const box = element("button", "chip dropdown-chip" + (picked ? " selected" : ""));
     box.append(element("span", "", picked ? picked.name : "People: everyone"),
-               element("span", "people-caret", "▾"));
+               element("span", "dropdown-caret", "▾"));
     box.title = "Show only the photos with this person's face";
     box.setAttribute("aria-label", "Filter by person");
     box.setAttribute("aria-haspopup", "listbox");
-    box.setAttribute("aria-expanded", String(Boolean(peopleMenu)));
-    box.onclick = () => (peopleMenu ? closePeopleMenu() : openPeopleMenu(box));
+    box.setAttribute("aria-expanded", String(anchored?.button === box));
+    box.onclick = () => (anchored?.button === box ? closeAnchored() : openPeopleMenu(box));
     $kinds.append(box);
   }
   if (state.info.hasCode) {
@@ -304,7 +412,7 @@ function chip(title, icon, count, selected, action, number) {
 }
 
 function renderContent() {
-  closePeopleMenu();   // the menu lives inside #content now: this rebuild wipes it — drop the handle too
+  closeAnchored();   // the menu lives inside #content now: this rebuild wipes it — drop the handle too
   pendingThumbs.length = 0;   // its cells are gone: the queued decodes paint nothing
   thumbnails.disconnect();
   $content.replaceChildren();
@@ -407,7 +515,7 @@ const thumbnails = new IntersectionObserver((entries) => {
       .then((file) => {
         // Freeze while the People panel is open (measured 2026-11-25, round two of
         // "Its still transparent"): queue, do not paint — see the paintThumb note.
-        if (peopleMenu) { pendingThumbs.push([image, file]); return; }
+        if (anchored) { pendingThumbs.push([image, file]); return; }
         paintThumb(image, file);
       })
       .catch(() => image.replaceWith(bigIcon(kind === "image" ? "image" : kind, true)));
@@ -1131,7 +1239,7 @@ document.addEventListener("keydown", (event) => {
   if (state.composing || event.isComposing) return;   // an input method is composing: its keys
   const modifier = isMac ? event.metaKey : event.ctrlKey;
   const plain = !event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey;
-  if (peopleMenu && event.key === "Escape") { event.preventDefault(); closePeopleMenu(); return; }
+  if (anchored && event.key === "Escape") { event.preventDefault(); closeAnchored(); return; }
   if (!$menu.hidden && event.key === "Escape") {
     event.preventDefault();
     hideMenu();
@@ -1157,6 +1265,11 @@ document.addEventListener("keydown", (event) => {
     if (number === 7 && state.info.hasCode) {
       event.preventDefault();
       setFilter("code");
+      return;
+    }
+    if (number === 8) {
+      event.preventDefault();
+      setNamesOnly(!state.namesOnly);   // #66: the Names chip (2026-11-25)
       return;
     }
     switch (event.key.toLowerCase()) {
@@ -1250,8 +1363,8 @@ window.addEventListener("focus", () => { ask({ op: "prewarm" }).catch(() => {});
 // A page scroll moves the content, not the anchored panel: the menu closes with it. LAW
 // 2026-11-25: the panel's OWN overflow is a scroll target — never a dismissal.
 window.addEventListener("scroll", (event) => {
-  if (peopleMenu && peopleMenu.contains(event.target)) return;
-  closePeopleMenu();
+  if (anchored && anchored.menu.contains(event.target)) return;
+  closeAnchored();
 }, { passive: true, capture: true });
 
 // Its size, for the next time it opens (the shell keeps it when the window closes).

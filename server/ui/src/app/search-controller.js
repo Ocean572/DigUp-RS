@@ -30,6 +30,11 @@ export function createSearchController({ api, store, pause = TYPING_PAUSE }) {
       // The People filter (round six, 2026-11-23): the server keeps only hits whose photo
       // carries the person's face (faces-store membership, relayed — the z's ride verbatim).
       if (f.person) body.person = f.person;
+      // The scope keeps (#206/#132/#188, 2026-11-25): relayed verbatim — the engine
+      // narrows the scope inside its roots and keeps rows after the ranking. Absent
+      // fields keep the byte-parity verb for every pre-round pin.
+      if (f.under) body.under = f.under;
+      if (f.ext) body.ext = f.ext;
     }
     return body;
   }
