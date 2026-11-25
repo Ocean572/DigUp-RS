@@ -124,7 +124,15 @@ svg { display: block; }
 .field:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
 
 .glass { width: 22px; height: 20px; flex: none; display: grid; place-items: center; }
-.glass svg { width: 19px; height: 19px; fill: none; stroke: var(--ember); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+/* Even SVG on integer centering (the 2026-11-25 black-box cure): a 19px SVG in the
+   38px bar lands on a .5px offset for ANY box (38 − 19 = 19 is odd), and the bar's
+   22×20 grid box added 1.5 + 0.5 on top — under this app's compositing-off webview
+   pins, SVG rasterizes and blits on integer pixel boundaries, so window-move expose
+   repaints exposed the unpainted strip: "a black box covering half the spotlight
+   icon". The bar's siblings prove the parity rule: .clear 22/16 → 3+3, .tool 30/18
+   → 6+6, .row .icon 30/20 → 5+5 — integer offsets, no artifacts. 18px here:
+   (22 − 18)/2 = 2, (20 − 18)/2 = 1. */
+.glass svg { width: 18px; height: 18px; fill: none; stroke: var(--ember); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
 
 #query {
   flex: 1;
