@@ -47,6 +47,7 @@ server/tests/corpus2/media/
 AGENTS.md
 .agent-journal.md
 session-*.md
+ROADMAP.md
 
 # The architecture map (Rust-port survey): a local working doc, not part of the PR
 docs/ARCHITECTURE_MAP.md
