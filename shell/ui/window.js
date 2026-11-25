@@ -205,7 +205,11 @@ function openPeopleMenu(button) {
     item.onclick = () => { closePeopleMenu(); setPerson(row.id); };
     menu.append(item);
   }
-  document.body.append(menu);
+  // The panel lives INSIDE #content: that's the layer the photos paint in (the scroll
+  // container is its own paint layer, and under this app's webview pins a fixed panel on
+  // the root layer lands UNDER it, z-index ignored — the measured 2026-11-24 report:
+  // "opaque and behind the photos"). Inside the same layer, z-index rules normally.
+  ($content ?? document.body).append(menu);
   const at = button.getBoundingClientRect();
   const width = Math.max(at.width, 210);
   menu.style.left = `${Math.max(6, Math.min(window.innerWidth - width - 6, at.left))}px`;
@@ -292,6 +296,7 @@ function chip(title, icon, count, selected, action, number) {
 }
 
 function renderContent() {
+  closePeopleMenu();   // the menu lives inside #content now: this rebuild wipes it — drop the handle too
   thumbnails.disconnect();
   $content.replaceChildren();
   $content.scrollTop = 0;
