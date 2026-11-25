@@ -189,6 +189,7 @@ function closePeopleMenu() {
   peopleMenu.remove();
   peopleMenu = null;
   if (peopleMenuDismiss) { document.removeEventListener("click", peopleMenuDismiss, true); peopleMenuDismiss = null; }
+  flushThumbs();   // the decodes queued behind the panel land once it is gone
 }
 
 function openPeopleMenu(button) {
@@ -246,7 +247,7 @@ function render() {
 function renderBar() {
   closePeopleMenu();   // a re-render replaces the chips: its anchored panel goes with them
   const code = isCode();
-  $("glass").innerHTML = code ? ICONS.code : SEARCH_ICON;
+  $("glass").classList.toggle("code", code);   // the glyph is CSS masks now (see window.css .glass)
   $query.placeholder = state.filter === "code" ? "Describe the code: “retry a request with backoff”, a name in it…"
     : state.info.hasCode ? "Describe it: “zebra in a video”, “code: retry with backoff”…"
     : "Describe it: “receipt from the hardware store”, “zebra in a video”…";
@@ -301,6 +302,7 @@ function chip(title, icon, count, selected, action, number) {
 
 function renderContent() {
   closePeopleMenu();   // the menu lives inside #content now: this rebuild wipes it — drop the handle too
+  pendingThumbs.length = 0;   // its cells are gone: the queued decodes paint nothing
   thumbnails.disconnect();
   $content.replaceChildren();
   $content.scrollTop = 0;
@@ -377,6 +379,21 @@ function bigIcon(kind, quiet) {
   return icon;
 }
 
+/// Thumbnail painting (the People-panel freeze plumbing). An async <img> decode triggers
+/// a fast overlay repaint of its own rectangle, and in this app's compositing-off webview
+/// that paints OVER a panel positioned above the grid — the overlay's partial repaint
+/// ignores the covering panel's stacking. So thumbnails are QUEUED, not painted, while
+/// the panel is open, and painted in one flush when it closes.
+const pendingThumbs = [];
+function paintThumb(image, file) {
+  image.src = fileURL(file);
+  const owner = image.closest("[data-path]");
+  if (owner) owner.dataset.thumb = file;   // the picture under the pointer when it's dragged out
+}
+function flushThumbs() {
+  for (const [image, file] of pendingThumbs.splice(0)) paintThumb(image, file);
+}
+
 /// Pictures are asked of the helper as their cells come into view: a search can show a hundred of them.
 const thumbnails = new IntersectionObserver((entries) => {
   for (const entry of entries) {
@@ -387,8 +404,10 @@ const thumbnails = new IntersectionObserver((entries) => {
     const path = image.closest("[data-path]").dataset.path;
     rendered(path, kind, loc, pixels)
       .then((file) => {
-        image.src = fileURL(file);
-        image.closest("[data-path]").dataset.thumb = file;   // the picture under the pointer when it's dragged out
+        // Freeze while the People panel is open (measured 2026-11-25, round two of
+        // "Its still transparent"): queue, do not paint — see the paintThumb note.
+        if (peopleMenu) { pendingThumbs.push([image, file]); return; }
+        paintThumb(image, file);
       })
       .catch(() => image.replaceWith(bigIcon(kind === "image" ? "image" : kind, true)));
   }
