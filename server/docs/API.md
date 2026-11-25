@@ -608,6 +608,18 @@ key answers only its target: its own status, search, previews, and its own crawl
 (`POST /api/v1/index` — background, one writer, never touching the main index, invisible to
 the main page). Key-less and application-keyed requests cannot register.
 
+**Per-target skip lists (#196, 2026-11-25).** `POST /api/v1/targets` accepts two more
+fields: `exclude` and `exclude_ext` (arrays of folder paths / extensions, optional, default
+none) — the target's OWN skip lists. The engine's law makes them per-root by construction:
+the server spawns the target's crawl and search with the GLOBAL env lists
+(`DIGUP_SERVER_EXCLUDE[_EXT]`) plus the target's own, and the engine applies each entry
+only inside the roots that contain it — a skip for one target never reaches another.
+`GET /api/v1/targets` publishes both lists per row (display, like `roots`); a runtime
+registration survives a restart (the lists persist in `targets.json`), and a
+`DIGUP_SERVER_APP_TARGETS` override of the same name keeps the registered lists (env
+carries roots/index only). The main index keeps the env lists alone — `targets.json`
+describes application targets.
+
 **Endpoint scoping.** Every guarded endpoint addresses a target: `?target=name` names it
 explicitly; the default is `media` — except for an `app:<name>` token, whose default is its own
 target (the binding is what the token carries, so an application calls plain paths). The bearer

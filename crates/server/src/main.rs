@@ -322,8 +322,13 @@ impl App {
             index: PathBuf::from(&target.index),
             roots: target.roots.clone(),
             binary: self.cfg.binary.clone(),
-            excluded: self.cfg.excluded.clone(),
-            excluded_extensions: self.cfg.excluded_extensions.clone(),
+            // #196 (2026-11-25): global env skips + this target's own — the union
+            // rides the spawn argv (--exclude/--exclude-ext), crawl and search alike.
+            excluded: targets::merge_skips(&self.cfg.excluded, &target.exclude),
+            excluded_extensions: targets::merge_skips(
+                &self.cfg.excluded_extensions,
+                &target.exclude_ext,
+            ),
             models_dir: self.cfg.models_dir.clone(),
             encoder_idle: self.cfg.encoder_idle,
             include_datasets: self.cfg.include_datasets,
@@ -3077,6 +3082,10 @@ async fn targets_endpoint(State(app): State<Shared>, Extension(ctx): Extension<C
                     "roots": target.roots,
                     "index": target.index,
                     "main": target.main,
+                    // #196 (2026-11-25): the target's own skip lists, published for
+                    // display (the roots law) — the engine applies global + these.
+                    "exclude": target.exclude,
+                    "exclude_ext": target.exclude_ext,
                     "files": files,
                     "searchable": searchable,
                 }));
@@ -3122,7 +3131,7 @@ async fn register_target(
             .to_string_lossy()
             .into_owned()
     });
-    let target = match targets::validated(
+    let mut target = match targets::validated(
         &req.name,
         &req.roots.join(":"),
         &index,
@@ -3131,6 +3140,9 @@ async fn register_target(
         Ok(target) => target,
         Err(why) => return ApiError::http(StatusCode::BAD_REQUEST, why).into_response(),
     };
+    // #196 (2026-11-25): the application's own skip lists ride the registration.
+    target.exclude = req.exclude;
+    target.exclude_ext = req.exclude_ext;
     if app
         .registry
         .read()
@@ -3203,7 +3215,8 @@ async fn register_target(
             .map(|target| {
                 (
                     target.name.clone(),
-                    json!({"roots": target.roots, "index": target.index}),
+                    json!({"roots": target.roots, "index": target.index,
+                           "exclude": target.exclude, "exclude_ext": target.exclude_ext}),
                 )
             })
             .collect()

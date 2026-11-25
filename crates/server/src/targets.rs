@@ -52,6 +52,12 @@ pub struct Target {
     pub roots: Vec<String>,
     pub index: String,
     pub main: bool,
+    /// #196 (2026-11-25) per-target skip lists: folders/extension sets THIS target
+    /// leaves out, merged with the global env lists at scope build. The engine's
+    /// flat law already filters each list per root at walk time (crawler.rs:291),
+    /// so a target's list IS its per-root scope: it applies inside its own roots.
+    pub exclude: Vec<String>,
+    pub exclude_ext: Vec<String>,
 }
 
 /// `^[a-z0-9][a-z0-9-]{0,31}$` — names ride in log lines, jobs files, and URLs.
@@ -117,6 +123,10 @@ pub fn validated(
         roots,
         index: index.to_string(),
         main: false,
+        // The env/registration string form carries (name, roots, index) only;
+        // skip lists ride targets.json + POST (#196), filled by the callers.
+        exclude: Vec::new(),
+        exclude_ext: Vec::new(),
     })
 }
 
@@ -169,27 +179,30 @@ pub fn load_targets_file(path: &Path, main_index: &str) -> Result<Vec<Target>, S
         for (key, spec) in map {
             let name = key.trim().to_lowercase();
             let spec_obj = spec.as_object();
-            let roots: Vec<String> = spec_obj
-                .and_then(|spec| spec.get("roots"))
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|item| item.as_str().unwrap_or_default().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let list = |field: &str| -> Vec<String> {
+                spec_obj
+                    .and_then(|spec| spec.get(field))
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .map(|item| item.as_str().unwrap_or_default().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let roots: Vec<String> = list("roots");
             let index = spec_obj
                 .and_then(|spec| spec.get("index"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            targets.push(validated(
-                &name,
-                &roots.join(":"),
-                &index,
-                Some(main_index),
-            )?);
+            let exclude = list("exclude");
+            let exclude_ext = list("exclude_ext");
+            let mut target = validated(&name, &roots.join(":"), &index, Some(main_index))?;
+            target.exclude = exclude;
+            target.exclude_ext = exclude_ext;
+            targets.push(target);
         }
     }
     Ok(targets)
@@ -234,6 +247,8 @@ pub fn build_registry(
         roots: main_roots.to_vec(),
         index: main_index.to_string(),
         main: true,
+        exclude: Vec::new(),
+        exclude_ext: Vec::new(),
     });
     for target in load_targets_file(&config_dir.join("targets.json"), main_index)? {
         registry.insert(target);
@@ -242,9 +257,35 @@ pub fn build_registry(
         &std::env::var("DIGUP_SERVER_APP_TARGETS").unwrap_or_default(),
         Some(main_index),
     )? {
+        // Env wins per name (the operator's env is the authority) — the env string form
+        // cannot carry skip lists, so the runtime-registered ones (targets.json, #196)
+        // SURVIVE the override: a recreation must not silently drop registration facts
+        // (the 2026-11-22 recreation law, same class).
+        let target = match registry.get(&target.name) {
+            Some(old) => Target {
+                exclude: old.exclude.clone(),
+                exclude_ext: old.exclude_ext.clone(),
+                ..target
+            },
+            None => target,
+        };
         registry.insert(target);
     }
     Ok(registry)
+}
+
+/// #196 (2026-11-25): a target's skip lists merge with the global env lists —
+/// union, global first, repeats dropped. The engine's flat law already filters the
+/// list per root at walk time (crawler.rs:291), so the union IS the per-root scope:
+/// each list applies inside the roots that contain it, never wider.
+pub fn merge_skips(global: &[String], target: &[String]) -> Vec<String> {
+    let mut merged = global.to_vec();
+    for item in target {
+        if !merged.contains(item) {
+            merged.push(item.clone());
+        }
+    }
+    merged
 }
 
 /// `target_for_path`: which target owns a media path — the longest matching
@@ -308,5 +349,72 @@ fn fold(path: &Path, out: &mut PathBuf) {
             Component::Normal(part) => out.push(part),
             Component::Prefix(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// #196 (2026-11-25): `targets.json` carries each target's OWN skip lists, and
+    /// a registration written without them loads as none (the byte-parity shape).
+    #[test]
+    fn targets_file_rows_carry_their_skip_lists() {
+        let dir = std::env::temp_dir().join("digup-targets-skips");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("targets.json"),
+            r#"{"web": {"roots": ["/srv/web"], "index": "/idx/web",
+                        "exclude": ["/srv/web/cache"], "exclude_ext": ["mp4"]},
+                "plain": {"roots": ["/srv/plain"], "index": "/idx/plain"}}"#,
+        )
+        .unwrap();
+        let targets = super::load_targets_file(&dir.join("targets.json"), "/idx/main").unwrap();
+        let web = targets.iter().find(|t| t.name == "web").expect("web row");
+        assert_eq!(web.exclude, vec!["/srv/web/cache".to_string()]);
+        assert_eq!(web.exclude_ext, vec!["mp4".to_string()]);
+        let plain = targets
+            .iter()
+            .find(|t| t.name == "plain")
+            .expect("plain row");
+        assert!(plain.exclude.is_empty() && plain.exclude_ext.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// #196 (2026-11-25): an env override of a name keeps the registered skip lists
+    /// (env carries roots/index only — a recreation must not drop registration facts).
+    /// Pinned single-threaded: env is process-global.
+    #[test]
+    fn env_override_of_a_name_keeps_the_registered_skip_lists() {
+        let dir = std::env::temp_dir().join("digup-targets-env");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("targets.json"),
+            r#"{"web": {"roots": ["/srv/web"], "index": "/idx/web",
+                        "exclude": ["/srv/web/cache"], "exclude_ext": ["mp4"]}}"#,
+        )
+        .unwrap();
+        std::env::set_var("DIGUP_SERVER_APP_TARGETS", "web=/srv/other:/idx/web");
+        let registry = super::build_registry(&[], "/idx/main", &dir).unwrap();
+        std::env::remove_var("DIGUP_SERVER_APP_TARGETS");
+        let web = registry.get("web").expect("web target");
+        assert_eq!(web.roots, vec!["/srv/other".to_string()]); // env wins per name
+        assert_eq!(web.exclude, vec!["/srv/web/cache".to_string()]); // the lists survive
+        assert_eq!(web.exclude_ext, vec!["mp4".to_string()]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// #196 (2026-11-25): the merge law — global first, target additions after,
+    /// repeats dropped (the engine's argv carries the union once per entry).
+    #[test]
+    fn merge_skips_is_a_global_first_union() {
+        let global = ["/a".to_string(), "/b".to_string()];
+        let target = ["/b".to_string(), "/c".to_string()];
+        assert_eq!(
+            super::merge_skips(&global, &target),
+            vec!["/a".to_string(), "/b".to_string(), "/c".to_string()]
+        );
+        assert_eq!(super::merge_skips(&global, &[]), global.to_vec());
+        assert_eq!(super::merge_skips(&[], &target), target.to_vec());
     }
 }

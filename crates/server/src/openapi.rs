@@ -256,7 +256,9 @@ fn paths() -> Value {
                     "properties": {
                         "name": { "type": "string" },
                         "roots": { "type": "array", "items": { "type": "string" } },
-                        "index": { "type": "string", "description": "default <config>/index-<name>" }
+                        "index": { "type": "string", "description": "default <config>/index-<name>" },
+                        "exclude": { "type": "array", "items": { "type": "string" }, "description": "#196: the target's own skipped folders, merged with the global DIGUP_SERVER_EXCLUDE; applied per root by the engine" },
+                        "exclude_ext": { "type": "array", "items": { "type": "string" }, "description": "#196: the target's own skipped extensions, merged with the global DIGUP_SERVER_EXCLUDE_EXT" }
                     }
                 })
             )

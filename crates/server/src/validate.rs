@@ -477,12 +477,18 @@ pub struct TargetRegisterReq {
     pub name: String,
     pub roots: Vec<String>,
     pub index: Option<String>,
+    /// #196 (2026-11-25): the target's own skip lists (folders, extensions); absent
+    /// means none — merged with the global env lists at scope build.
+    pub exclude: Vec<String>,
+    pub exclude_ext: Vec<String>,
 }
 
 /// `TargetRegister` (stage 14): `extra="forbid"` — the one model in this API
 /// that REFUSES unknown fields (`extra_forbidden`), because a registration's
 /// body is the application's identity, not a negotiation. Field order: name
-/// (1..64 chars), roots (1..32 strings), index (str | None).
+/// (1..64 chars), roots (1..32 strings), index (str | None), exclude and
+/// exclude_ext (#196, 2026-11-25: lax `list[str]`, default none — the target's
+/// own skip lists, merged with the global env lists at scope build).
 pub fn target_register(body: &Value) -> Result<TargetRegisterReq, Vec<Value>> {
     let mut errors = Vec::new();
     if !body_is_object(body, &mut errors) {
@@ -592,9 +598,20 @@ pub fn target_register(body: &Value) -> Result<TargetRegisterReq, Vec<Value>> {
             None
         }
     };
+    // exclude: list[str] = [] / exclude_ext: list[str] = [] (#196, 2026-11-25):
+    // the target's own skip lists — pydantic's lax list[str] (null = none, the
+    // search fields' pinned shape). Field order: name, roots, index, exclude,
+    // exclude_ext.
+    let exclude = check_string_list(body, "exclude", &mut errors).unwrap_or_default();
+    let exclude_ext = check_string_list(body, "exclude_ext", &mut errors).unwrap_or_default();
     // extra="forbid": unknown fields are refused in the input's own order.
     for key in map.keys() {
-        if key != "name" && key != "roots" && key != "index" {
+        if key != "name"
+            && key != "roots"
+            && key != "index"
+            && key != "exclude"
+            && key != "exclude_ext"
+        {
             errors.push(item(
                 "extra_forbidden",
                 vec![json!("body"), json!(key)],
@@ -609,5 +626,7 @@ pub fn target_register(body: &Value) -> Result<TargetRegisterReq, Vec<Value>> {
         name: name.expect("no errors means name was a string"),
         roots: roots.expect("no errors means roots was a list"),
         index: index.flatten(),
+        exclude,
+        exclude_ext,
     })
 }

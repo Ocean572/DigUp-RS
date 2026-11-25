@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import time
 from pathlib import Path
@@ -653,5 +654,74 @@ def test_an_application_registers_at_a_running_server_and_gets_its_own_key(tmp_p
         media_id = next(h["media_id"] for h in hits if h["kind"] == "image")
         assert wait_status(c, f"/api/v1/media/{media_id}/preview", N, 200) == 200
         assert c.get(f"/api/v1/media/{media_id}/preview").status_code == 403
+    finally:
+        app.stop()
+
+
+def test_a_targets_own_skip_lists_scope_to_its_own_roots(tmp_path, corpus):
+    """#196 (2026-11-25): POST /targets carries the target's OWN exclude/exclude_ext;
+    its crawl obeys them (a folder inside its roots stays out, an extension stays out),
+    the lists publish on GET /targets, persist in targets.json, and survive restart.
+    The GLOBAL env lists keep applying unchanged — the engine's law: every entry
+    applies inside the roots that contain it, so a target's list is its per-root scope.
+    A malformed list answers the 422 battery; an unknown field keeps its extra_forbid."""
+    root = tmp_path / "skips"
+    (root / "keep").mkdir(parents=True)
+    (root / "skipme").mkdir()
+    photos = sorted((corpus / "photos").glob("*.jpg"))[:2]
+    shutil.copy(photos[0], root / "keep" / "kept.jpg")
+    shutil.copy(photos[1], root / "skipme" / "gone.jpg")
+    webm = sorted((corpus / "videos").glob("*.webm"))[0]
+    shutil.copy(webm, root / "keep" / webm.name)
+    empty = tmp_path / "nothing"
+    empty.mkdir()
+    config = tmp_path / "server-config"
+    app = LiveApp(_cfg(tmp_path / "main-index", (empty,)), config_dir=str(config),
+                  env_extra={"DIGUP_SERVER_MINT_KEYS": "1"})
+    app.start()
+    try:
+        c = app.client
+        A = {"Authorization": f"Bearer {read_tokens(config)['admin']}"}
+        r = c.post("/api/v1/targets", headers=A, json={
+            "name": "sk", "roots": [str(root)],
+            "exclude": [str(root / "skipme")], "exclude_ext": ["webm"]})
+        assert r.status_code == 200, r.text
+        reg = r.json()
+        N = {"Authorization": f"Bearer {reg['token']}"}
+        rows = c.get("/api/v1/targets", headers=A).json()["targets"]
+        sk = next(row for row in rows if row["name"] == "sk")
+        assert sk["exclude"] == [str(root / "skipme")]
+        assert sk["exclude_ext"] == ["webm"]
+        # The target's own crawl obeys: the kept photo in, the skipped folder's photo
+        # out, the webm out. (The main index is a different tree and stays untouched.)
+        assert c.post("/api/v1/index", json={}, headers=N).status_code == 202
+        job_id = c.get("/api/v1/jobs", headers=N).json()["jobs"][-1]["id"]
+        assert wait_final(c, job_id, N) == "done"
+        st = c.get("/api/v1/status", headers=N).json()
+        assert st["files"] == 1, st["kinds"]
+        tj = json.loads((config / "targets.json").read_text(encoding="utf-8"))
+        assert tj["sk"]["exclude"] == [str(root / "skipme")]
+        assert tj["sk"]["exclude_ext"] == ["webm"]
+        app.stop()
+        app.start()                                # the container's own restart
+        c = app.client
+        rows = c.get("/api/v1/targets", headers=A).json()["targets"]
+        sk = next(row for row in rows if row["name"] == "sk")
+        assert sk["exclude"] == [str(root / "skipme")]
+        # the 422 battery on the new fields (pydantic's lax list[str], extra_forbid)
+        bad = c.post("/api/v1/targets", headers=A,
+                     json={"name": "z1", "roots": [str(root)], "exclude": "not-a-list"})
+        assert bad.status_code == 422
+        assert bad.json()["detail"][0]["type"] == "list_type"
+        assert bad.json()["detail"][0]["loc"] == ["body", "exclude"]
+        bad = c.post("/api/v1/targets", headers=A,
+                     json={"name": "z2", "roots": [str(root)], "exclude_ext": ["webm", 7]})
+        assert bad.status_code == 422
+        assert bad.json()["detail"][0]["type"] == "string_type"
+        assert bad.json()["detail"][0]["loc"] == ["body", "exclude_ext", 1]
+        bad = c.post("/api/v1/targets", headers=A,
+                     json={"name": "z3", "roots": [str(root)], "excludes": ["/x"]})
+        assert bad.status_code == 422
+        assert bad.json()["detail"][0]["type"] == "extra_forbidden"
     finally:
         app.stop()
