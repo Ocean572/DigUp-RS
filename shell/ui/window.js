@@ -210,10 +210,14 @@ function openPeopleMenu(button) {
   // the root layer lands UNDER it, z-index ignored — the measured 2026-11-24 report:
   // "opaque and behind the photos"). Inside the same layer, z-index rules normally.
   ($content ?? document.body).append(menu);
+  // Absolute coordinates inside #content (the panel's containing block — .content is
+  // position: relative): the button's viewport rect converted to content-layout space,
+  // riding the content's current scroll.
   const at = button.getBoundingClientRect();
+  const box = $content.getBoundingClientRect();
   const width = Math.max(at.width, 210);
-  menu.style.left = `${Math.max(6, Math.min(window.innerWidth - width - 6, at.left))}px`;
-  menu.style.top = `${Math.min(at.bottom + 6, window.innerHeight - menu.offsetHeight - 6)}px`;
+  menu.style.left = `${Math.max(4, Math.min($content.clientWidth - width - 4, at.left - box.left))}px`;
+  menu.style.top = `${at.bottom - box.top + $content.scrollTop + 6}px`;
   peopleMenu = menu;
   // The outside click lands on the NEXT tick (this click is the button's own).
   peopleMenuDismiss = (event) => { if (!menu.contains(event.target)) closePeopleMenu(); };
@@ -1226,7 +1230,12 @@ tauri.event.listen("window-search", ({ payload }) => {
 
 window.addEventListener("focus", () => { ask({ op: "prewarm" }).catch(() => {}); loadPeople(); });
 // A page scroll moves the content, not the anchored panel: the menu closes with it.
-window.addEventListener("scroll", () => closePeopleMenu(), { passive: true, capture: true });
+window.addEventListener("scroll", (event) => {
+  // The panel's OWN scroll is the list scrolling (its overflow area is a scroll target):
+  // never a dismissal. Everything else (the page, the results) closes the panel.
+  if (peopleMenu && peopleMenu.contains(event.target)) return;
+  closePeopleMenu();
+}, { passive: true, capture: true });
 
 // Its size, for the next time it opens (the shell keeps it when the window closes).
 let sizeTimer = null;
