@@ -1300,16 +1300,12 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
         let _ = window.set_focus();
     }
     let closing = window.clone();
-    // The damage-repaint kick (measured 2026-11-25, the five-round paint chase): this
-    // webview's PARTIAL repaints — the damage rects that land when a WINDOWED window
-    // moves, resizes, regains focus — do not restore full stacking order: black specks
-    // show up near the search field, and grid photos repaint OVER the People panel
-    // ("the searched images are behind it"). Fullscreen is immune (the user's
-    // measurement: "full screen works great") because its repaints cover everything.
-    // So: when the window moves/resizes/focuses, kick a FULL repaint — a body-opacity
-    // tick repaints the whole page in paint order (panel back on top, specks filled),
-    // and the synthetic resize re-anchors any open panel. Throttled: drag-move fires
-    // continuously.
+    // LAW 2026-11-25 (the damage-repaint class): this webview's PARTIAL repaints — the
+    // damage rects of a windowed window's move/resize/focus — do not restore stacking
+    // order and land stale (specks near the search field, photos painting over the
+    // People panel); FULL repaints are correct, which is why fullscreen is immune.
+    // So on Moved/Resized (throttled 120 ms — drag fires continuously) and Focused(true),
+    // kick a full page repaint: the panel goes back on top and stale regions repaint.
     let kicker = window.clone();
     // on_window_event takes a plain Fn closure: the throttle rides a Cell, not a mut.
     let last_kick = std::cell::Cell::new(Instant::now());

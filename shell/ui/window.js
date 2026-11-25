@@ -25,7 +25,6 @@ const KIND_ORDER = ["screenshot", "image", "pdf", "doc", "audio", "video", "code
 const COUNTED = { screenshot: ["screenshot", "screenshots"], image: ["image", "images"], pdf: ["PDF", "PDFs"],
                   doc: ["document", "documents"], audio: ["audio file", "audio files"], video: ["video", "videos"],
                   code: ["code file", "code files"] };
-const SEARCH_ICON = '<svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="6.5"/><path d="M15 15 L20.5 20.5"/></svg>';
 
 const $ = (id) => document.getElementById(id);
 const $query = $("query"), $content = $("content"), $side = $("side"), $kinds = $("kinds"), $menu = $("menu");
@@ -206,26 +205,20 @@ function openPeopleMenu(button) {
     item.onclick = () => { closePeopleMenu(); setPerson(row.id); };
     menu.append(item);
   }
-  // The panel lives INSIDE #content: that's the layer the photos paint in (the scroll
-  // container is its own paint layer, and under this app's webview pins a fixed panel on
-  // the root layer lands UNDER it, z-index ignored — the measured 2026-11-24 report:
-  // "opaque and behind the photos"). Inside the same layer, z-index rules normally.
+  // LAW 2026-11-24/25: the panel lives INSIDE #content (the photos' paint layer — a fixed
+  // panel paints on the root layer under this app's webview pins, z-index ignored).
   ($content ?? document.body).append(menu);
-  // Absolute coordinates inside #content (the panel's containing block — .content is
-  // position: relative): the button's viewport rect converted to content-layout space,
-  // riding the content's current scroll.
+  // Absolute coords in #content layout space (its containing block): the button's viewport
+  // rect converted, riding the content's scroll.
   const at = button.getBoundingClientRect();
   const box = $content.getBoundingClientRect();
   const width = Math.max(at.width, 210);
   menu.style.left = `${Math.max(4, Math.min($content.clientWidth - width - 4, at.left - box.left))}px`;
   menu.style.top = `${at.bottom - box.top + $content.scrollTop + 6}px`;
   peopleMenu = menu;
-  // The outside click lands on the NEXT tick (this click is the button's own).
-  // The pill click must NOT dismiss: the capture-phase dismiss fires BEFORE the button's
-  // own toggle handler, so dismissing on a pill click closes the panel and the toggle
-  // (peopleMenu ? close : open) immediately reopens it — measured 2026-11-25: "when i
-  // click the people dropdown a second time to close the dropdown it does not close".
-  // The pill's own click is the pill's business; the dismiss ignores it (and the panel).
+  // Dismiss (capture fires BEFORE the pill's own toggle): it must ignore clicks on the
+  // panel (scrollbar/rows) and on the pill — dismissing there makes the pill's toggle
+  // see a closed panel and REOPEN it (measured 2026-11-25: "a second click does not close").
   peopleMenuDismiss = (event) => {
     if (menu.contains(event.target) || button.contains(event.target)) return;
     closePeopleMenu();
@@ -387,11 +380,9 @@ function bigIcon(kind, quiet) {
   return icon;
 }
 
-/// Thumbnail painting (the People-panel freeze plumbing). An async <img> decode triggers
-/// a fast overlay repaint of its own rectangle, and in this app's compositing-off webview
-/// that paints OVER a panel positioned above the grid — the overlay's partial repaint
-/// ignores the covering panel's stacking. So thumbnails are QUEUED, not painted, while
-/// the panel is open, and painted in one flush when it closes.
+/// Thumbnail painting (the People-panel freeze, LAW 2026-11-25): an async <img> decode
+/// repaints its own rectangle and lands OVER the panel above the grid — so thumbnails are
+/// QUEUED while the panel is open, flushed in one go when it closes.
 const pendingThumbs = [];
 function paintThumb(image, file) {
   image.src = fileURL(file);
@@ -655,8 +646,7 @@ function chooseFolders() {
 }
 
 function nothingFound() {
-  const icon = element("div", "quiet-icon");
-  icon.innerHTML = isCode() ? ICONS.code : SEARCH_ICON;
+  const icon = element("div", "quiet-icon " + (isCode() ? "code" : "lens"));   // the glyph is CSS (window.css icon law)
   return centered(icon, element("h3", "", `No good matches for “${state.query.trim()}”`),
                   element("p", "", isCode() ? "Try saying what the code does, or a name that's in it."
                     : "Try describing what's in it: what you'd see or hear, or words you remember."));
@@ -665,7 +655,6 @@ function nothingFound() {
 /// "code:" with nothing after it (what to type), or without code folders (what code search is).
 function codeHintOrOff() {
   const icon = element("div", "brand-icon");
-  icon.innerHTML = ICONS.code;
   if (state.codePhase === "off") {
     const actions = element("div", "actions");
     const choose = element("button", "primary", "Choose Code Folders…");
@@ -1256,10 +1245,9 @@ tauri.event.listen("window-search", ({ payload }) => {
 });
 
 window.addEventListener("focus", () => { ask({ op: "prewarm" }).catch(() => {}); loadPeople(); });
-// A page scroll moves the content, not the anchored panel: the menu closes with it.
+// A page scroll moves the content, not the anchored panel: the menu closes with it. LAW
+// 2026-11-25: the panel's OWN overflow is a scroll target — never a dismissal.
 window.addEventListener("scroll", (event) => {
-  // The panel's OWN scroll is the list scrolling (its overflow area is a scroll target):
-  // never a dismissal. Everything else (the page, the results) closes the panel.
   if (peopleMenu && peopleMenu.contains(event.target)) return;
   closePeopleMenu();
 }, { passive: true, capture: true });

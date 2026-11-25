@@ -118,31 +118,17 @@ svg { display: block; }
   cursor: text;
 }
 
-/* Where typing goes, as a field shows it: a ring in the accent color while it has the
-   cursor. OUTLINE, not box-shadow (measured 2026-11-25, the icon-aberration round):
-   soft shadows paint as antialiased Cairo whose damage region extends OUTSIDE the box
-   — in this compositing-off webview the window-move expose repaints land black in
-   exactly those outside regions. That is the "black box near the spotlight icon": it
-   was never the icon (icon geometry/mask/background cures measured it — parity, mask,
-   background-image changed NOTHING: the artifact sits in the field's shadow/ring
-   paint, at the field's LEFT end, over the icon). The ring was painted from the
-   default 2px TRANSPARENT shadow + its 0.15s transition tick — a per-change
-   animation whose shadow region repaints on every damage. Outline is the safe class:
-   crisp widget-style stroke, drawn with the box, no outside-surface damage, no
-   animation. */
+/* Focus ring as OUTLINE, not box-shadow. LAW 2026-11-25 (the black-box chase): soft
+   shadows paint as antialiased surfaces whose damage region extends OUTSIDE the box, and
+   this webview's windowed expose repaints land black there — the "black box near the
+   spotlight icon" lived in the field's old transparent 2px shadow + its transition, not
+   in the icon. Outline paints with the box: crisp, no outside damage, no animation. */
 .field:focus-within { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
 
-/* The spotlight icon as a BACKGROUND IMAGE (2026-11-25, the black-box round three).
-   History: (1) integer pixel parity — shipped, measured, box stayed; (2) mask +
-   background-color — the mask is ONE assumption (its SVG-data-URI source has a known
-   failure class in WebKitGTK: the mask does not rasterize and the plain background
-   fills the box = an oversized solid swatch "composited with" the glyph, the exact
-   signature in the user's screenshots). So: no mask, no background-color, no SVG
-   element — the glyph is a plain background-image data URI with the ember color baked
-   in (#d97b1a = --ember, identical in both themes). Backgrounds are the app's proven
-   safe paint class: they paint as part of the element's box, never leave a black
-   strip on expose, and every webview renders raster/URIs. Geometry = SEARCH_ICON.
-   The code glyph swaps by class (window.js toggles .code). */
+/* The bar icon as a plain background-image data URI (ember #d97b1a = --ember, identical
+   in both themes; geometry = SEARCH_ICON; code glyph swaps by class). LAW 2026-11-25:
+   the safe paint class in this app's windows is the element background (what the photos'
+   <img> and fills prove); SVG elements in the bar/panel regions are the trouble class. */
 .glass {
   width: 22px; height: 20px; flex: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23d97b1a' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10' cy='10' r='6.5'/%3E%3Cpath d='M15 15 L20.5 20.5'/%3E%3C/g%3E%3C/svg%3E");
@@ -226,10 +212,12 @@ svg { display: block; }
 .people-filter { max-width: 220px; }
 .people-filter .people-caret { opacity: 0.55; font-size: 10px; }
 .people-menu {
-  /* absolute, NOT fixed: under this app's compositing-off webview pins a fixed element is
-     painted on the ROOT layer — under the scrolling photos, z-index ignored (measured
-     twice, 2026-11-24/25). An absolute panel inside #content is a true member of the
-     photos' layer, where z-index 900 rules over every thumb. */
+  /* LAW 2026-11-24/25 (measured twice): position:absolute INSIDE #content. A fixed
+     element paints on the root layer under this app's webview pins — below the photos,
+     z-index ignored; the absolute panel is a true member of the photos' layer (z 900).
+     NO box-shadow: the AA halo's damage region extends outside the panel and the
+     windowed expose lands black there — the reported "content bleeds through". Border +
+     solid --card paint with the box and carry the separation. */
   position: absolute;
   z-index: 900;
   display: grid;
@@ -242,12 +230,6 @@ svg { display: block; }
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 10px;
-  /* NO box-shadow (measured 2026-11-25, the transparency round): the 0 8px 24px halo is
-     an antialiased shadow whose damage region extends 24px+ OUTSIDE the panel — the same
-     Cairo/AA/expose class as the field ring above. In a compositing-off webview the
-     partial repaints land black in that halo: dark blotches in the chips and rows around
-     the panel, exactly the reported "chips and icons bleed through the dropdown". The
-     border + solid --card background carry the separation, and they paint with the box. */
 }
 .people-menu-row {
   display: block;
@@ -489,8 +471,36 @@ svg { display: block; }
   box-shadow: inset 0 0 0 0.5px var(--fill-strong);
 }
 
-.quiet-icon svg { width: 40px; height: 40px; fill: none; stroke: var(--tertiary); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
-.brand-icon svg { width: 34px; height: 34px; fill: none; stroke: var(--ember); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* The two remaining #content glyph icons ride the app's ICON LAW (see .glass above):
+   background-image data URIs, no SVG elements — the empty-state lens/code glyph
+   (tertiary stroke: light #a1a1a6, dark #6e6e73) and the brand code glyph (ember). */
+.quiet-icon {
+  width: 40px; height: 40px; flex: none;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 40px 40px;
+}
+.quiet-icon.lens {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23a1a1a6' stroke-width='0.78' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10' cy='10' r='6.5'/%3E%3Cpath d='M15 15 L20.5 20.5'/%3E%3C/g%3E%3C/svg%3E");
+}
+.quiet-icon.code {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23a1a1a6' stroke-width='0.78' stroke-linecap='round' stroke-linejoin='round' d='M9 7 L4 12 L9 17 M15 7 L20 12 L15 17'/%3E%3C/svg%3E");
+}
+@media (prefers-color-scheme: dark) {
+  .quiet-icon.lens {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%236e6e73' stroke-width='0.78' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10' cy='10' r='6.5'/%3E%3Cpath d='M15 15 L20.5 20.5'/%3E%3C/g%3E%3C/svg%3E");
+  }
+  .quiet-icon.code {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%236e6e73' stroke-width='0.78' stroke-linecap='round' stroke-linejoin='round' d='M9 7 L4 12 L9 17 M15 7 L20 12 L15 17'/%3E%3C/svg%3E");
+  }
+}
+.brand-icon {
+  width: 34px; height: 34px; flex: none;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 34px 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23d97b1a' stroke-width='1.41' stroke-linecap='round' stroke-linejoin='round' d='M9 7 L4 12 L9 17 M15 7 L20 12 L15 17'/%3E%3C/svg%3E");
+}
 
 .button {
   margin-top: 18px;
