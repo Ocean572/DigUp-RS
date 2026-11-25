@@ -102,6 +102,7 @@ pub fn tool_defs(surface: Surface, allow_admin: bool) -> Vec<Value> {
                     ("limit", serde_json::json!({"type": "integer", "minimum": 1, "maximum": 100, "default": 10, "description": "max answer rows (the engine caps at 100)"})),
                     ("code", serde_json::json!({"type": "boolean", "default": false, "description": "search the code index instead"})),
                     ("kinds", serde_json::json!({"type": "array", "items": {"type": "string", "enum": ["screenshot", "image", "pdf", "doc", "audio", "video"]}, "description": "kind filter; omit = all kinds"})),
+                    ("name_only", serde_json::json!({"type": "boolean", "default": false, "description": "Names only (#66): match file names, the engine's names-only path, no model; the query rides verbatim"})),
                 ],
                 &["q"],
             ),

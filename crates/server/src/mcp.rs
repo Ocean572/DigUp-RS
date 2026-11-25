@@ -147,6 +147,11 @@ async fn execute(
             if let Some(kinds) = args.get("kinds").and_then(Value::as_array) {
                 body["kinds"] = json!(kinds);
             }
+            // Names only (#66): relayed like the code/kinds fields — absent is
+            // the plain search.
+            if let Some(name_only) = args.get("name_only").and_then(Value::as_bool) {
+                body["name_only"] = json!(name_only);
+            }
             // The People filter (round six, 2026-11-23): relayed to the REST route
             // verbatim — absent means the pure, unfiltered search.
             if let Some(person) = args.get("person").and_then(Value::as_i64) {

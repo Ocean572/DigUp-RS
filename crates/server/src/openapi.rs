@@ -130,7 +130,8 @@ fn paths() -> Value {
                         "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 40 },
                         "kinds": { "type": "array", "items": { "type": "string", "enum": ["doc", "image", "video", "code"] } },
                         "meaning": { "type": "boolean", "default": true },
-                        "person": { "type": "integer", "minimum": 1, "description": "People filter (faces store, consent-gated): keep only hits whose photo carries this person's face; the engine's z-scores ride verbatim" }
+                        "person": { "type": "integer", "minimum": 1, "description": "People filter (faces store, consent-gated): keep only hits whose photo carries this person's face; the engine's z-scores ride verbatim" },
+                        "name_only": { "type": "boolean", "default": false, "description": "Names only (#66): the engine's names-only path (FTS5 name segments, no model); the daemon composes the typed name: spelling, the reply shape is the ordinary search answer" }
                     }
                 })
             )

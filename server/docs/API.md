@@ -72,6 +72,7 @@ One query, the engine's answer.
 | `code` | bool | `false` | the code index (`code:` searches); it is a separate index in the engine |
 | `meaning` | bool | `true` | `false` = keyword-only (words, no embedding) — the desktop panel's first keystroke |
 | `prefix_last` | bool | `false` | last word as a prefix; the panel's "typing a word that isn't indexed yet" path |
+| `name_only` | bool | `false` | **#66 "Names only"**: the daemon seam composes the exact typed `name:` spelling above (same names-only path, no model); a false/absent field is the byte-parity verb, and the reply shape is the ordinary search answer |
 
 **Prefixes inside `q`** (the engine parses them, so every client gets them through one path):
 
@@ -666,7 +667,7 @@ what its REST admin routes answer key-free.
 
 | tool | scope | what it relays |
 |---|---|---|
-| `search` | read | the `POST /api/v1/search` answer: `hits` (path, kind, segment, score, z, loc, excerpt…), `strong`, `meaning`. `limit` defaults to **10** (max 100 — the engine's own cap) to keep agent context small; `kinds`, `code` ride the REST model |
+| `search` | read | the `POST /api/v1/search` answer: `hits` (path, kind, segment, score, z, loc, excerpt…), `strong`, `meaning`. `limit` defaults to **10** (max 100 — the engine's own cap) to keep agent context small; `kinds`, `code`, `name_only` ride the REST model |
 | `status` | read | the `GET /api/v1/status` counts, verbatim |
 | `show` | read | one segment's stored full text by its `segment_id` (from a hit row) — the search daemon's `text` verb |
 | `people` | read (HTTP only) | the faces surface (FACES.md): `action` = `status` (the default) / `persons` / `pending` / `person` (needs `person`) / `scan`. The reads relay the `GET /api/v1/faces/…` answers verbatim; `scan` rides the REST admin wall (a read key lands on 403 words) and runs synchronously on the engine's clock, busy answers the `409` text; every action answers the consent wall's `400` words until the deployment records the acceptance. Stdio has no faces seam (the consent record lives in the server's config), so the tool is invisible there |

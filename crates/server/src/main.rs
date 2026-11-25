@@ -1651,14 +1651,15 @@ async fn search(
     let target = request_target(&ctx);
     let filter_target = target.clone();
     let result = in_scope(app.clone(), target, move |scope| {
-        let reply = scope.service.search(
-            &req.q,
-            req.kinds,
-            req.limit,
-            req.code,
-            req.meaning,
-            req.prefix_last,
-        )?;
+        let reply = scope.service.search(&service::SearchParams {
+            q: &req.q,
+            kinds: req.kinds,
+            limit: req.limit,
+            code: req.code,
+            meaning: req.meaning,
+            prefix_last: req.prefix_last,
+            name_only: req.name_only,
+        })?;
         let mut row = match strip(reply) {
             Value::Object(row) => row,
             _ => return Err(ApiError::Internal),
@@ -3634,6 +3635,44 @@ mod tests {
         assert_eq!(guard_path_of("/%61pi/v1/search"), "/api/v1/search");
         assert_eq!(guard_path_of("/api/v1/index%2F"), "/api/v1/index");
         assert_eq!(guard_path_of("/api/v1/health%2F"), "/api/v1/health");
+    }
+
+    /// #66 (2026-11-25): the GUIs' "Names only" control rides the REST field. Absent
+    /// is the old request (byte-parity for every existing pin); pydantic's lax bool
+    /// spellings all land; a bad word is `bool_parsing` at `["body","name_only"]`.
+    /// The daemon seam composes the typed `name:` spelling — the server relays the
+    /// field, inventing no filter of its own.
+    #[test]
+    fn the_search_body_laxly_carries_name_only() {
+        use crate::validate;
+        use serde_json::json;
+
+        assert!(
+            !validate::search(&json!({"q": "passport"}))
+                .unwrap()
+                .name_only
+        );
+        for truthy in [
+            json!(true),
+            json!("true"),
+            json!("yes"),
+            json!("on"),
+            json!("1"),
+            json!(1),
+        ] {
+            let body = json!({"q": "passport", "name_only": truthy});
+            assert!(validate::search(&body).unwrap().name_only, "{truthy}");
+        }
+        for falsy in [json!(false), json!("no"), json!(0)] {
+            let body = json!({"q": "passport", "name_only": falsy});
+            assert!(!validate::search(&body).unwrap().name_only, "{falsy}");
+        }
+        let errors = match validate::search(&json!({"q": "passport", "name_only": "maybe"})) {
+            Ok(_) => panic!("a bad bool word must answer the 422 battery, not pass"),
+            Err(errors) => errors,
+        };
+        assert_eq!(errors[0]["type"], "bool_parsing");
+        assert_eq!(errors[0]["loc"][1], "name_only");
     }
 
     #[test]

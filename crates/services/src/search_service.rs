@@ -438,12 +438,35 @@ fn summary(root: &str, store: Option<&IndexStore>) -> Value {
     Value::Object(fields)
 }
 
+/// `name_only:` (#66, 2026-11-25): the GUIs' "Names only" control rides this verb
+/// field. The seam composes the EXACT spelling a human types in the box —
+/// `NameQuery::PREFIX` + a space + the text — and only then: the field true, the
+/// text non-empty, and the text not already carrying the prefix. Every other
+/// combination passes through unchanged, so a field-less reply stays byte-parity
+/// and a typed `name:` is never doubled. The names-only path itself
+/// (`NameQuery::text_of`) is the engine's own; this field adds no second keyword
+/// search and never touches the display text the thin clients show.
+fn effective_query(text: &str, name_only: bool) -> String {
+    if name_only && !text.is_empty() && NameQuery::text_of(text).is_none() {
+        format!("{} {text}", NameQuery::PREFIX)
+    } else {
+        text.to_string()
+    }
+}
+
 /// `handle(_:…)` under the state lock: every op's reply fields (the `id` is
 /// added by the loop).
 fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<Value, String> {
     match op {
         "search" => {
-            let text = request.get("q").and_then(Value::as_str).unwrap_or("");
+            let text = effective_query(
+                request.get("q").and_then(Value::as_str).unwrap_or(""),
+                request
+                    .get("name_only")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            );
+            let text = text.as_str();
             let code = request
                 .get("code")
                 .and_then(Value::as_bool)
@@ -967,6 +990,29 @@ mod tests {
             code_skipped: vec![],
             idle_seconds: 300.0,
         }
+    }
+
+    #[test]
+    fn name_only_composes_the_typed_spelling_and_passes_the_rest_through() {
+        // #66 (2026-11-25): the GUI chip rides the verb field; the seam must
+        // compose the byte-identical spelling a human types — never double a
+        // typed prefix (any casing), never prefix an empty text, and never
+        // touch a field-less or already-prefixed query.
+        assert_eq!(
+            super::effective_query("passport scan", true),
+            "name: passport scan"
+        );
+        assert_eq!(
+            super::effective_query("name: passport", true),
+            "name: passport"
+        );
+        assert_eq!(
+            super::effective_query("NAME: passport", true),
+            "NAME: passport"
+        );
+        assert_eq!(super::effective_query("  name: x", true), "  name: x");
+        assert_eq!(super::effective_query("passport", false), "passport");
+        assert_eq!(super::effective_query("", true), "");
     }
 
     #[test]

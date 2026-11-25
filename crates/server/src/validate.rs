@@ -53,6 +53,9 @@ pub struct SearchReq {
     pub meaning: bool,
     pub prefix_last: bool,
     pub person: Option<i64>,
+    /// `name_only: bool = False` (#66): the "Names only" control. The daemon seam
+    /// composes the typed `name:` spelling; an absent/false field is the old verb.
+    pub name_only: bool,
 }
 
 pub struct EmbedAheadReq {
@@ -278,7 +281,8 @@ fn check_person(body: &Value, errors: &mut Vec<Value>) -> Option<i64> {
 }
 
 /// POST /search — the field order is `SearchRequest`'s declarations: q, kinds,
-/// limit, code, meaning, prefix_last, person (FastAPI reports errors in that order).
+/// limit, code, meaning, prefix_last, person, name_only (FastAPI reports errors
+/// in that order).
 pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
     let mut errors = Vec::new();
     if !body_is_object(body, &mut errors) {
@@ -291,6 +295,7 @@ pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
     let meaning = check_bool(body, "meaning", true, &mut errors);
     let prefix_last = check_bool(body, "prefix_last", false, &mut errors);
     let person = check_person(body, &mut errors);
+    let name_only = check_bool(body, "name_only", false, &mut errors);
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -302,6 +307,7 @@ pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
         meaning,
         prefix_last,
         person,
+        name_only,
     })
 }
 

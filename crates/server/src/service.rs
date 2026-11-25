@@ -71,6 +71,20 @@ fn op_fields(name: &str) -> Map<String, Value> {
     fields
 }
 
+/// The `search` verb's params (2026-11-25 scoped-search round): the verb fields
+/// are a struct — the `FileOptions`/`FlowParams` precedent. #66 lands `name_only`;
+/// the scope commit adds `under`/`ext` to this struct, not to the signature.
+#[derive(Default)]
+pub struct SearchParams<'a> {
+    pub q: &'a str,
+    pub kinds: Option<Vec<String>>,
+    pub limit: i64,
+    pub code: bool,
+    pub meaning: bool,
+    pub prefix_last: bool,
+    pub name_only: bool,
+}
+
 impl SearchService {
     pub fn new(config: EngineConfig) -> Self {
         Self {
@@ -117,24 +131,30 @@ impl SearchService {
 
     // ── the protocol, one method per op ──────────────────────────────────────────────
 
-    pub fn search(
-        &self,
-        q: &str,
-        kinds: Option<Vec<String>>,
-        limit: i64,
-        code: bool,
-        meaning: bool,
-        prefix_last: bool,
-    ) -> Result<Value, CallError> {
+    pub fn search(&self, params: &SearchParams<'_>) -> Result<Value, CallError> {
+        let SearchParams {
+            q,
+            kinds,
+            limit,
+            code,
+            meaning,
+            prefix_last,
+            name_only,
+        } = params;
         let mut fields = op_fields("search");
         fields.insert("q".into(), Value::String(q.to_string()));
-        fields.insert("code".into(), Value::Bool(code));
-        fields.insert("limit".into(), Value::from(limit));
-        fields.insert("meaning".into(), Value::Bool(meaning));
-        fields.insert("prefix_last".into(), Value::Bool(prefix_last));
+        fields.insert("code".into(), Value::Bool(*code));
+        fields.insert("limit".into(), Value::from(*limit));
+        fields.insert("meaning".into(), Value::Bool(*meaning));
+        fields.insert("prefix_last".into(), Value::Bool(*prefix_last));
+        // `name_only` (#66): rides the verb only when true — a false field is the
+        // field-less verb, byte-parity for every existing pin.
+        if *name_only {
+            fields.insert("name_only".into(), Value::Bool(true));
+        }
         // `if kinds:` — an empty list means "no kinds filter" in Python; None rides
         // identically, so an empty Vec also drops the field.
-        if let Some(kinds) = kinds.filter(|kinds| !kinds.is_empty()) {
+        if let Some(kinds) = kinds.clone().filter(|kinds| !kinds.is_empty()) {
             fields.insert(
                 "kinds".into(),
                 Value::Array(kinds.into_iter().map(Value::String).collect()),
