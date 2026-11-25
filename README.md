@@ -44,6 +44,15 @@
 - **Hybrid Exact-String & Keyword Matching:** Invoice numbers, error codes, and proper nouns are indexed verbatim alongside semantic vectors. Prefix any query with `name:` to bypass semantic embeddings and perform strict filename/directory matching.
 - **Dedicated Code Search (Opt-In):** Enable code indexing to search functions by intent (e.g., `code: retry a failed call with backoff` or `code: refreshAccessToken`) and open results directly in your editor at the defining line.
 
+## People: Face Recognition (Opt-In)
+
+DigUp can recognize faces in your indexed photos, group them into people you can name, and filter search results by person — in the desktop app (the **People** tab) and in the web UI.
+
+- **Consent first:** face recognition stays fully off until you enable the People tab. The enable screen explains in plain words what the feature does and which model packs it downloads, and your acceptance is recorded as a local file. Withdraw anytime: face processing stops, and your photos are never touched.
+- **How it works:** a detector finds faces in photos, an embedder turns each face into a vector, and the vectors cluster into people. Name the clusters you recognize, merge duplicates, dissolve the rest. Scans are incremental, so new photos are picked up on the next scan.
+- **Face data stays local:** vectors and clusters live in a dedicated `face.sqlite` beside the index on your machine. Photos are never uploaded, and recognition runs fully offline ([why the packs are downloaded](#why-face-model-packs-are-downloaded-not-packaged)).
+- **People filter on search:** pick a named person in the search bar and results narrow to the photos carrying that person's face. The engine's ranking is untouched — the filter relays the face store's own membership facts.
+
 ## Privacy by Design
 
 Your files never leave your hardware. DigUp connects to the internet **only once** to download the model weights. There are no accounts, no analytics, and no external API calls. Your entire index resides in a single, portable SQLite database on your local disk, and indexed media directories are mounted strictly **read-only**.
@@ -149,6 +158,17 @@ digup --help                          # List all available subcommands
 All frontends (the web UI and Tauri desktop shell) communicate with `digup` strictly over documented JSON-lines protocols. All ranking, scoring, and filtering happen exclusively inside the Rust engine.
 
 UI work is evaluated on the **desktop app** (the Tauri shell), not on the container image — the contract container is a CI checkpoint, never the test target. Every UI change lands on every front in the same round: the shell (`shell/`, which Windows and macOS ride at packaging time) and the web UI (`server/ui/`).
+
+---
+
+## MCP: Search From an AI Agent
+
+DigUp is a Model Context Protocol (MCP) server: any MCP-capable agent — Claude Desktop, Cursor, Claude Code, opencode, and others — can connect and search your indexed folders. Every answer is the engine's own rows, scores, and counts, relayed verbatim; your files stay on your computer.
+
+- **stdio (local agents):** `digup mcp [FOLDER]… [--index DIR]` — one JSON-RPC message per line on stdin, one on stdout. Tools: `search`, `status`, `show`. The desktop app ships a one-click toggle that registers it with Claude Desktop.
+- **HTTP (remote and LAN agents):** a server deployment also answers `POST /api/v1/mcp` behind the same bearer gate as the REST API: a read key answers `search`, `status`, `show`, and `people`; an admin key adds `estimate` and `index`.
+
+The full contract, tool by tool, is in [`server/docs/API.md`](server/docs/API.md).
 
 ---
 
@@ -283,3 +303,9 @@ Powered by open-source technology:
 ## License
 
 [MIT](LICENSE)
+
+---
+
+## Why Face Model Packs Are Downloaded, Not Packaged
+
+Face recognition rides on two model packs — a face detector and a face embedder — totaling roughly 30 MB to 280 MB depending on the accuracy tier you choose. They are too large to ship inside every app download, and their licenses call for a download you authorize yourself, so they are not packaged. Enabling the People tab downloads the packs you chose from Hugging Face once — the feature's only network step — and face recognition is fully offline afterward: photos are never uploaded, and face data never leaves your machine. Consent for all of this is explicit, shown in plain words before the download, and revocable at any time; withdrawing deletes face data and never deletes a photo.
