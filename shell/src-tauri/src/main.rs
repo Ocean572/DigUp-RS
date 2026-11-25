@@ -1300,12 +1300,44 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
         let _ = window.set_focus();
     }
     let closing = window.clone();
+    // The damage-repaint kick (measured 2026-11-25, the five-round paint chase): this
+    // webview's PARTIAL repaints — the damage rects that land when a WINDOWED window
+    // moves, resizes, regains focus — do not restore full stacking order: black specks
+    // show up near the search field, and grid photos repaint OVER the People panel
+    // ("the searched images are behind it"). Fullscreen is immune (the user's
+    // measurement: "full screen works great") because its repaints cover everything.
+    // So: when the window moves/resizes/focuses, kick a FULL repaint — a body-opacity
+    // tick repaints the whole page in paint order (panel back on top, specks filled),
+    // and the synthetic resize re-anchors any open panel. Throttled: drag-move fires
+    // continuously.
+    let kicker = window.clone();
+    // on_window_event takes a plain Fn closure: the throttle rides a Cell, not a mut.
+    let last_kick = std::cell::Cell::new(Instant::now());
     window.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { .. } = event {
-            remember_place(&closing);
+        match event {
+            WindowEvent::CloseRequested { .. } => remember_place(&closing),
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                if last_kick.get().elapsed() >= Duration::from_millis(120) {
+                    last_kick.set(Instant::now());
+                    kick_paint(&kicker);
+                }
+            }
+            WindowEvent::Focused(true) => kick_paint(&kicker),
+            _ => {}
         }
     });
     Ok(())
+}
+
+/// One full-page repaint tick, run in the page: the app's own resize handling rides the
+/// synthetic event (a panel re-anchors), and the opacity tick forces WebCore to repaint
+/// the whole viewport in paint order.
+fn kick_paint(window: &tauri::WebviewWindow) {
+    let _ = window.eval(
+        "window.dispatchEvent(new Event('resize'));\
+         document.body.style.opacity = '0.9999';\
+         requestAnimationFrame(() => { document.body.style.opacity = ''; });",
+    );
 }
 
 /// Keeps the window's place as it closes (and as DigUp quits with it open), for the next time; not a hidden debug
