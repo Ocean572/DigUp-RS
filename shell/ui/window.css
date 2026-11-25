@@ -123,28 +123,26 @@ svg { display: block; }
 /* Where typing goes, as a field shows it: a ring in the accent color while it has the cursor. */
 .field:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
 
-/* The spotlight icon as a MASK BACKGROUND, not an SVG element (2026-11-25, the black-box
-   round two: the 18px integer-parity cure shipped and measured — the box kept painting).
-   The SVG element ITSELF is the trouble class in this app's compositing-off webview: its
-   partial repaint (window-move expose) blits the icon box with a strip left unpainted —
-   the black box. The app's clean classes prove the safe paint paths: <img> and element
-   backgrounds survive expose (the photos paint fine). So the bar icon carries no SVG:
-   the glyph is the span's own mask, painted with the span's background as part of the
-   field's box. White stroke: the mask reads the same under alpha AND luminance modes.
-   Same geometry as SEARCH_ICON; the code glyph swaps by class (window.js toggles it). */
+/* The spotlight icon as a BACKGROUND IMAGE (2026-11-25, the black-box round three).
+   History: (1) integer pixel parity — shipped, measured, box stayed; (2) mask +
+   background-color — the mask is ONE assumption (its SVG-data-URI source has a known
+   failure class in WebKitGTK: the mask does not rasterize and the plain background
+   fills the box = an oversized solid swatch "composited with" the glyph, the exact
+   signature in the user's screenshots). So: no mask, no background-color, no SVG
+   element — the glyph is a plain background-image data URI with the ember color baked
+   in (#d97b1a = --ember, identical in both themes). Backgrounds are the app's proven
+   safe paint class: they paint as part of the element's box, never leave a black
+   strip on expose, and every webview renders raster/URIs. Geometry = SEARCH_ICON.
+   The code glyph swaps by class (window.js toggles .code). */
 .glass {
   width: 22px; height: 20px; flex: none;
-  background-color: var(--ember);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23d97b1a' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10' cy='10' r='6.5'/%3E%3Cpath d='M15 15 L20.5 20.5'/%3E%3C/g%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
   background-size: 18px 18px;
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10' cy='10' r='6.5'/%3E%3Cpath d='M15 15 L20.5 20.5'/%3E%3C/g%3E%3C/svg%3E");
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: 18px 18px;
 }
 .glass.code {
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' d='M9 7 L4 12 L9 17 M15 7 L20 12 L15 17'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23d97b1a' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' d='M9 7 L4 12 L9 17 M15 7 L20 12 L15 17'/%3E%3C/svg%3E");
 }
 
 #query {
