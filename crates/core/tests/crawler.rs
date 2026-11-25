@@ -475,3 +475,53 @@ fn code_outside_a_repo_counts_and_progress_counts_entries() {
         .all(|pair| pair[0].checked <= pair[1].checked));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Issue #2 — the walk's failures are REPORTED, not swallowed. Swift's enumerator carried
+/// `errorHandler: { _, _ in true }` and told the sync nothing, so a subfolder that was
+/// temporarily unreadable (permissions, a remount blip) looked exactly like an empty folder —
+/// and the sync took "not seen" for "deleted" and dropped rows whose files were on disk. The
+/// crawl now records every path the walk failed on (`scan_failures`); the sync keeps rows
+/// under them. The files inside the sealed folder stay unfound — there is nothing to list.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_folder_is_reported_as_a_scan_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let seal = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .expect("change the mode");
+    };
+    let root = temp_tree("digup-crawler-scanfail");
+    touch(&root, "read/keep.txt", b"x");
+    touch(&root, "sealed/photo.jpg", b"x");
+    let sealed = root.join("sealed");
+    seal(&sealed, 0o000);
+    let report = crawler::crawl(
+        std::slice::from_ref(&root),
+        &IndexOptions::default(),
+        &mut |_| {},
+    );
+    let sealed = sealed.to_string_lossy().into_owned();
+    assert!(
+        report.scan_failures.contains(&sealed),
+        "the folder the walk could not read is reported: {:?}",
+        report.scan_failures
+    );
+    assert!(names(&report.candidates).contains("keep.txt"));
+    assert!(!names(&report.candidates).contains("photo.jpg"));
+    seal(&PathBuf::from(&sealed), 0o755);
+
+    // A root that cannot be listed at all: the depth-0 failure names the ROOT, and the
+    // crawl returns no candidates — the sync must keep every row of that root.
+    seal(&root, 0o000);
+    let report = crawler::crawl(
+        std::slice::from_ref(&root),
+        &IndexOptions::default(),
+        &mut |_| {},
+    );
+    assert!(report.candidates.is_empty());
+    assert!(report
+        .scan_failures
+        .contains(&root.to_string_lossy().into_owned()));
+    seal(&root, 0o755);
+    let _ = std::fs::remove_dir_all(&root);
+}

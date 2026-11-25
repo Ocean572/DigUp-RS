@@ -25,6 +25,12 @@ pub struct CrawlReport {
     pub datasets: HashMap<String, i64>,
     /// root → (reason → files), the same counts as `skipped` split by folder
     pub left_out: HashMap<String, HashMap<String, i64>>,
+    /// Paths the walk could not read (issue #2: a sealed subfolder, an ejected mount below the
+    /// root). The Swift enumerator's `errorHandler: { _, _ in true }` kept walking and reported
+    /// nothing, so an unreadable folder looked like an EMPTY one and the sync took "not seen"
+    /// for "deleted" and dropped rows whose files were on disk. The paths ride to the sync,
+    /// which keeps rows under them like the vanished roots; they are NOT relayed on the wire.
+    pub scan_failures: HashSet<String>,
 }
 
 impl CrawlReport {
@@ -304,7 +310,17 @@ pub fn crawl(
         while let Some(entry) = walker.next() {
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(_) => continue, // the enumerator's errorHandler: { _, _ in true }
+                // The enumerator's errorHandler: { _, _ in true } — walk on, report nothing…
+                // except WHERE it failed (issue #2): the failed path rides to the sync, which
+                // keeps its rows. A folder the walk could not read is not an empty folder.
+                Err(err) => {
+                    if let Some(path) = err.path() {
+                        report
+                            .scan_failures
+                            .insert(paths::to_slashes(&path.to_string_lossy()));
+                    }
+                    continue;
+                }
             };
             if entry.depth() == 0 {
                 continue; // Foundation's enumerator starts with the root's contents

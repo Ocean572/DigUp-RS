@@ -323,15 +323,20 @@ impl Indexer {
             }
             // A root that went away while it was being walked (a drive ejected mid-crawl)
             // looked emptier than it is: keep its rows rather than take that for "deleted".
-            let vanished: Vec<String> = root_paths
+            // The same rule for a folder the walk could not read at all (issue #2): its files
+            // exist, they were only unlistable — "not seen" is the walk's failure, not a
+            // delete. Real deletes still prune: a SUCCESSFUL scan that lacks the file saw the
+            // folder's whole truth, and no failure is recorded for it.
+            let keep_under: Vec<String> = root_paths
                 .iter()
                 .filter(|path| !Path::new(path).exists())
                 .map(|path| paths::bound(path))
+                .chain(crawl.scan_failures.iter().map(|path| paths::bound(path)))
                 .collect();
             for row in &existing {
                 if !seen.contains(&row.path)
                     && !moved_from.contains(&row.path)
-                    && !vanished.iter().any(|prefix| row.path.starts_with(prefix))
+                    && !keep_under.iter().any(|prefix| row.path.starts_with(prefix))
                 {
                     self.store.delete(row.id)?;
                     summary.removed += 1;
