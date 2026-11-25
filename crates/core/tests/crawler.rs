@@ -297,6 +297,91 @@ fn a_chosen_folder_is_walked_whatever_markers_it_holds() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Issue #3 — overlapping roots: the parent AND the project itself chosen. The project rule
+/// applies to project folders found INSIDE a chosen root, not to the chosen root itself
+/// ("a folder chosen on purpose is read whole, whatever markers it holds", Crawler.swift).
+/// Selecting the project ALONE indexes its pictures; selecting parent+project must index
+/// them too, in either root order; selecting only the parent keeps excluding them (the pin
+/// above). Every report string — attribution included — rides the deepest chosen root:
+/// the more specific instruction.
+#[test]
+fn an_explicitly_selected_project_root_is_read_whole_inside_another_root() {
+    let root = temp_tree("digup-crawler-project-roots");
+    touch(&root, "notes.txt", b"x");
+    touch(&root, "other/pic3.jpg", b"x");
+    touch(&root, "proj/package.json", b"{}");
+    touch(&root, "proj/pic.jpg", b"x");
+    touch(&root, "proj/sub/pic2.jpg", b"x");
+    let proj = root.join("proj");
+
+    // Parent only: the project's two pictures are inside a code project (the old pin).
+    let report = crawler::crawl(
+        std::slice::from_ref(&root),
+        &IndexOptions::default(),
+        &mut |_| {},
+    );
+    assert_eq!(count(&report, "skipped", "inside a code project"), 2);
+    assert_eq!(
+        names(&report.candidates),
+        ["notes.txt".to_string(), "pic3.jpg".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<String>>()
+    );
+
+    // Project alone: its pictures index, nothing is inside it (the old pin, replayed).
+    let report = crawler::crawl(
+        std::slice::from_ref(&proj),
+        &IndexOptions::default(),
+        &mut |_| {},
+    );
+    assert_eq!(count(&report, "skipped", "inside a code project"), 0);
+    assert_eq!(
+        names(&report.candidates),
+        ["pic.jpg".to_string(), "pic2.jpg".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<String>>()
+    );
+
+    // Both roots, in BOTH orders: the pictures index; the project marker's own skip rides
+    // the project root (the deepest chosen root containing it).
+    for order in [[root.clone(), proj.clone()], [proj.clone(), root.clone()]] {
+        let report = crawler::crawl(&order, &IndexOptions::default(), &mut |_| {});
+        assert_eq!(
+            count(&report, "skipped", "inside a code project"),
+            0,
+            "the chosen project is read whole in root order {order:?}"
+        );
+        assert_eq!(
+            names(&report.candidates),
+            [
+                "notes.txt".to_string(),
+                "pic.jpg".to_string(),
+                "pic2.jpg".to_string(),
+                "pic3.jpg".to_string()
+            ]
+            .into_iter()
+            .collect::<BTreeSet<String>>(),
+            "no file is indexed twice and none is lost, order {order:?}"
+        );
+        let under_proj = report
+            .left_out
+            .get(&proj.to_string_lossy().into_owned())
+            .unwrap_or_else(|| panic!("the project root reports its own leftovers, {order:?}"));
+        assert_eq!(
+            under_proj.get("code or data file"),
+            Some(&1),
+            "package.json is attributed to the project root, order {order:?}"
+        );
+        assert!(
+            !report
+                .left_out
+                .contains_key(&root.to_string_lossy().into_owned()),
+            "the parent has nothing left out in this tree, order {order:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_cache_directory_root_is_skipped_whole() {
     let root = temp_tree("digup-crawler-cache-root");
