@@ -82,6 +82,13 @@ export const keyRowCss = css`
      in the 2rem row system, names carried in aria-label/title (readers and tooltips). */
   .key-icon { width: var(--row-height); padding: 0; text-align: center;
     font-size: 1rem; line-height: 1; }
+  /* Round eight: the API docs link rides the same square button (the settings section
+     carries the endpoint, the copy, and the docs as three icon squares). */
+  a.key-icon { display: inline-flex; align-items: center; justify-content: center;
+    height: var(--row-height); box-sizing: border-box; text-decoration: none;
+    color: var(--text); background: var(--bg); border: 1px solid var(--edge);
+    border-radius: var(--radius-sm); }
+  a.key-icon:hover { border-color: var(--accent); color: var(--accent); }
   .appkey-name { color: var(--soft); font-size: var(--text-xs); min-width: 0; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   /* The key lives in a real text box (2026-11-08 UI brief): selectable, copyable, and the

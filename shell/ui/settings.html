@@ -57,12 +57,15 @@
       <label class="option">
         <input type="checkbox" id="mcp-claude">
         <span class="text">
-          <span class="name">Connect Claude Desktop</span>
-          <span class="info">Adds DigUp to Claude Desktop's own settings, so Claude can search your indexed folders
-            through the Model Context Protocol — the answers are the engine's own rows and scores, and your files
-            stay on this computer. Folders you add later are picked up. The protocol server is built into DigUp's
-            helper (`digup mcp`), so any agent on this machine can use it without this switch, which only writes
-            DigUp's line in Claude Desktop's file.</span>
+          <span class="name">AI agents (MCP server)</span>
+          <span class="info">DigUp includes an MCP server — the Model Context Protocol is the
+            standard way AI agents reach local tools. Any MCP-capable agent (Claude Desktop,
+            Cursor, Claude Code, opencode, …) adds DigUp to its MCP settings as the command
+            <code>digup mcp</code>, run over stdio; the agent can then search your indexed
+            folders, and what comes back are the engine's own rows and scores, with your files
+            staying on this computer. Folders you add later are picked up automatically. The
+            checkbox is the one-click version for Claude Desktop: it writes (or removes)
+            DigUp's line in Claude Desktop's own settings file, nothing else.</span>
         </span>
       </label>
 

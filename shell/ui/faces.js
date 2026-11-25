@@ -389,11 +389,22 @@ function peopleFacts(models) {
 /// The enable screen (FACES.md §5, the default-OFF posture): no counts, no cards, no scan.
 function peopleGateView() {
   const view = element("div", "people-view");
-  view.append(element("h3", "", "Face recognition is off"));
+  // The consent explanation (round eight, the user's ask 2026-11-25): the gate explains WHY
+  // the packs download and WHAT acceptance authorizes, in plain words, BEFORE the checkbox.
+  // Thin-client law keeps it honest: it states what the engine does, promises nothing more.
+  view.append(element("h3", "", "Face recognition is off — what switching it on does"));
   view.append(element("p", "note people-copy",
-    "Face recognition finds faces, groups them into people, and crops the photos. It runs only after you "
-    + "accept, only on the folders DigUp searches, only with the user-supplied packs below. Your acceptance "
-    + "is kept as a file beside DigUp's settings, and you can withdraw it at any time; withdrawing never deletes photos."));
+    "Face recognition runs on two model packs: a detector that finds faces, and an embedder "
+    + "that turns each face into numbers. They are plain files DigUp downloads once from "
+    + "Hugging Face into its models folder. That download is the only network step: face "
+    + "recognition then runs entirely on this computer. Photos are never uploaded; what a "
+    + "face becomes — numbers and crops — is stored only in DigUp's own face store beside "
+    + "its index. No account, no cloud."));
+  view.append(element("p", "note people-copy",
+    "Accepting records your permission, as a file beside DigUp's settings: DigUp may find "
+    + "faces in the photos of the folders you search, describe each face with the tier "
+    + "chosen below, and group matching faces into people you can name. You can withdraw at "
+    + "any time — scanning stops, and withdrawing never deletes photos."));
   view.append(peopleFacts(People.models));
   const tiers = People.models.filter((m) => m.name !== DETECTOR && m.present);
   if (tiers.length) {
@@ -412,6 +423,9 @@ function peopleGateView() {
     if (!People.embModel) People.embModel = select.value;
     select.addEventListener("change", () => { People.embModel = select.value; });
     view.append(select);
+    view.append(element("p", "note people-copy",
+      "The tier the record names — bigger tiers are more accurate, slower to scan, and a "
+      + "larger download. One tier per face store; the record names it."));
   } else {
     view.append(element("p", "note",
       "The pinned face packs are not installed — the button below fetches them from Hugging Face; the People tab stays closed until they are in."));

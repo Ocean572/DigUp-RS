@@ -48,14 +48,24 @@ describe("digup-settings", () => {
     expect(rows[1].querySelector(".appkey-field").value).toBe("app-key-1");
   });
 
-  it("an env-keyed deployment shows its honest line; a tokenless one collapses the section", async () => {
+  it("an env-keyed deployment shows its honest line; a tokenless one says so — the section never collapses", async () => {
     el = await mount({ keys: { admin: null, apps: [], envFlagged: true, minted: false } });
     expect(el.shadowRoot.getElementById("api-key-sec").hasAttribute("hidden")).toBe(false);
     expect(el.shadowRoot.getElementById("api-key-sec").textContent)
       .toContain("Set in the server's environment");
     el.remove();
     el = await mount({ keys: { admin: null, apps: [], envFlagged: false, minted: false } });
-    expect(el.shadowRoot.getElementById("api-key-sec").hasAttribute("hidden")).toBe(true);
+    expect(el.shadowRoot.getElementById("api-key-sec").hasAttribute("hidden")).toBe(false);
+    expect(el.shadowRoot.getElementById("api-key-sec").textContent)
+      .toContain("No API keys on this deployment");
+  });
+
+  it("the section is always informative: the API endpoint is copyable and the docs link reaches /api/v1/docs", async () => {
+    el = await mount({ keys: { admin: null, apps: [], envFlagged: false, minted: false } });
+    const base = el.shadowRoot.querySelector("#api-key-sec .appkey-line .appkey-field");
+    expect(base.value).toBe(`${location.origin}/api/v1`);
+    const docs = el.shadowRoot.querySelector("a.key-icon");
+    expect(docs.getAttribute("href")).toBe("/api/v1/docs");
   });
 
   it("the panel's controls speak through events: theme, estimate toggle, Estimate, Regenerate, index", async () => {

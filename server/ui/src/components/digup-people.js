@@ -187,11 +187,18 @@ class DigupPeople extends LitElement {
     const present = tiers.filter((m) => m.present);
     return html`
       <section class="set-sec" aria-labelledby="people-gate">
-        <span class="set-title" id="people-gate">${USERS_ICON} Face recognition is off</span>
-        <p id="consent-copy">Face recognition finds faces, groups them into people, and crops
-          the photos. It runs only after you accept, only on this deployment's own folders,
-          only with the user-supplied packs below. Your acceptance is kept as a file
-          (0600) and you can withdraw it at any time; withdrawing never deletes photos.</p>
+        <span class="set-title" id="people-gate">${USERS_ICON} Face recognition is off — what switching it on does</span>
+        <p id="consent-copy">Face recognition runs on two model packs: a detector that finds
+          faces, and an embedder that turns each face into numbers. They are plain files the
+          server downloads once from Hugging Face into its models folder. That download is the
+          only network step: face recognition then runs entirely on this machine. Photos are
+          never uploaded; what a face becomes — numbers and crops — is stored only in the
+          server's own face store beside its index. No account, no cloud.</p>
+        <p id="consent-copy">Accepting records your permission, as a file (0600) in the
+          server's config: it may find faces in the photos of this deployment's folders,
+          describe each face with the tier chosen below, and group matching faces into people
+          you can name. You can withdraw at any time — scanning stops, and withdrawing never
+          deletes photos.</p>
         <span class="set-facts">
           ${p.models.map((m) => html`<span class="badge ${m.present ? "ok" : "off"}"
                     title=${m.present ? "installed in the models folder" : "not installed"}>${m.name}</span>`)}

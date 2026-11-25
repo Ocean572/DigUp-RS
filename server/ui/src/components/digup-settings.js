@@ -225,9 +225,23 @@ class DigupSettings extends LitElement {
         </div>
       </section>
 
-      <section class="set-sec" id="api-key-sec" aria-labelledby="set-apikey"
-               ?hidden=${!this.#hasKeyRows(keys)}>
+      <section class="set-sec" id="api-key-sec" aria-labelledby="set-apikey">
         <span class="set-title" id="set-apikey">${KEY_ICON} API access</span>
+        <!-- Round eight (the user's ask 2026-11-25): the section is ALWAYS informative —
+             the endpoint (copyable), the browsable docs the server serves at /api/v1/docs
+             (openapi.rs — the page the Swift-era UI linked and the Rust port lost), and the
+             deployment's key state. Minted keys show + Regenerate; environment keys are
+             never echoed; a deployment with no keys says so plainly. -->
+        <div class="appkey-line">
+          <input class="appkey-field" readonly spellcheck="false" .value=${`${location.origin}/api/v1`}
+                 aria-label="This server's API endpoint" title="Click to select the whole endpoint"
+                 @click=${(ev) => ev.target.select()}>
+          <button type="button" class="key-icon" aria-label="Copy the API endpoint to the clipboard"
+                  title="Copy the API endpoint to the clipboard"
+                  @click=${(ev) => this.#copy(`${location.origin}/api/v1`, ev.currentTarget)}>⧉</button>
+          <a class="key-icon" href="/api/v1/docs" target="_blank" rel="noopener"
+             aria-label="Open this server's API docs" title="Open this server's API docs">?</a>
+        </div>
         <!-- One key per row: the key in a field (click selects all), the clipboard and
              the refresh as square icon buttons at its right (round-3 brief; names in
              aria-label + title). -->
@@ -260,6 +274,12 @@ class DigupSettings extends LitElement {
             <div class="appkey-line">
               <span class="appkey-name">Set in the server's environment</span>
             </div>` : null}
+          ${!keys.admin && !keys.envFlagged && keys.apps.length === 0 ? html`
+            <div class="appkey-line">
+              <span class="appkey-name">No API keys on this deployment — searches are open.
+                To give applications their own keys, set DIGUP_SERVER_MINT_KEYS=1 in the
+                server's environment: it mints its keys at boot and shows them here.</span>
+            </div>` : null}
         </div>
       </section>`;
   }
@@ -282,14 +302,6 @@ class DigupSettings extends LitElement {
     }
     btn.textContent = ok ? "✓" : "—";
     setTimeout(() => { if (btn.isConnected) btn.textContent = "⧉"; }, 1500);
-  }
-
-  #hasKeyRows(keys) {
-    // A section with nothing in it collapses: the tokenless server mints no keys
-    // (they appear when an application registers) — no title-only fragment (2026-11-08
-    // styling ask, round 3). Regenerate exists only where keys are minted; an
-    // env-keyed server answers 400 — its keys live in its own config.
-    return Boolean(keys.admin) || keys.apps.length > 0 || (!keys.admin && keys.envFlagged);
   }
 
   #close = () => this.dispatchEvent(new CustomEvent("digup:close",
