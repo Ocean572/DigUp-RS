@@ -17,7 +17,14 @@ permissions: {}
 
 jobs:
   cask:
-    if: ${{ !github.event.release.prerelease }}
+    # The Ocean572 fork: SKIP. This job updates the UPSTREAM tap (ARahim3/homebrew-tap)
+    # from an UPSTREAM signed DMG (team AXJ3D85GPJ) with an UPSTREAM token
+    # (HOMEBREW_TAP_TOKEN) — none of which exist for the fork, so every fork release
+    # died at checkout (measured: the fork's first release run, Nov 15, and v0.9.0).
+    # The fork's macOS distribution is the Packages universal app.tar.gz + the updates
+    # feed. On the upstream repo the condition passes unchanged, upstream behavior is
+    # untouched.
+    if: ${{ !github.event.release.prerelease && github.repository == 'ARahim3/DigUp' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
