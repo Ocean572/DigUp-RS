@@ -761,6 +761,17 @@ fn show_window_or_setup(app: &AppHandle) {
 }
 
 fn main() {
+    // The measured Linux rendering config (2026-11-25, the five-round paint chase, closed):
+    // accelerated compositing ON with the shared-memory transport — the fix Ubuntu ships in
+    // webkit2gtk 2.52.6-0ubuntu0.26.04.2 ("Use the SHM transport with NVIDIA GPUs",
+    // #1142771 / LP #2168736). The old pins (WEBKIT_DISABLE_COMPOSITING_MODE=1 +
+    // WEBKIT_DISABLE_DMABUF_RENDERER=1) were workarounds for the empty-transport bug that
+    // black-windowed this box's NVIDIA 580 + GNOME Wayland stack; disabling compositing
+    // is what forced the patched-rect path whose windowed expose repaints produced the
+    // stale specks. Retired. The app sets its own config so installed copies, dock
+    // launches and packages all run it with no env scripts.
+    #[cfg(target_os = "linux")]
+    std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
     let options = match Options::from_args() {
         Ok(options) => options,
         Err(error) => {
@@ -1300,40 +1311,16 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
         let _ = window.set_focus();
     }
     let closing = window.clone();
-    // LAW 2026-11-25 (the damage-repaint class): this webview's PARTIAL repaints — the
-    // damage rects of a windowed window's move/resize/focus — do not restore stacking
-    // order and land stale (specks near the search field, photos painting over the
-    // People panel); FULL repaints are correct, which is why fullscreen is immune.
-    // So on Moved/Resized (throttled 120 ms — drag fires continuously) and Focused(true),
-    // kick a full page repaint: the panel goes back on top and stale regions repaint.
-    let kicker = window.clone();
-    // on_window_event takes a plain Fn closure: the throttle rides a Cell, not a mut.
-    let last_kick = std::cell::Cell::new(Instant::now());
+    // The JS repaint kick (body-opacity tick on move/resize/focus) was RETIRED 2026-11-25:
+    // WebKit's own bug record (324549) shows CSS-opacity ticks do not reliably flush stale
+    // frames, and the measured cure is the rendering config (see main) — accelerated
+    // compositing with the SHM transport fixed the windowed expose artifacts directly.
     window.on_window_event(move |event| {
-        match event {
-            WindowEvent::CloseRequested { .. } => remember_place(&closing),
-            WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-                if last_kick.get().elapsed() >= Duration::from_millis(120) {
-                    last_kick.set(Instant::now());
-                    kick_paint(&kicker);
-                }
-            }
-            WindowEvent::Focused(true) => kick_paint(&kicker),
-            _ => {}
+        if let WindowEvent::CloseRequested { .. } = event {
+            remember_place(&closing);
         }
     });
     Ok(())
-}
-
-/// One full-page repaint tick, run in the page: the app's own resize handling rides the
-/// synthetic event (a panel re-anchors), and the opacity tick forces WebCore to repaint
-/// the whole viewport in paint order.
-fn kick_paint(window: &tauri::WebviewWindow) {
-    let _ = window.eval(
-        "window.dispatchEvent(new Event('resize'));\
-         document.body.style.opacity = '0.9999';\
-         requestAnimationFrame(() => { document.body.style.opacity = ''; });",
-    );
 }
 
 /// Keeps the window's place as it closes (and as DigUp quits with it open), for the next time; not a hidden debug

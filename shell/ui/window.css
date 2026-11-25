@@ -220,6 +220,11 @@ svg { display: block; }
      solid --card paint with the box and carry the separation. */
   position: absolute;
   z-index: 900;
+  /* Own composited layer (2026-11-25, the accelerated-path cure for the panel bleed):
+     on the accelerated config the photos ARE composited layers; a plain DOM panel is
+     not, so the compositor can flash a photo over it. translateZ(0) promotes the panel
+     to its own layer — composited AFTER (over) the photos, with real occlusion. */
+  transform: translateZ(0);
   display: grid;
   gap: 2px;
   padding: 4px;

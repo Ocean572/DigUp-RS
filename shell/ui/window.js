@@ -265,8 +265,10 @@ function renderBar() {
   // untouched (faces_paths relays membership); no consent → loadPeople found nothing →
   // the control is not rendered at all.
   // The measured law (2026-11-24, the user's live check): the native <select> popup is a
-  // dead seam in this app's webview — WebKitGTK's combo popup does not open under the
-  // WEBKIT_DISABLE_COMPOSITING_MODE/DMABUF pins this box's rendering needs. So the app's
+  // dead seam in this app's webview — WebKitGTK's combo popup does not open in this
+  // app's webview on this box (measured under the pins-era config; the rendering config
+  // changed 2026-11-25 — the law is re-proven each UI round on the live app, not re-derived
+  // from the pins). So the app's
   // dropdown is its OWN: a chip-shaped button + a fixed-position panel, the same act,
   // webview-independent. (The web UI keeps the native select — real browsers open those.)
   if (state.people.length && !code) {
