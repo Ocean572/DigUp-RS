@@ -56,6 +56,11 @@ pub struct SearchReq {
     /// `name_only: bool = False` (#66): the "Names only" control. The daemon seam
     /// composes the typed `name:` spelling; an absent/false field is the old verb.
     pub name_only: bool,
+    /// `under: list[str] | None = None` (#206/#132/#188): folder scope (narrowing,
+    /// inside the server's roots); null/empty = unscoped.
+    pub under: Option<Vec<String>>,
+    /// `ext: list[str] | None = None`: extension allow-list; null/empty = no filter.
+    pub ext: Option<Vec<String>>,
 }
 
 pub struct EmbedAheadReq {
@@ -280,9 +285,44 @@ fn check_person(body: &Value, errors: &mut Vec<Value>) -> Option<i64> {
     Some(value)
 }
 
+/// `under: list[str] | None = None` / `ext: list[str] | None = None`
+/// (#206/#132/#188, 2026-11-25): the search scope + extension allow-list. pydantic's
+/// lax `list[str>` rules: null means "no filter"; a non-list is `list_type`; a
+/// non-string item is `string_type` carrying its index in the loc (the kinds
+/// literal_error shape). One helper for both fields — the server relays the values
+/// verbatim; the engine resolves scope canonically (realpath, worktree→main-repo)
+/// and narrows ONLY inside its own roots (the searcher answers for its roots, never wider).
+fn check_string_list(body: &Value, field: &str, errors: &mut Vec<Value>) -> Option<Vec<String>> {
+    match body.get(field) {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(items)) => {
+            let mut values = Vec::new();
+            for (index, entry) in items.iter().enumerate() {
+                match entry {
+                    Value::String(text) => values.push(text.clone()),
+                    _ => errors.push(item(
+                        "string_type",
+                        vec![json!("body"), json!(field), json!(index)],
+                        "Input should be a valid string",
+                    )),
+                }
+            }
+            Some(values)
+        }
+        Some(_) => {
+            errors.push(item(
+                "list_type",
+                vec![json!("body"), json!(field)],
+                "Input should be a valid list",
+            ));
+            None
+        }
+    }
+}
+
 /// POST /search — the field order is `SearchRequest`'s declarations: q, kinds,
-/// limit, code, meaning, prefix_last, person, name_only (FastAPI reports errors
-/// in that order).
+/// limit, code, meaning, prefix_last, person, name_only, under, ext (FastAPI
+/// reports errors in that order).
 pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
     let mut errors = Vec::new();
     if !body_is_object(body, &mut errors) {
@@ -296,6 +336,8 @@ pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
     let prefix_last = check_bool(body, "prefix_last", false, &mut errors);
     let person = check_person(body, &mut errors);
     let name_only = check_bool(body, "name_only", false, &mut errors);
+    let under = check_string_list(body, "under", &mut errors);
+    let ext = check_string_list(body, "ext", &mut errors);
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -308,6 +350,8 @@ pub fn search(body: &Value) -> Result<SearchReq, Vec<Value>> {
         prefix_last,
         person,
         name_only,
+        under,
+        ext,
     })
 }
 

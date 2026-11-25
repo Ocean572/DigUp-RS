@@ -83,6 +83,11 @@ pub struct SearchParams<'a> {
     pub meaning: bool,
     pub prefix_last: bool,
     pub name_only: bool,
+    /// `under:` (#206/#132/#188): folder scope paths — the searcher's own `under:`
+    /// law; an empty list is unscoped (the kinds law shape: field-less verb).
+    pub under: Vec<String>,
+    /// `ext:` — extension allow-list; empty = no filter (post-ranking keep, verbatim rows).
+    pub ext: Vec<String>,
 }
 
 impl SearchService {
@@ -140,6 +145,8 @@ impl SearchService {
             meaning,
             prefix_last,
             name_only,
+            under,
+            ext,
         } = params;
         let mut fields = op_fields("search");
         fields.insert("q".into(), Value::String(q.to_string()));
@@ -151,6 +158,20 @@ impl SearchService {
         // field-less verb, byte-parity for every existing pin.
         if *name_only {
             fields.insert("name_only".into(), Value::Bool(true));
+        }
+        // Scope + extension ride only when named — empty lists are the field-less
+        // verb (the kinds law shape; every existing pin stays byte-parity).
+        if !under.is_empty() {
+            fields.insert(
+                "under".into(),
+                Value::Array(under.iter().map(|p| Value::String(p.clone())).collect()),
+            );
+        }
+        if !ext.is_empty() {
+            fields.insert(
+                "ext".into(),
+                Value::Array(ext.iter().map(|e| Value::String(e.clone())).collect()),
+            );
         }
         // `if kinds:` — an empty list means "no kinds filter" in Python; None rides
         // identically, so an empty Vec also drops the field.

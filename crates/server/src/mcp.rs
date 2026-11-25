@@ -152,6 +152,13 @@ async fn execute(
             if let Some(name_only) = args.get("name_only").and_then(Value::as_bool) {
                 body["name_only"] = json!(name_only);
             }
+            // Scope + extension (#206/#132/#188): relayed verbatim, same law.
+            if let Some(under) = args.get("under").and_then(Value::as_array) {
+                body["under"] = json!(under);
+            }
+            if let Some(ext) = args.get("ext").and_then(Value::as_array) {
+                body["ext"] = json!(ext);
+            }
             // The People filter (round six, 2026-11-23): relayed to the REST route
             // verbatim — absent means the pure, unfiltered search.
             if let Some(person) = args.get("person").and_then(Value::as_i64) {

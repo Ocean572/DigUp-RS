@@ -64,12 +64,13 @@ const VALUED: [&str; 27] = [
 ];
 
 /// `Arguments.repeated`: flags that collect a list.
-const REPEATED: [&str; 5] = [
+const REPEATED: [&str; 6] = [
     "--exclude",
     "--exclude-ext",
     "--code-root",
     "--code-exclude",
     "--in",
+    "--ext",
 ];
 
 fn main() {
@@ -1866,13 +1867,27 @@ fn swift_json_value(value: &serde_json::Value) -> String {
     out
 }
 
+/// `--ext` (#206/#132/#188, 2026-11-25): the search extension ALLOW-list, normalized
+/// the way the engine spells extensions — lowercase, leading dots stripped, commas
+/// split, blanks dropped (the `IndexOptions::extensions` shape, as an allow-list).
+/// Empty: no filter (the daemon's `ext` field follows the same law).
+fn extensions_allow(values: &[String]) -> std::collections::HashSet<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim().trim_start_matches('.').to_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
 /// `search(_:)` (main.swift:362, #178/#189): one query, the store's ranking relayed
 /// verbatim. The human lines and the `--json` rows are the CLI's own contract; the hits'
 /// numbers come from the engine (the daemon's `hit_fields` — the same rows).
 /// `--code`/`code:` pick the code index, `--all` searches both stores with ONE query
 /// encoder pass (the pair `Prompts.query` + `Prompts.codeQuery` embedded together),
-/// `--in`/`--here` scope the answer, `--keyword` skips the model, `--strong` cuts the
-/// weak tail, `--text` prints each matched segment's stored text.
+/// `--in`/`--here` scope the answer, `--ext` keeps named extensions, `--keyword` skips
+/// the model, `--strong` cuts the weak tail, `--text` prints each matched segment's
+/// stored text.
 fn search(args: &Arguments) -> Result<(), String> {
     use digup_core::searcher::SearchHit;
     use digup_core::IndexStore;
@@ -1895,6 +1910,7 @@ fn search(args: &Arguments) -> Result<(), String> {
         .unwrap_or(10);
     let kinds = search_kinds(args)?;
     let scope = args.scope_paths();
+    let ext = extensions_allow(&args.list("--ext"));
     let keyword = args.keyword();
     let word_weight = args.value("--word-weight").and_then(|v| v.parse().ok());
     let z_gate = args.z_gate();
@@ -2106,6 +2122,14 @@ fn search(args: &Arguments) -> Result<(), String> {
         total_vectors,
         encoded_ms,
     } = flow;
+    // `--ext` (#206/#132/#188): the extension allow-list is a post-ranking KEEP, the
+    // same law as the daemon's filter chain — the engine's ranked rows ride verbatim,
+    // nothing is re-scored, and the answer can come back shorter than `-n`.
+    if !ext.is_empty() {
+        paired.retain(|(_, hit)| {
+            ext.contains(&digup_core::code::extension_of(&hit.path).to_lowercase())
+        });
+    }
     // The store each paired hit rode: 0 main, 1 code, 2 the single one. `--text`
     // reads segment text straight off the store — `Searcher::new(_, false)` is the
     // file-map-only shape: no vectors, no model.
@@ -3045,6 +3069,7 @@ fn fetch(file: &Pin, folder: &Path, before: i64, all_total: i64) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::byte_count;
+    use super::extensions_allow;
     use super::parse;
     use super::search_kinds;
 
@@ -3255,6 +3280,38 @@ mod tests {
         assert_eq!(gate.z_gate(), 2.5);
         let gate = parse(&["search", "x"].map(String::from)).unwrap();
         assert_eq!(gate.z_gate(), 2.0);
+    }
+
+    /// `--ext` (#206/#132/#188, 2026-11-25): collects as a REPEATED flag (its value
+    /// never lands in the positional words) and `extensions_allow` normalizes the way
+    /// the engine spells extensions — lowercase, leading dots stripped, commas split,
+    /// blanks dropped. Empty: no filter.
+    #[test]
+    fn the_ext_flag_collects_and_the_allow_list_normalizes() {
+        let args = parse(
+            &[
+                "search",
+                "wakeboarding",
+                "--ext",
+                "mp4",
+                "--ext",
+                ".PDF,heic",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(args.list("--ext"), ["mp4", ".PDF,heic"]);
+        assert_eq!(args.positional, ["search", "wakeboarding"]);
+        let allow = extensions_allow(&args.list("--ext"));
+        assert_eq!(
+            allow,
+            ["mp4", "pdf", "heic"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<std::collections::HashSet<String>>()
+        );
+        assert!(extensions_allow(&[]).is_empty(), "empty: no filter");
+        assert!(extensions_allow(&[" ".to_string()]).is_empty());
     }
 
     /// `kinds()` (#178/#189): case-insensitive, "document/documents/docs" map to doc,

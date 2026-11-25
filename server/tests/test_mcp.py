@@ -224,6 +224,31 @@ def test_the_search_tool_relays_the_name_only_arg_to_the_rest_field(mcp_scoped):
     assert relayed["meaning"] is False and relayed["hits"]
 
 
+
+def test_the_search_tool_relays_the_scope_args(mcp_scoped, corpus):
+    # #206/#132/#188 (2026-11-25): the tool IS the REST handler (the relay law),
+    # so the `under`/`ext` args answer exactly what the endpoint answers — the
+    # scoped extension rows, the engine's scores verbatim, no invented filter.
+    body = {"q": "wakeboarding", "under": [f"{corpus}/videos"], "ext": ["webm"], "limit": 5}
+    direct = mcp_scoped.post("/api/v1/search", json=body,
+                             headers={"Authorization": f"Bearer {READ}"})
+    assert direct.status_code == 200, direct.text
+    result = call(mcp_scoped, READ, "search", body)
+    assert result["isError"] is False
+    relayed, rest = dict(result["structuredContent"]), dict(direct.json())
+    relayed.pop("ms", None)
+    rest.pop("ms", None)
+    relayed.pop("warning", None)
+    rest.pop("warning", None)
+    for row in relayed.get("hits", []) + rest.get("hits", []):
+        row.pop("media_id", None)
+    assert relayed == rest, "the tool must answer exactly what the REST endpoint answers"
+    assert relayed["hits"]
+    videos = f"{corpus}/videos"
+    assert all(h["path"].startswith(videos) and h["path"].endswith(".webm")
+               for h in relayed["hits"])
+
+
 def test_the_status_tool_counts_match_the_rest_status(mcp_scoped):
     rest = mcp_scoped.get("/api/v1/status", headers={"Authorization": f"Bearer {READ}"}).json()
     result = call(mcp_scoped, READ, "status")

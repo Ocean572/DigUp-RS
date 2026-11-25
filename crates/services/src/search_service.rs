@@ -454,6 +454,12 @@ fn effective_query(text: &str, name_only: bool) -> String {
     }
 }
 
+/// One more member of the post-ranking filter chain (the `ext:` comment above):
+/// the rows the engine ranked ride verbatim, the filter KEEPS, it never re-scores.
+fn keeps_extension(extension: &str, ext: &std::collections::HashSet<String>) -> bool {
+    ext.is_empty() || ext.contains(extension)
+}
+
 /// `handle(_:…)` under the state lock: every op's reply fields (the `id` is
 /// added by the loop).
 fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<Value, String> {
@@ -487,6 +493,38 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .get("prefix_last")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // `under:` (#206/#132/#188, 2026-11-25): the GUI's folder scope rides this
+            // field and the searcher's proven `under:` machinery (#178/#1789) — the
+            // scope's canonical spellings (realpath, worktree→main-repo) resolve inside
+            // the searcher, the vector loop, FTS scan and coverage all answer scoped.
+            // Absent/empty = unscoped, byte-parity; an in-scope-empty answer is no hits.
+            let under: Vec<String> = request
+                .get("under")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            // `ext:` — an extension ALLOW-list: keep only rows whose file carries one
+            // of these extensions. Normalized the way the engine spells extensions
+            // (lowercase, leading dots stripped); absent/empty = no filter. It joins
+            // the post-ranking filter chain beside the root/scope/type filters, so the
+            // engine's z rows stay verbatim — the filter keeps, never re-scores.
+            let ext: std::collections::HashSet<String> = request
+                .get("ext")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(Value::as_str)
+                        .map(|value| value.trim().trim_start_matches('.').to_lowercase())
+                        .filter(|value| !value.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
             let started = Instant::now();
             let mut vector: Option<Vec<f32>> = None;
             let mut warning: Option<String> = None;
@@ -525,7 +563,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 z_gate: digup_core::scoring::Z_GATE,
                 word_weight: None,
                 prefix_last,
-                under: None,
+                under: (!under.is_empty()).then_some(under.as_slice()),
             };
             let hits: Vec<SearchHit> = if code {
                 let Some(code_searcher) = state.code_searcher.as_mut() else {
@@ -539,6 +577,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                     .into_iter()
                     .filter(|hit| {
                         folder_selection::is_searched(&hit.path, &roots, &skipped)
+                            && keeps_extension(
+                                &digup_core::code::extension_of(&hit.path).to_lowercase(),
+                                &ext,
+                            )
                             && Path::new(&hit.path).exists()
                     })
                     .collect()
@@ -554,9 +596,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                     .map_err(|e| e.to_string())?
                     .into_iter()
                     .filter(|hit| {
+                        let extension = digup_core::code::extension_of(&hit.path).to_lowercase();
                         folder_selection::is_searched(&hit.path, &roots, &skipped)
-                            && !types
-                                .contains(&digup_core::code::extension_of(&hit.path).to_lowercase())
+                            && !types.contains(&extension)
+                            && keeps_extension(&extension, &ext)
                             && Path::new(&hit.path).exists()
                     })
                     .collect()
@@ -1013,6 +1056,19 @@ mod tests {
         assert_eq!(super::effective_query("  name: x", true), "  name: x");
         assert_eq!(super::effective_query("passport", false), "passport");
         assert_eq!(super::effective_query("", true), "");
+    }
+
+    #[test]
+    fn keeps_extension_keeps_the_allow_list_rows_only() {
+        // #206/#132/#188 (2026-11-25): one member of the post-ranking filter chain —
+        // an empty allow-list keeps everything (the field-less verb, byte-parity),
+        // a named list keeps only its extensions. The filter drops rows, it never
+        // re-scores: the engine's z rows ride verbatim through it.
+        let empty: HashSet<String> = HashSet::new();
+        assert!(super::keeps_extension("jpg", &empty));
+        let allow: HashSet<String> = ["mp4", "pdf"].iter().map(|s| s.to_string()).collect();
+        assert!(super::keeps_extension("mp4", &allow));
+        assert!(!super::keeps_extension("jpg", &allow));
     }
 
     #[test]

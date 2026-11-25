@@ -131,7 +131,9 @@ fn paths() -> Value {
                         "kinds": { "type": "array", "items": { "type": "string", "enum": ["doc", "image", "video", "code"] } },
                         "meaning": { "type": "boolean", "default": true },
                         "person": { "type": "integer", "minimum": 1, "description": "People filter (faces store, consent-gated): keep only hits whose photo carries this person's face; the engine's z-scores ride verbatim" },
-                        "name_only": { "type": "boolean", "default": false, "description": "Names only (#66): the engine's names-only path (FTS5 name segments, no model); the daemon composes the typed name: spelling, the reply shape is the ordinary search answer" }
+                        "name_only": { "type": "boolean", "default": false, "description": "Names only (#66): the engine's names-only path (FTS5 name segments, no model); the daemon composes the typed name: spelling, the reply shape is the ordinary search answer" },
+                        "under": { "type": "array", "items": { "type": "string" }, "description": "Folder scope (#206/#132/#188): keep only rows inside these paths, narrowed inside the server's own roots — scope never widens; omit/empty = unscoped" },
+                        "ext": { "type": "array", "items": { "type": "string" }, "description": "Extension allow-list: keep only rows whose file carries one of these extensions (mp4, .pdf, …); the keep is post-ranking, the engine's z rows ride verbatim; omit/empty = all" }
                     }
                 })
             )

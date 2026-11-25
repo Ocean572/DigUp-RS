@@ -1659,6 +1659,8 @@ async fn search(
             meaning: req.meaning,
             prefix_last: req.prefix_last,
             name_only: req.name_only,
+            under: req.under.unwrap_or_default(),
+            ext: req.ext.unwrap_or_default(),
         })?;
         let mut row = match strip(reply) {
             Value::Object(row) => row,
@@ -3673,6 +3675,50 @@ mod tests {
         };
         assert_eq!(errors[0]["type"], "bool_parsing");
         assert_eq!(errors[0]["loc"][1], "name_only");
+    }
+
+    /// #206/#132/#188 (2026-11-25): the folder scope + extension allow-list ride the
+    /// REST fields as pydantic's lax `list[str]`: absent/null means "no filter" (the
+    /// field-less verb, byte-parity for every existing pin); a non-list is `list_type`;
+    /// a non-string item is `string_type` carrying its index in the loc — the kinds
+    /// literal_error shape. The server relays the values; the engine scopes canonically.
+    #[test]
+    fn the_search_body_carries_the_scope_lists() {
+        use crate::validate;
+        use serde_json::json;
+
+        let absent = validate::search(&json!({"q": "x"})).unwrap();
+        assert!(absent.under.is_none() && absent.ext.is_none());
+        let nulled = validate::search(&json!({"q": "x", "under": null, "ext": null})).unwrap();
+        assert!(nulled.under.is_none() && nulled.ext.is_none());
+
+        let scoped = validate::search(&json!(
+            {"q": "x", "under": ["/data/photos", "/data/clips"], "ext": ["mp4", "pdf"]}
+        ))
+        .unwrap();
+        assert_eq!(
+            scoped.under,
+            Some(vec!["/data/photos".to_string(), "/data/clips".to_string()])
+        );
+        assert_eq!(scoped.ext, Some(vec!["mp4".to_string(), "pdf".to_string()]));
+        // Empty lists pass — the relay drops them to the field-less verb.
+        let empty = validate::search(&json!({"q": "x", "under": [], "ext": []})).unwrap();
+        assert_eq!(empty.under, Some(vec![]));
+        assert_eq!(empty.ext, Some(vec![]));
+
+        let errors = match validate::search(&json!({"q": "x", "under": "/data/photos"})) {
+            Ok(_) => panic!("a bare string is not a list"),
+            Err(errors) => errors,
+        };
+        assert_eq!(errors[0]["type"], "list_type");
+        assert_eq!(errors[0]["loc"], json!(["body", "under"]));
+
+        let errors = match validate::search(&json!({"q": "x", "ext": ["mp4", 7]})) {
+            Ok(_) => panic!("an int item is not a string"),
+            Err(errors) => errors,
+        };
+        assert_eq!(errors[0]["type"], "string_type");
+        assert_eq!(errors[0]["loc"], json!(["body", "ext", 1]));
     }
 
     #[test]

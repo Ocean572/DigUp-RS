@@ -103,6 +103,8 @@ pub fn tool_defs(surface: Surface, allow_admin: bool) -> Vec<Value> {
                     ("code", serde_json::json!({"type": "boolean", "default": false, "description": "search the code index instead"})),
                     ("kinds", serde_json::json!({"type": "array", "items": {"type": "string", "enum": ["screenshot", "image", "pdf", "doc", "audio", "video"]}, "description": "kind filter; omit = all kinds"})),
                     ("name_only", serde_json::json!({"type": "boolean", "default": false, "description": "Names only (#66): match file names, the engine's names-only path, no model; the query rides verbatim"})),
+                    ("under", serde_json::json!({"type": "array", "items": {"type": "string"}, "description": "Folder scope (#206/#132/#188): keep only rows inside these folder/file paths, narrowed inside the server's own roots; omit = unscoped"})),
+                    ("ext", serde_json::json!({"type": "array", "items": {"type": "string"}, "description": "Extension allow-list: keep only rows whose file carries one of these extensions (mp4, .pdf, …); omit = all"})),
                 ],
                 &["q"],
             ),

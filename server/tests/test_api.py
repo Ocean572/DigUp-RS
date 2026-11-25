@@ -176,6 +176,62 @@ def test_name_only_is_the_typed_name_prefix_answer(client):
     assert item["type"] == "bool_parsing" and item["loc"] == ["body", "name_only"]
 
 
+
+def test_the_folder_scope_and_extension_narrow_the_answer(client, corpus):
+    """#206/#132/#188 (2026-11-25): `under` is the folder scope — narrowed inside the
+    server's roots, every kept row lies inside a scope path — and `ext` is the extension
+    allow-list. Both are post-ranking KEEPS on the daemon's filter chain: the surviving
+    rows ride the unscoped answer, the engine re-scores nothing. The corpus's planted
+    "wakeboarding" answer mixes the Vienna clip (.webm, in videos/) with the named
+    photos (.jpg): scoping to videos/ pins the clip, ext ["jpg"] pins the photos. An
+    empty list drops the verb fields — a plain search answers the same rows.
+    """
+    def paths(reply):
+        return [h["path"] for h in reply["hits"]]
+
+    videos = f"{corpus}/videos"
+    wide = client.post("/api/v1/search", json={"q": "wakeboarding", "limit": 20}).json()
+    wide_rows = {(h["path"], h["segment_id"]) for h in wide["hits"]}
+
+    scoped = client.post("/api/v1/search",
+                         json={"q": "wakeboarding", "under": [videos], "limit": 20}).json()
+    assert scoped["hits"], "the Vienna wakeboard clip is inside videos/"
+    assert all(p.startswith(videos) for p in paths(scoped))
+    assert {(h["path"], h["segment_id"]) for h in scoped["hits"]} <= wide_rows, \
+        "the scope keeps, it never re-scores: the rows come from the unscoped answer"
+
+    photos = client.post("/api/v1/search",
+                         json={"q": "wakeboarding", "ext": ["jpg"], "limit": 20}).json()
+    assert photos["hits"] and all(p.endswith(".jpg") for p in paths(photos))
+
+    # Normalization at the verb edge: dots and case are the engine's spelling.
+    webm = client.post("/api/v1/search",
+                       json={"q": "wakeboarding", "ext": [" .WEBM "], "limit": 20}).json()
+    assert webm["hits"] and all(p.endswith(".webm") for p in paths(webm))
+
+    # Scope + extension compose: the only wakeboard row inside videos/ is the .webm.
+    both = client.post("/api/v1/search",
+                       json={"q": "wakeboarding", "under": [videos], "ext": ["jpg"],
+                             "limit": 20}).json()
+    assert not both["hits"]
+
+    # Empty lists are the field-less verb (the relay law): the same rows as a plain search.
+    plain = client.post("/api/v1/search", json={"q": "wakeboarding", "limit": 20}).json()
+    unscoped = client.post("/api/v1/search",
+                           json={"q": "wakeboarding", "under": [], "ext": [], "limit": 20}).json()
+    assert paths(unscoped) == paths(plain)
+
+    # The 422 battery: pydantic's lax list[str] rules on both fields.
+    bad = client.post("/api/v1/search", json={"q": "x", "under": "/a"})
+    assert bad.status_code == 422
+    item = bad.json()["detail"][0]
+    assert item["type"] == "list_type" and item["loc"] == ["body", "under"]
+    bad = client.post("/api/v1/search", json={"q": "x", "ext": ["mp4", 7]})
+    assert bad.status_code == 422
+    item = bad.json()["detail"][0]
+    assert item["type"] == "string_type" and item["loc"] == ["body", "ext", 1]
+
+
 def test_kind_filter_is_the_engines(client):
     reply = client.post("/api/v1/search",
                         json={"q": "wakeboarding", "kinds": ["video"]}).json()

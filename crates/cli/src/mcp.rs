@@ -194,6 +194,17 @@ fn execute(
             if let Some(kinds) = call.get("kinds").and_then(Value::as_array) {
                 fields.insert("kinds".into(), json!(kinds));
             }
+            // #66 + #206/#132/#188 (2026-11-25): the schema's filter args ride the
+            // daemon verb verbatim — an omitted arg is the field-less verb.
+            if let Some(name_only) = call.get("name_only").and_then(Value::as_bool) {
+                fields.insert("name_only".into(), json!(name_only));
+            }
+            if let Some(under) = call.get("under").and_then(Value::as_array) {
+                fields.insert("under".into(), json!(under));
+            }
+            if let Some(ext) = call.get("ext").and_then(Value::as_array) {
+                fields.insert("ext".into(), json!(ext));
+            }
             let reply = daemon.send(fields).map_err(|e| (mcp::INTERNAL_ERROR, e))?;
             Ok(CallOutcome {
                 is_error: refused(&reply),
