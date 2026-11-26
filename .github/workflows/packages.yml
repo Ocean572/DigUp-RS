@@ -438,6 +438,12 @@ jobs:
       - name: The feeds onto main
         env:
           GH_TOKEN: ${{ github.token }}
+          # set -eu with $TAG in the commit message: the step needs TAG in ITS env
+          # (measured 2026-11-26, Packages run 45829376914 — the feeds script wrote all
+          # six feeds, then this step died 'line 4: TAG: unbound variable'; the step
+          # never ran green in the fork before: forks copy no signing secrets, so the
+          # feeds job never got past its dependencies).
+          TAG: ${{ inputs.ref }}
         run: |
           set -eu
           git add updates
