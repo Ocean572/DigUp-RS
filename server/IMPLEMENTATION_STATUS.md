@@ -4961,3 +4961,38 @@ digup-server-nextcloud-* pilot stack :8791 API / :8090 web,         — media-re
 digup-server:local      runtime image (payload+API+UI, tini, non-root — Stage 7 + 13,
                         + nvidia/cuda runtime libs for the CUDA flavor — Stage 9)
 ```
+
+## 2026-11-26 — v0.9.0 released: the fork's first signed build + live update feeds
+
+Tag `v0.9.0` @ `2a8c4a9` (annotated, peel verified). Release page:
+https://github.com/Ocean572/DigUp-RS/releases/tag/v0.9.0 — 12 assets:
+payload tiles `digup-0.9.0-{linux-x86_64,linux-aarch64,macos-universal,win-x64}`
+(attached by the Rust release chain: gates green, contract suite `0 failed, 0 skipped`)
++ desktop trio `DigUp_0.9.0_x64-setup.exe` / `DigUp_0.9.0_amd64.AppImage` /
+`DigUp_0.9.0_universal.app.tar.gz` + their `.sig` files + `deb`/`dmg` extras
+(Packages run 45840762027: 7/7 jobs green — all builds SIGNED with the fork's
+own updater key `A81B9C25F93E622F`; every `.sig` verified against the pubkey in
+`shell/src-tauri/tauri.conf.json` with the updater's own minisign verifier, and
+the linux-check jobs independently verified them with `minisign -V`).
+
+Update feeds: the `update feeds: v0.9.0` commit (`17f9a74`) on main;
+`updates/{windows-x86_64,linux-x86_64,macos-aarch64,macos-x86_64,macos-universal,latest}.json`
+all answer 200 with version 0.9.0 and every named asset URL answers 200.
+This is the fork's first live update chain — feeds on main were stale 0.7.0-beta.3 since.
+
+Signing-key law (key rotation `c9aea7e`): installs built BEFORE `c9aea7e` carry the old
+upstream pubkey and update by hand ONCE from the release page; installs from the v0.9.0
+builds self-update forever from these feeds. The private key + password live only on the
+release box + the repo's Actions secrets — losing either ends self-updates.
+
+Suite truth on the tag commit: contract suite green BOTH shapes measured — Server runs
+answered `1 failed, 174 passed` twice, the Rust-release suite answered `0 failed, 0 skipped`;
+`test_security.py` admin_only POST /index is timing-racy (uvicorn death lands inside/outside
+the request window) — a real flake, open with the feature session, disclosed in the release
+notes. The suite-exit PIPESTATUS fixes (`4c34a08`, `da20195`) make a red suite report red.
+
+CI fixes proven this release: feeds flat-scan (`2a8c4a9`: upload-artifact v7 preserves paths
+for multi-line globs — flatten before the flat scan), feeds-onto-main `TAG` env under
+`set -eu` (`92402e8`), macOS sign at repo root with env key no-flags + `--app-version`
+binding (the conf's `requireSignedVersion` is true; a versionless sig is rejected by the
+updater) + hdiutil Resource-busy retry (`031b355`, `0b16515`).
