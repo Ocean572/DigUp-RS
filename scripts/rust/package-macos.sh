@@ -186,9 +186,21 @@ if [ "${1:-}" = "--shell" ]; then
   [ "$shellarch" = arm64 ] && shellarch=aarch64
   tarball=shell/src-tauri/target/release/bundle/macos/DigUp_${version}_${shellarch}.app.tar.gz
   tar -czf "$tarball" -C "$(dirname "$app")" "$(basename "$app")"
+  # The signer runs at the REPO ROOT (v0.9.0 macos postmortem, Packages run
+  # 45760522472): $tarball is a repo-root-relative path, and the old
+  # `(cd shell/src-tauri && …)` resolved it to shell/src-tauri/shell/src-tauri/…
+  # → "failed to open data file … .app.tar.gz: No such file". v0.8.1 had no
+  # signing key, so this path was never exercised.
+  # The key + password ride the ENVIRONMENT (TAURI_SIGNING_PRIVATE_KEY{,_PASSWORD},
+  # what packages.yml exports at job level and what the bundler signs Windows/Linux
+  # with): `@tauri-apps/cli@2.12.2 signer sign -k` accepts NEITHER form measured
+  # 2026-11-26 — -k <content> answers "incorrect updater private key password:
+  # Missing comment in secret key", -k <file> answers "failed to decode base64
+  # secret key: Invalid symbol". A no-flag `sign` reads both env vars and the
+  # .sig lands beside the tarball (proof: sign + verify with minisign-verify,
+  # the updater's own verifier, against plugins.updater.pubkey).
   if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-    (cd shell/src-tauri && "${tauri[@]}" signer sign "$tarball" \
-      -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+    "${tauri[@]}" signer sign "$tarball"
   fi
   # The .dmg a person drags to Applications: the app plus the Applications symlink.
   staging=$(mktemp -d)
