@@ -2,6 +2,52 @@
 
 One document, kept current (docs/implementation/README.md §10). Newest first.
 
+## 2026-11-25 — GitHub issues #1/#2/#3 (infectiousstupidity): scan-failure keeps rows, overlapping roots obey the pick, dataset drop scoped by kind (`fix/issue-2-scan-failures` → `fix/issue-3-explicit-project-roots` → `fix/issue-1-dataset-intent`, stacked, local)
+
+Three reproducible issues, reproduced on this box against the v0.9.0 tip binary, fixed on
+three stacked branches (each one commit + pins). All three behaviors are inherited Swift
+design (verified byte-for-byte on `swift-reference`: the silent `errorHandler`, the
+folder-keyed dataset sweep, the global project filter) — the ledger carries the deliberate
+parity divergence at these gate-uncovered edges (`docs/RUST_PORT_AUDIT.md`).
+
+- **#2 — data loss** (`11b4fba`): an unreadable subfolder (permissions, a remount blip)
+  made the next sync answer `1 removed` while the file sat on disk; on access return the
+  row re-added and the embedding was paid a second time. The crawl now records the paths
+  its walk failed on (`CrawlReport::scan_failures`, internal — the JSON-lines replies keep
+  their pinned field set); the sync's vanished-root guard keeps rows under them; a
+  successful scan that lacks the file is still a delete. Measured after: sealed subfolder
+  `0 new · 0 changed · 0 moved · 0 removed · 1 unchanged`; restore `2 unchanged` (no
+  re-add, no second bill); real delete `1 removed`. Pins: the unreadable-folder crawl test
+  + the new model-free 5-transition `crates/runtime/tests/sync_failures.rs`.
+- **#3 — intent** (`1819ec0`): parent+project roots excluded the project's media as
+  "inside a code project" in either order while the project alone indexed them, against
+  the Swift rule "a folder chosen on purpose is read whole, whatever markers it holds".
+  Reports now ride the deepest chosen root; the project rule fires only on markers
+  strictly inside the containing root; overlapping walks report each path once (seen
+  guards; the counts no longer double-count nested walks). Measured: parent+proj →
+  `sync: 2 new`, zero exclusions; parent-only keeps excluding — the chosen-folder pin and
+  the ⑨ crawl+sync parity line replay green unchanged.
+- **#1 — datasets** (`834f510`): 300 machine-named images made the folder a dataset for
+  the whole folder — the song and video parked beside it died with them (measured 302
+  left out; adding the 300th took the 299 rows). The drop is scoped to the kind groups
+  that triggered (wire shape `datasets` folder→count unchanged, default unchanged); the
+  desktop keeps chosen nested picks as roots (`folders()`, the engine dedups walks per
+  path); Settings → General gains "Index dataset folders" (`includeDatasets`, rides
+  `--include-datasets` to the index helper + estimates — NOT in the fingerprint, so
+  toggling never empties an index); the server gains `DIGUP_SERVER_INCLUDE_DATASETS`
+  (`EngineConfig` field, index_argv + estimate_argv; `.env.example`). Measured:
+  300+2 tree → `dataset:300`, `{audio:1 video:1}` kept; toggle → 302 files 0 skipped;
+  cliff → `299 removed · 2 unchanged` (stragglers stand). Pins: kind-scope crawl test
+  (incl. parent+collection merged: 302 candidates each once, no dataset), the rules
+  kinds, `shell/tests/selection.test.cjs` (JS 21/21).
+
+Gates per branch (ai-ubuntu-computer, `DIGUP_DEVICE=cpu DIGUP_THREADS=8`, Vendor + pinned
+models on): `cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings`
++ `cargo test --workspace` green; core suites + ⑨ parity pin green each round; shell JS
+21/21; shell `cargo check` green. Desktop app not rebuilt this round (the settings/UI
+change rides the shell — the app-chain check is the user's next step, per the faces UI
+law).
+
 ## 2026-11-25 — v0.9.0: the People tab ships; the paint chase closes with the rendering config; the round-eight settings fixes (main `98c2d89`)
 
 **What ships (merged `feature/native-faces` 48 commits + `feature/round-eight`, both
