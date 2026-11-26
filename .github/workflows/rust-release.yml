@@ -199,6 +199,17 @@ jobs:
             -v "$RUNNER_TEMP/models:/models:ro" \
             -v "$RUNNER_TEMP/index:/index" \
             digup-server-test-rust:ci /srv/server/.venv/bin/pytest -rs 2>&1 | tee "$RUNNER_TEMP/suite.log"
+          # pytest's own exit code rides PIPESTATUS — `| tee` answers zero and the
+          # greps below read the LOG, so failures cannot fail this step without
+          # this line (server.yml law 4c34a08: run #68 logged 3 failed on a job
+          # that reported success; the v0.9.0 release suite ran under this same
+          # mask — a red suite now exits red HERE too, with the number named).
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pytest exited $rc — a red suite is red on the release chain"
+            grep -E '^(FAILED|[0-9]+ failed)' "$RUNNER_TEMP/suite.log" | head -10
+            exit "$rc"
+          fi
           if grep -qE '^(SKIPPED|tests/.*SKIPPED)' "$RUNNER_TEMP/suite.log"; then
             echo "::error::a test SKIPPED in CI — the suite self-skipping is a green-by-construction lie"
             grep -E 'SKIPPED' "$RUNNER_TEMP/suite.log" | head -20
