@@ -332,3 +332,27 @@ identical (the file is left out on BOTH sides); the code-store fixture always ca
 kind-histogram is untouched. `index-main-events.jsonl`'s main-crawl `leftOut` histogram is
 updated to the new reason — the pin carries the disclosed divergence, the issues #1–#3
 pattern. `crawl_line_matches` + `cross_engine_index_build` measure green with it.
+
+## GitHub issue #7(a) — incremental filesystem synchronization (2026-11-26, branch `feature/issue-7a-incremental-sync`, stacked on the #7b/#8 branch)
+
+The issue #7 feature ask, built on user direction: the watcher passes each burst's FOLDERS
+to the index helper (`sync ["dir", …]` on stdin — an additive verb; the plain `sync` line
+and every pinned event shape are byte-for-byte the engine's original), the crawl walks the
+scope as chosen folders (`crawl(dirs)` — core `crawler.rs` unchanged), and the sync prunes
+ONLY the rows under it. Full scans stay full for startup, manual rescans, settings changes,
+watcher overflow, and bursts wider than 200 dirs — the repair path by construction.
+
+- **Keeps, scoped by level of the claim** (pinned): a vanished CHOSEN ROOT (ejected drive)
+  keeps its rows at every sync — the root law outranks the scope; a scan failure at a path
+  that EXISTS (the #2 sealed-folder law) keeps rows; a scan failure at a path that is GONE
+  is the deleted folder the events named — its rows prune.
+- Dataset detection fires for every folder the scope walks whole; a folder whose
+  line-crossing files sit outside the scope defers its verdict to the next full sync
+  (documented at the `sync_scoped` seam). Moves/deletes ride the scope because the watcher
+  fires both sides of a move (the move re-paths the row — no second embedding bill, pinned).
+- Swift parity: scoped sync has NO Swift-era counterpart — a user-directed feature
+  extension (`Indexer.swift`/`IndexService.swift` know only the full crawl), the way the
+  port itself and issues #1–#3 were user-directed overrides; the engine relay and the
+  server are untouched.
+- Pinned: `crates/runtime/tests/sync_scoped.rs` (eight measured transitions, model-free),
+  the services `verb_tests`, the shell watcher's collapse test.

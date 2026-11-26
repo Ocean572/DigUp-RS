@@ -1084,12 +1084,29 @@ fn watch_folders(app: &AppHandle) {
         // With Duration::MAX a stream that never goes quiet (a sync client writing files,
         // a long recording, a torrent) keeps resetting the 2-second timer and sync is
         // delayed indefinitely; a burst now runs sync at most ten minutes after it began.
-        FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::from_secs(600), move || run_index(&app))
+        // Issue #7a: the burst hands the helper its folders — the helper reconciles the
+        // changed neighborhood, not the whole tree; overflow and wide bursts stay full.
+        FolderWatcher::start(
+            &folders,
+            skipped,
+            index.clone(),
+            Duration::from_secs(2),
+            Duration::from_secs(600),
+            move |dirs: &[PathBuf], full: bool| run_index_scoped(&app, dirs, full),
+        )
     });
     *shell.code_watcher.lock().unwrap() = (!code_folders.is_empty()).then(|| {
         let app = app.clone();
-        FolderWatcher::start(&code_folders, code_skipped, index, Duration::from_secs(60), Duration::from_secs(600),
-                             move || sync_code(&app))
+        FolderWatcher::start(
+            &code_folders,
+            code_skipped,
+            index,
+            Duration::from_secs(60),
+            Duration::from_secs(600),
+            // The code index keeps its full-folder sync: issue #7a scopes
+            // only the media watcher, whose walks are the expensive ones.
+            move |_: &[PathBuf], _: bool| sync_code(&app),
+        )
     });
     if !folders.is_empty() || !code_folders.is_empty() || shell.prune.load(Ordering::SeqCst) {
         run_index(app);
@@ -1123,6 +1140,30 @@ fn run_index(app: &AppHandle) {
         launch.env.push(("DIGUP_STOPPED_FILE".to_string(), file));
     }
     if let Err(error) = shell.index.run(&launch) {
+        set_status(app, &format!("Indexing couldn't start: {error}"));
+    }
+}
+
+/// Issue #7a: a watcher burst — the running index helper is asked to reconcile only the
+/// burst's folders (`sync ["dir", …]` on stdin; bare `sync` when the burst is the whole
+/// job: overflow, dropped events, a burst wider than scoping is worth). No live helper,
+/// or its folders/settings differ: a new one starts, and its startup pass is the full
+/// sync — always safe, the repair path by construction.
+fn run_index_scoped(app: &AppHandle, dirs: &[PathBuf], full: bool) {
+    let shell = app.state::<Arc<Shell>>();
+    if !may_index(&shell) {
+        return;
+    }
+    let mut launch = shell.index_launch();
+    if let Some(file) = shell.crash_file.lock().unwrap().take() {
+        launch.env.push(("DIGUP_STOPPED_FILE".to_string(), file));
+    }
+    let result = if full || dirs.is_empty() {
+        shell.index.run(&launch)
+    } else {
+        shell.index.run_scoped(&launch, dirs)
+    };
+    if let Err(error) = result {
         set_status(app, &format!("Indexing couldn't start: {error}"));
     }
 }

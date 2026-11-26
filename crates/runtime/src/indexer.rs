@@ -275,12 +275,42 @@ impl Indexer {
         roots: &[PathBuf],
         progress: &mut dyn FnMut(&CrawlProgress),
     ) -> digup_core::db::Result<SyncSummary> {
-        let crawl = digup_core::crawler::crawl(roots, &self.options, progress);
+        self.sync_scoped(roots, roots, progress)
+    }
+
+    /// Issue #7a: reconcile only the `walk` folders (the watcher's burst of changed paths),
+    /// treating them as the chosen folders they live under: the rules apply as in a full
+    /// crawl, removals prune ONLY the rows under `walk`, and rows outside the scope stand
+    /// untouched — they belong to a full sync (startup, manual rescans, watcher overflow,
+    /// settings changes, all unchanged paths). Dataset detection fires for every folder the
+    /// scope walks whole (a folder's own files are fully visible inside it); a folder whose
+    /// line-crossing files sit OUTSIDE the scope defers its verdict to the next full sync.
+    ///
+    /// The issue #2 keeps are scoped to the level of the claim:
+    /// - a chosen root that vanished (an ejected drive, a gone mount) keeps rows under it
+    ///   exactly as the full sync does — those files are elsewhere, not deleted;
+    /// - a scan failure at a path that EXISTS (a sealed folder, an unreachable mount below a
+    ///   live root) keeps rows, same as the full sync: "not seen" is the walk's blindness;
+    /// - a scan failure at a path that is GONE is a scope fired from remove events for a
+    ///   folder that was deleted: its rows prune. The ejected-drive case is caught by the
+    ///   root rule above, before this one can speak.
+    pub fn sync_scoped(
+        &self,
+        roots: &[PathBuf],
+        walk: &[PathBuf],
+        progress: &mut dyn FnMut(&CrawlProgress),
+    ) -> digup_core::db::Result<SyncSummary> {
+        let crawl = digup_core::crawler::crawl(walk, &self.options, progress);
         let root_paths: Vec<String> = roots
             .iter()
             .map(|root| paths::standardize(&root.to_string_lossy()))
             .collect();
-        let existing = self.store.files_under(&root_paths)?;
+        let walk_paths: Vec<String> = walk
+            .iter()
+            .map(|root| paths::standardize(&root.to_string_lossy()))
+            .collect();
+        let full = walk_paths == root_paths;
+        let existing = self.store.files_under(&walk_paths)?;
         let mut by_path: HashMap<String, FileRecord> = HashMap::new();
         let mut by_inode: HashMap<String, FileRecord> = HashMap::new();
         for file in &existing {
@@ -326,12 +356,22 @@ impl Indexer {
             // The same rule for a folder the walk could not read at all (issue #2): its files
             // exist, they were only unlistable — "not seen" is the walk's failure, not a
             // delete. Real deletes still prune: a SUCCESSFUL scan that lacks the file saw the
-            // folder's whole truth, and no failure is recorded for it.
+            // folder's whole truth, and no failure is recorded for it. Issue #7a: in a scoped
+            // sync a failure at a path that is GONE is the deleted folder the events named
+            // (the scope is fired by filesystem events, not by a drive walk), so only
+            // failures at paths that EXIST keep rows; vanished chosen roots keep theirs at
+            // any sync — an ejected drive's files are elsewhere, not deleted.
             let keep_under: Vec<String> = root_paths
                 .iter()
                 .filter(|path| !Path::new(path).exists())
                 .map(|path| paths::bound(path))
-                .chain(crawl.scan_failures.iter().map(|path| paths::bound(path)))
+                .chain(
+                    crawl
+                        .scan_failures
+                        .iter()
+                        .filter(|path| full || Path::new(path).exists())
+                        .map(|path| paths::bound(path)),
+                )
                 .collect();
             for row in &existing {
                 if !seen.contains(&row.path)

@@ -308,6 +308,28 @@ impl IndexService {
         Ok(())
     }
 
+    /// Issue #7a: a watcher burst on the RUNNING helper: reconcile only these folders
+    /// (`sync ["dir", …]` on stdin, the scoped verb). No live helper, or its folders
+    /// differ: `run` starts one, whose startup pass is the full sync.
+    pub fn run_scoped(&self, launch: &Launch, dirs: &[PathBuf]) -> Result<(), String> {
+        {
+            let mut running = self.running.lock().unwrap();
+            if let Some(indexing) = running.as_mut() {
+                if matches!(indexing.child.try_wait(), Ok(None)) && indexing.args == launch.args {
+                    indexing.owed = true;
+                    let verb = format!(
+                        "sync {}",
+                        serde_json::to_string(&dirs.to_vec()).map_err(|e| e.to_string())?
+                    );
+                    return writeln!(indexing.stdin, "{verb}")
+                        .and_then(|_| indexing.stdin.flush())
+                        .map_err(|e| e.to_string());
+                }
+            }
+        }
+        self.run(launch)
+    }
+
     /// Code search's folders changed: the running helper syncs the code index (`run` would sync the main one), or one
     /// starts (it syncs both).
     pub fn sync_code(&self, launch: &Launch) -> Result<(), String> {

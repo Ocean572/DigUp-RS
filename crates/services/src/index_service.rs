@@ -2,7 +2,10 @@
 //! indexing helper, one process per stretch of work.
 //!
 //! Protocol: one command per line on stdin, one JSON event per line on stdout.
-//!   stdin:  sync | sync code | stop | backfill on | backfill off      (EOF = stop)
+//!   stdin:  sync | sync ["dir",…] | sync code | stop | backfill on | backfill off      (EOF = stop)
+//!           The scoped `sync` (issue #7a) reconciles only the listed folders; a plain
+//!           `sync` is the whole set of folders, byte-for-byte as ever, and outranks a
+//!           pending scope.
 //!   stdout: the events of `IndexService.swift` — missing, pruned, rescan,
 //!           stopped, scanning, sync, file, rest, summary, waiting, idle,
 //!           model, reindex, error (fatal), exit; events about the code index
@@ -92,6 +95,9 @@ pub struct Flags {
     stop_requested: AtomicBool,
     backfill_allowed: AtomicBool,
     yield_at: AtomicI64,
+    /// Issue #7a: the folders a scoped `sync [...]` asked to reconcile; empty means the
+    /// whole set. A plain `sync` clears it — a full sync outranks a pending scope.
+    sync_dirs: Mutex<Vec<String>>,
 }
 
 fn epoch_ms() -> i64 {
@@ -102,30 +108,48 @@ fn epoch_ms() -> i64 {
 }
 
 impl Flags {
-    fn new(backfill: bool) -> Self {
+    /// The flags' start shape: a fresh helper asks for the whole set of folders first
+    /// (`syncRequested = true` — the first thing it does) with backfill as configured.
+    /// The flags are public (issue #7a): the verb suite (`services/tests/verbs.rs`) pins
+    /// the stdin seam.
+    pub fn new(backfill: bool) -> Self {
         Self {
             sync_requested: AtomicBool::new(true), // the first thing it does
             code_sync_requested: AtomicBool::new(true),
             stop_requested: AtomicBool::new(false),
             backfill_allowed: AtomicBool::new(backfill),
             yield_at: AtomicI64::new(i64::MIN),
+            sync_dirs: Mutex::new(Vec::new()),
         }
     }
 
     /// The engine's `{ defer { syncRequested = false }; return syncRequested }`.
-    fn take_sync(&self) -> bool {
-        self.sync_requested.swap(false, Ordering::SeqCst)
+    /// Issue #7a: a taken request answers its scope — the folders named by `sync [...]`
+    /// lines that arrived since the last sync (merged, deduplicated), or an empty list for
+    /// the whole set of folders.
+    pub fn take_sync(&self) -> Option<Vec<PathBuf>> {
+        if !self.sync_requested.swap(false, Ordering::SeqCst) {
+            return None;
+        }
+        Some(
+            self.sync_dirs
+                .lock()
+                .unwrap()
+                .drain(..)
+                .map(PathBuf::from)
+                .collect(),
+        )
     }
 
-    fn take_code_sync(&self) -> bool {
+    pub fn take_code_sync(&self) -> bool {
         self.code_sync_requested.swap(false, Ordering::SeqCst)
     }
 
-    fn stop(&self) -> bool {
+    pub fn stop(&self) -> bool {
         self.stop_requested.load(Ordering::SeqCst)
     }
 
-    fn backfill(&self) -> bool {
+    pub fn backfill(&self) -> bool {
         self.backfill_allowed.load(Ordering::SeqCst)
     }
 
@@ -287,22 +311,50 @@ fn read_commands(shared: &Arc<Shared>) {
         let stdin = std::io::stdin();
         for line in stdin.lines() {
             let Ok(line) = line else { break };
-            match line.trim() {
-                "sync" => shared.flags.sync_requested.store(true, Ordering::SeqCst),
-                "sync code" => shared
-                    .flags
-                    .code_sync_requested
-                    .store(true, Ordering::SeqCst),
-                "stop" => shared.flags.stop_requested.store(true, Ordering::SeqCst),
-                "backfill on" => shared.flags.backfill_allowed.store(true, Ordering::SeqCst),
-                "backfill off" => shared.flags.backfill_allowed.store(false, Ordering::SeqCst),
-                _ => {}
-            }
+            apply_verb(&shared.flags, line.trim());
             shared.wake_signal();
         }
         shared.flags.stop_requested.store(true, Ordering::SeqCst); // the app went away
         shared.wake_signal();
     });
+}
+
+/// Issue #7a: one stdin line, applied to the flags. The verbs are the engine's pinned set;
+/// the scoped `sync ["<dir>", …]` is the shell watcher's addition (dirs merged,
+/// deduplicated, for the next sync — a line that is not a JSON array of strings is passed
+/// over, as every unknown verb is). Public: the verb suite (`services/tests/verbs.rs`)
+/// pins this exact seam.
+pub fn apply_verb(flags: &Flags, line: &str) {
+    match line {
+        "sync" => {
+            // Issue #7a: the whole set of folders outranks a pending scope.
+            flags.sync_dirs.lock().unwrap().clear();
+            flags.sync_requested.store(true, Ordering::SeqCst);
+        }
+        "sync code" => flags.code_sync_requested.store(true, Ordering::SeqCst),
+        "stop" => flags.stop_requested.store(true, Ordering::SeqCst),
+        "backfill on" => flags.backfill_allowed.store(true, Ordering::SeqCst),
+        "backfill off" => flags.backfill_allowed.store(false, Ordering::SeqCst),
+        _ => {
+            if let Some(rest) = line.strip_prefix("sync ") {
+                if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(rest) {
+                    let dirs: Vec<String> = items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect();
+                    if !dirs.is_empty() {
+                        let mut pending = flags.sync_dirs.lock().unwrap();
+                        for dir in dirs {
+                            if !pending.contains(&dir) {
+                                pending.push(dir);
+                            }
+                        }
+                        flags.sync_requested.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Shared {
@@ -347,8 +399,15 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
     let mut state = shared.lock.lock().expect("the serve lock");
     let mut code_counted = state.code.is_none();
     loop {
-        if flags.take_sync() {
-            sync_part(&mut state, flags, false, &mut new_files, new_files_limit);
+        if let Some(scope) = flags.take_sync() {
+            sync_part(
+                &mut state,
+                flags,
+                false,
+                &mut new_files,
+                new_files_limit,
+                &scope,
+            );
         }
         // The code folders are crawled with the first sync, so their counts
         // show from the start; their files are read once the main index has
@@ -356,7 +415,9 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
         if !code_counted && state.code.is_some() {
             code_counted = true;
             if flags.take_code_sync() {
-                sync_part(&mut state, flags, true, &mut new_code, new_files_limit);
+                // The code index keeps its full-folder sync: the code watcher is
+                // the cheap walk, and issue #7a scopes only the media one.
+                sync_part(&mut state, flags, true, &mut new_code, new_files_limit, &[]);
             }
         }
         if flags.stop() {
@@ -389,7 +450,7 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
         // what it just queued at once, the rest under the backfill's rules.
         if state.code.is_some() && (pending_count(&state, false) == 0 || !flags.backfill()) {
             if flags.take_code_sync() {
-                sync_part(&mut state, flags, true, &mut new_code, new_files_limit);
+                sync_part(&mut state, flags, true, &mut new_code, new_files_limit, &[]);
             }
             if !new_code.is_empty() {
                 if !run_part(&mut state, flags, true, Some(&new_code)) {
@@ -648,12 +709,16 @@ fn available_roots(state: &mut Serve, code: bool) -> Result<Vec<PathBuf>, String
 
 /// `sync(_ part:, into:)`: crawl the part's available folders, queue what
 /// changed, report. A sync's failure is an event, not the run's end.
+/// Issue #7a: `scope` is the watcher's folders when a scoped `sync [...]` asked
+/// for them — the crawl walks those, and removals prune only the rows under them;
+/// an empty scope is every folder, byte-for-byte the engine's original behavior.
 fn sync_part(
     state: &mut Serve,
     flags: &Flags,
     code: bool,
     new_files: &mut HashSet<i64>,
     new_files_limit: i64,
+    scope: &[PathBuf],
 ) {
     let started = SystemTime::now();
     let instant = Instant::now();
@@ -670,9 +735,14 @@ fn sync_part(
                 }
                 event(Value::Object(fields));
             };
+            let walk: Vec<PathBuf> = if scope.is_empty() {
+                roots.clone()
+            } else {
+                scope.to_vec()
+            };
             part(state, code)
                 .indexer
-                .sync(&roots, &mut progress)
+                .sync_scoped(&roots, &walk, &mut progress)
                 .map_err(|e| e.to_string())
         }
         Err(error) => Err(error),
