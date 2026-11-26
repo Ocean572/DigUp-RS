@@ -331,25 +331,28 @@ class DigupApp extends LitElement {
         <section id="no-results" role="status">
           <h2>No results found</h2>
           <p id="no-results-why">${this.#noResultsWhy(r)}</p>
-          <p class="hint">Widening the kind filters, or turning off <code>code</code>, asks the
-             engine to look in more of your files.</p>
+          <p class="hint">The engine publishes <strong>only strong matches</strong> — rows that
+             stand out past its 2.0σ gate — so a small index answers with few. Widening the kind
+             filters, or turning off <code>code</code>, asks the engine to look in more of your files.</p>
         </section>
 
         <section id="results">
           <digup-results .results=${r}
                          @digup:select=${(e) => this._ctl?.search?.select(e.detail.mediaId)}
                          @digup:open=${(e) => this.#openHit(this._s().results?.hitsById?.get(e.detail.mediaId))}
-                         @digup:toggle-weaker=${() => this._ctl?.search?.toggleWeaker()}>
+                         @digup:toggle-weaker=${() => this._ctl?.search?.toggleWeaker()}
+                         @digup:find-like=${(e) => this._ctl?.search?.findLike(e.detail.mediaId)}>
           </digup-results>
           <digup-preview id="preview" .hit=${r.selection === WEAKER ? WEAKER : hit}
-                         .weakerCount=${r.weaker.length} .showWeaker=${r.showWeaker}></digup-preview>
+                         .weakerCount=${r.weaker.length} .showWeaker=${r.showWeaker}
+                         @digup:find-like=${(e) => this._ctl?.search?.findLike(e.detail.mediaId)}></digup-preview>
         </section>
       </main>
 
       <footer id="footer">
         <div class="foot-in">
           <digup-footer .results=${r} .indexing=${indexing} .error=${s.error}></digup-footer>
-          <span id="keys">↑↓ pick · ↩ open · Space preview · Esc clear · type to search</span>
+          <span id="keys">↑↓ pick · ↩ open · Space preview · F find-like · Esc clear · type to search</span>
         </div>
       </footer>
 
@@ -358,6 +361,12 @@ class DigupApp extends LitElement {
   }
 
   #noResultsWhy(r) {
+    // `find like this` answered empty (#162/#121): the reference picture has no
+    // look-alike past the gate — the engine's own answer, relayed, warning quoted.
+    if (r.phase === "findLike" && r.lastReply) {
+      return "the engine found no pictures that stand out next to this one (it shows only "
+           + "strong matches) " + (r.lastReply.warning ? `(${r.lastReply.warning})` : "");
+    }
     if (!r.lastReply) return "Try describing what you'd see or hear in it — a scene, an object, "
                            + "a moment, words you remember from it.";
     const reply = r.lastReply;
@@ -468,6 +477,20 @@ class DigupApp extends LitElement {
         if (first.tagName === "DIGUP-SEARCH" || inField) break;   // the field has its own handler
         event.preventDefault();
         this._ctl?.search?.move(event.key === "ArrowDown" ? 1 : -1);
+        break;
+      case "f":
+      case "F":
+        // Find like this (#162/#121): the selected picture's hotkey — the footer
+        // names it. Never while a field has focus (typing an f is typing), and
+        // only for pictures: the engine has no picture vector for a document row.
+        if (inField) break;
+        {
+          const hit = this._ctl?.search?.selectedHit();
+          if (hit && ["image", "screenshot"].includes(hit.kind) && hit.media_id) {
+            event.preventDefault();
+            this._ctl.search.findLike(hit.media_id);
+          }
+        }
         break;
       case " ":
         // Native button/link activation happens on keyup: preventing default here (the

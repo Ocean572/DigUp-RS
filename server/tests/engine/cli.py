@@ -40,6 +40,15 @@ def run(argv: list[str], env: dict[str, str], *, timeout: float = 300.0) -> str:
     return proc.stdout
 
 
+def find(config: EngineConfig, reference: str, flags: tuple[str, ...] = (),
+         *, timeout: float = 600.0) -> list[dict]:
+    """`digup find <photo> --json` (#162/#121): the rows array the engine prints.
+    One-shot: the full-shape media encoder loads inside the process, embeds the
+    reference, is dropped before the answer prints."""
+    out = run(config.find_argv(str(reference), tuple(flags)), config.env(), timeout=timeout)
+    return json.loads(out)
+
+
 def status(config: EngineConfig, *, timeout: float = 60.0) -> dict:
     """`digup status` parsed: index path, vectors, per-kind counts, fingerprint, build tag, size."""
     out = run(config.status_argv(), config.env(), timeout=timeout)

@@ -172,6 +172,36 @@ async fn execute(
             .await;
             Ok(relay(response).await)
         }
+        "find_like" => {
+            // #162/#121: the tool IS the REST route (the `people` law) — the
+            // clicked hit rides as its minted handle, the route resolves it
+            // through the HitCache, answers the media routes' 404 for a dead
+            // one, and relays the engine's rows verbatim. Target scoping
+            // (media_scope_allows + in_scope) lives in the handler.
+            let Some(media_id) = args.get("media_id").and_then(Value::as_str) else {
+                return Err((mcp::INVALID_PARAMS, "find_like needs media_id".to_string()));
+            };
+            let mut body = json!({
+                "media_id": media_id,
+                "limit": args.get("limit").and_then(Value::as_i64).unwrap_or(10).clamp(1, 100),
+            });
+            if let Some(kinds) = args.get("kinds").and_then(Value::as_array) {
+                body["kinds"] = json!(kinds);
+            }
+            if let Some(under) = args.get("under").and_then(Value::as_array) {
+                body["under"] = json!(under);
+            }
+            if let Some(ext) = args.get("ext").and_then(Value::as_array) {
+                body["ext"] = json!(ext);
+            }
+            let response = crate::find_like(
+                State(app),
+                Extension(ctx.clone()),
+                Bytes::from(serde_json::to_vec(&body).expect("built json")),
+            )
+            .await;
+            Ok(relay(response).await)
+        }
         "status" => {
             Ok(relay(crate::status_endpoint(State(app), Extension(ctx.clone())).await).await)
         }

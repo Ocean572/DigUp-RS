@@ -559,6 +559,34 @@ def test_an_open_principal_never_previews_an_applications_files(tmp_path, scratc
         assert c.get(f"/api/v1/media/{media_id}/text").status_code == 403
 
 
+def test_find_like_scopes_to_the_handles_own_target(tmp_path, scratch):
+    """#162/#121 (2026-11-25): `/find-like` is a media-handle route, so the target law
+    rides it exactly like preview/file (media_scope_allows in the handler): an application's
+    key finds-like its OWN rows, and the key-less principal — whose reads are open on the
+    MAIN index — is refused on an application's handles. The relay never leaks across."""
+    config = tmp_path / "server-config"
+    main_media = tmp_path / "main-media"
+    main_media.mkdir()
+    env = {"DIGUP_SERVER_APP_TARGETS": f"nc={scratch}:{tmp_path / 'app-index'}"}
+    with live_server(_cfg(tmp_path / "main-index", (main_media,)),
+                     config_dir=str(config), env_extra=env) as c:
+        keys = read_tokens(config)
+        nc = {"Authorization": f"Bearer {keys['readers']['app:nc']}"}
+        assert c.post("/api/v1/index", json={}, headers=nc).status_code == 202
+        job_id = c.get("/api/v1/jobs", headers=nc).json()["jobs"][-1]["id"]
+        assert wait_final(c, job_id, nc) == "done"
+        hits = c.post("/api/v1/search", json={"q": "campfire stories", "limit": 5},
+                      headers=nc).json()["hits"]
+        media_id = next(h["media_id"] for h in hits if h["kind"] == "image")
+
+        own = c.post("/api/v1/find-like", json={"media_id": media_id, "limit": 5}, headers=nc)
+        assert own.status_code == 200, own.text
+        assert own.json()["found_from"] == {"media_id": media_id, "kind": "image"}
+
+        refused = c.post("/api/v1/find-like", json={"media_id": media_id, "limit": 5})
+        assert refused.status_code == 403, refused.text
+
+
 # ── stage 14: the standalone mints its key; applications register at runtime ──────────
 
 def test_the_standalone_mints_its_api_key_when_asked(tmp_path):

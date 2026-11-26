@@ -97,4 +97,40 @@ describe("digup-results", () => {
     expect(el.shadowRoot.getElementById("engine-says").textContent)
       .toContain("the engine found no good matches for this and refused to guess — that is its answer");
   });
+
+  // Find like this (#162/#121, 2026-11-25): picture rows carry the small ⌕; the
+  // engine has no vector for docs/audio/video, so those rows carry no dead button.
+  it("picture rows carry the ⌕ (click asks); video rows do not", async () => {
+    el = await mount(fixture({ showWeaker: true }));
+    const rows = [...el.shadowRoot.querySelectorAll("li.row")];
+    const image = rows.find((r) => r.textContent.includes("a.jpg"));
+    const video = rows.find((r) => r.textContent.includes("c.mp4"));
+    const find = image.querySelector("button.row-find");
+    expect(find).not.toBeNull();
+    expect(find.getAttribute("tabindex")).toBe("-1");   // roving tabindex: only the row takes 0
+    expect(video.querySelector("button.row-find")).toBeNull();
+    const p = onceEvent(document, "digup:find-like");
+    find.click();
+    expect((await p).detail.mediaId).toBe("a");
+  });
+
+  it("Enter on the find button stays native — the row's open handler skips it", async () => {
+    el = await mount();
+    const find = el.shadowRoot.querySelector("li.row button.row-find");
+    let opened = false;
+    const h = () => { opened = true; };
+    document.addEventListener("digup:open", h);
+    find.dispatchEvent(new KeyboardEvent("keydown",
+      { key: "Enter", bubbles: true, composed: true, cancelable: true }));
+    document.removeEventListener("digup:open", h);
+    expect(opened).toBe(false);
+  });
+
+  // #151 (2026-11-25): honesty — the counter line says the engine shows only strong.
+  it("#151: the counter line says only strong matches are shown", async () => {
+    el = await mount();
+    const says = el.shadowRoot.getElementById("engine-says").textContent;
+    expect(says).toContain("2 hits · 1 strong");
+    expect(says).toContain("only strong matches shown");
+  });
 });

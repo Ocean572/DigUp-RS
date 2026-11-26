@@ -232,6 +232,91 @@ def test_the_folder_scope_and_extension_narrow_the_answer(client, corpus):
     assert item["type"] == "string_type" and item["loc"] == ["body", "ext", 1]
 
 
+def test_find_like_answers_pictures_like_the_reference(client, corpus):
+    """#162/#121 (2026-11-25): `POST /find-like` is the reference picture's own search —
+    the client sends its minted media handle (paths never cross the API), the server
+    resolves it and relays the engine's answer verbatim: hits/strong/meaning/ms, the
+    same 2.0σ gate, the rows carrying the server's freshly minted handles. The reference's
+    own row drops out of its answer (the faces `similar` law); `found_from` echoes the
+    reference by handle + kind, never by path (paths are private to the mint).
+    """
+    seed = client.post("/api/v1/search", json={"q": "wakeboarding", "limit": 20}).json()
+    photo = next(h for h in seed["hits"] if h["kind"] == "image")
+    answer = client.post("/api/v1/find-like",
+                         json={"media_id": photo["media_id"], "limit": 10})
+    assert answer.status_code == 200, answer.text
+    reply = answer.json()
+    assert reply["meaning"] is True, "the media encoder embedded the reference"
+    assert reply["strong"] <= len(reply["hits"])
+    kinds = {h["kind"] for h in reply["hits"]}
+    assert kinds <= {"image", "screenshot"}, "find-like answers pictures"
+    assert photo["path"] not in {h["path"] for h in reply["hits"]}, \
+        "the reference's own row drops out of its own answer"
+    handles = {h["media_id"] for h in reply["hits"]}
+    assert photo["media_id"] not in handles, "handles are per-reply: the mint is fresh"
+    assert len(handles) == len(reply["hits"]), "every row carries its own handle"
+    assert reply["found_from"] == {"media_id": photo["media_id"], "kind": "image"}, \
+        "found_from echoes the handle, never the path"
+    # The gate's law (AGENTS.md, measured on this box's daemon AND the same-shape CLI):
+    # a file qualifies by STANDING OUT past 2.0σ — on the suite's 15-file pool the
+    # reference's neighbors do not, so the honest answer is an empty one. The server
+    # relays, it does not pad: pin the measured emptiness (identical on every platform).
+    assert reply["hits"] == [] and reply["strong"] == 0, \
+        "the suite pool's measured gate answer — the relay never invents rows"
+
+    # The scope keeps ride find-like like the search verb (#206 law): post-ranking keeps.
+    photos = f"{corpus}/photos"
+    scoped = client.post("/api/v1/find-like",
+                         json={"media_id": photo["media_id"], "limit": 10,
+                               "under": [photos]}).json()
+    assert all(h["path"].startswith(photos) for h in scoped["hits"])
+    assert scoped["found_from"] == reply["found_from"], "the keeps narrow the answer, never the echo"
+    jpgs = client.post("/api/v1/find-like",
+                       json={"media_id": photo["media_id"], "limit": 10,
+                             "ext": ["jpg"]}).json()
+    assert all(h["path"].endswith(".jpg") for h in jpgs["hits"])
+    # The kinds filter narrows the answer; an out-of-kind scope answers an honest empty
+    # with the fields riding (the relay law, never a stripped answer).
+    none = client.post("/api/v1/find-like",
+                       json={"media_id": photo["media_id"], "limit": 10,
+                             "under": [f"{corpus}/clips"]}).json()
+    assert none["hits"] == [] and "found_from" in none
+    # #151 honesty: the relay publishes the engine's own counts, and the gate's honest
+    # answer on this thin pool is an empty one — the server invents nothing (pinned above).
+    assert reply["warning"] is None, "the reference existed: no warning rode the answer"
+
+
+def test_find_like_answers_the_media_laws_on_the_bad_bodies(client):
+    """An unknown handle is the media routes' 404 (`no media handle <id>` — the preview
+    endpoint's exact body), not a 422: the media_id mint is the server's own bookkeeping.
+    Body validation is the same pydantic-shaped battery the search verb answers."""
+    bad = client.post("/api/v1/find-like", json={"media_id": "deadbeef", "limit": 5})
+    assert bad.status_code == 404, bad.text
+    assert bad.json() == {"detail": "no media handle deadbeef"}
+
+    missing = client.post("/api/v1/find-like", json={"limit": 5})
+    assert missing.status_code == 422
+    item = missing.json()["detail"][0]
+    assert item["type"] == "missing" and item["loc"] == ["body", "media_id"]
+
+    short = client.post("/api/v1/find-like", json={"media_id": ""})
+    assert short.status_code == 422
+    assert short.json()["detail"][0]["type"] == "string_too_short"
+
+    kinds = client.post("/api/v1/find-like", json={"media_id": "x", "kinds": ["not-a-kind"]})
+    assert kinds.status_code == 422
+    item = kinds.json()["detail"][0]
+    assert item["type"] == "literal_error" and item["loc"] == ["body", "kinds", 0]
+
+    over = client.post("/api/v1/find-like", json={"media_id": "x", "limit": 1000})
+    assert over.status_code == 422
+    assert over.json()["detail"][0]["type"] == "less_than_equal"
+
+    under = client.post("/api/v1/find-like", json={"media_id": "x", "under": "/a"})
+    assert under.status_code == 422
+    assert under.json()["detail"][0]["type"] == "list_type"
+
+
 def test_kind_filter_is_the_engines(client):
     reply = client.post("/api/v1/search",
                         json={"q": "wakeboarding", "kinds": ["video"]}).json()

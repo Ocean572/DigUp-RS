@@ -44,6 +44,13 @@ class DigupResults extends LitElement {
     li.weaker.selected { color: var(--text); }
     .engine-says { color: var(--soft); font-size: 0.82rem; margin: 0.2rem 0 0.4rem; }
     .engine-says .warn { color: var(--warn); }
+    /* Find-like-this (#162/#121): the small right-edge affordance on picture rows —
+       the same house button, reduced. */
+    .row-find { margin-left: auto; flex: none; height: 1.55rem; padding: 0 0.45rem;
+      border: 1px solid var(--edge); border-radius: 6px; background: var(--field);
+      color: var(--soft); font-size: 0.85rem; cursor: pointer; }
+    .row-find:hover { border-color: var(--accent); color: var(--text); }
+    .row-find:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   `];
 
   constructor() {
@@ -78,6 +85,7 @@ class DigupResults extends LitElement {
     return html`
       <p id="engine-says" class="engine-says">
         <span>${reply.hits.length} hits · ${reply.strong} strong</span>
+        ${reply.hits.length ? html`<span> · only strong matches shown</span>` : null}
         ${ms.embed !== undefined ? html`<span> · embed ${(ms.embed / 1000).toFixed(2)} s</span>` : null}
         ${ms.search !== undefined ? html`<span> · search ${(ms.search / 1000).toFixed(2)} s</span>` : null}
         ${reply.warning ? html`<span> · </span><span class="warn">${reply.warning}</span>` : null}
@@ -111,6 +119,12 @@ class DigupResults extends LitElement {
 
   #row(hit) {
     const selected = this.results.selection === hit.media_id;
+    // Find-like-this (#162/#121): picture rows carry the small ⌕ — the engine has
+    // no picture vector for a document row, so no doc/audio/video gets a dead
+    // button. Clicking selects the row (the row's own handler runs) AND asks.
+    const findable = ["image", "screenshot"].includes(hit.kind) && hit.media_id;
+    const findLike = () => this.dispatchEvent(new CustomEvent("digup:find-like",
+      { bubbles: true, composed: true, detail: { mediaId: hit.media_id } }));
     return html`
       <li class="row ${selected ? "selected" : ""}" role="option"
           aria-selected=${selected ? "true" : "false"}
@@ -120,7 +134,11 @@ class DigupResults extends LitElement {
           @dblclick=${() => this.dispatchEvent(new CustomEvent("digup:open",
             { bubbles: true, composed: true, detail: { mediaId: hit.media_id } }))}
           @keydown=${(e) => {
-            if (e.key === "Enter") { e.preventDefault();
+            if (e.key === "Enter") {
+              // The find button keeps native Enter activation: the row's open
+              // handler is for the row, not for the control inside it.
+              if (e.target.classList.contains("row-find")) return;
+              e.preventDefault();
               this.dispatchEvent(new CustomEvent("digup:open",
                 { bubbles: true, composed: true, detail: { mediaId: hit.media_id } })); } }}>
         ${this.#thumbnail(hit)}
@@ -131,6 +149,9 @@ class DigupResults extends LitElement {
             ${hit.loc !== undefined && hit.loc !== null
               ? html`<span class="badge">at ${clock(hit.loc)}</span>` : null}
             ${hit.z !== undefined ? html`<span class="badge">z ${hit.z.toFixed(1)}</span>` : null}
+            ${findable ? html`<button class="row-find" type="button"
+              aria-label="Find like this" title="Find like this — pictures like this one"
+              tabindex=-1 @click=${findLike}>⌕</button>` : null}
           </div>
           <div class="row-sub">
             ${hit.excerpt && hit.excerpt.includes("«")

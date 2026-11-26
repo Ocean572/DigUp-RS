@@ -152,6 +152,23 @@ fn paths() -> Value {
                 })
             )
         },
+        "/api/v1/find-like": {
+            "post": post_op(
+                "Find like this photo (#162/#121): the clicked hit's media handle embeds the reference, the pool ranks by cosine",
+                "find_like",
+                json!({
+                    "type": "object",
+                    "required": ["media_id"],
+                    "properties": {
+                        "media_id": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The clicked hit's server-issued handle (search mints it); an unknown handle is 404 like the media routes" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 40 },
+                        "kinds": { "type": "array", "items": { "type": "string", "enum": ["doc", "image", "video", "code"] } },
+                        "under": { "type": "array", "items": { "type": "string" }, "description": "Folder scope: keep only rows inside these paths, narrowed inside the server's own roots; omit/empty = unscoped" },
+                        "ext": { "type": "array", "items": { "type": "string" }, "description": "Extension allow-list on the answer rows; the keep is post-ranking, the engine's z rows ride verbatim; omit/empty = all" }
+                    }
+                })
+            )
+        },
         "/api/v1/estimate": {
             "post": post_op(
                 "The engine's own forecast (file counts per root folder)",
@@ -444,6 +461,7 @@ is self-contained: no scripts, no external URLs.</p>
 <tr><td class="m">GET</td><td><code>/api/v1/status</code></td><td>Live status: the server's own roots, the kinds table, vectors, encoder state.</td></tr>
 <tr><td class="m">POST</td><td><code>/api/v1/search</code></td><td><code>{"q", "limit" (1–100, default 40), "kinds", "meaning"}</code> — the engine's ranking: <code>hits, strong, meaning, ms</code>. An honest empty is an empty, not a fill.</td></tr>
 <tr><td class="m">POST</td><td><code>/api/v1/embed_ahead</code></td><td>Keyword-first typing preview for the search box.</td></tr>
+<tr><td class="m">POST</td><td><code>/api/v1/find-like</code></td><td>Find like this photo: the clicked hit's media handle, the pool ranked by cosine (#162/#121).</td></tr>
 <tr><td class="m">POST</td><td><code>/api/v1/estimate</code></td><td>The engine's forecast (per-folder file counts). One full-tree crawl server-wide: a second request answers 409.</td></tr>
 <tr><td class="m">POST</td><td><code>/api/v1/index</code></td><td>Queue one crawl (<code>{"prune"}</code> optional): 202 accepted, 409 when a writer is running. One writer per index; a job never auto-starts from a boot.</td></tr>
 <tr><td class="m">POST</td><td><code>/api/v1/mcp</code></td><td>Model Context Protocol peer (JSON-RPC 2.0, one message per POST): tools <code>search</code>/<code>status</code>/<code>show</code> for any valid key, <code>estimate</code>/<code>index</code> for admin keys; every tool relays the engine's answer verbatim.</td></tr>

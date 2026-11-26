@@ -90,6 +90,19 @@ pub struct SearchParams<'a> {
     pub ext: Vec<String>,
 }
 
+/// The `find_similar` verb's params (#162/#121, 2026-11-25): `path` is the
+/// daemon-side argument — the REST law keeps paths out of the API (the client
+/// sends the minted `media_id`, the server resolves it through the HitCache),
+/// and `render` is the precedent for a server-supplied path verb.
+#[derive(Default)]
+pub struct FindParams<'a> {
+    pub path: &'a str,
+    pub kinds: Option<Vec<String>>,
+    pub limit: i64,
+    pub under: Vec<String>,
+    pub ext: Vec<String>,
+}
+
 impl SearchService {
     pub fn new(config: EngineConfig) -> Self {
         Self {
@@ -188,6 +201,44 @@ impl SearchService {
         let mut fields = op_fields("embed_ahead");
         fields.insert("q".into(), Value::String(q.to_string()));
         fields.insert("code".into(), Value::Bool(code));
+        self.call(&fields, None, true)
+    }
+
+    /// `find_similar` (#162/#121): the picture query. The first call loads the
+    /// daemon's FULL media encoder (the 555 MB picture model + text, 2048-token
+    /// context) and embeds the reference with it — seconds on a cold daemon,
+    /// warm after; the request timeout rides the default. The scope/ext/kinds
+    /// fields ride only when named (the kinds-law shape: field-less verb =
+    /// byte-parity for every existing pin).
+    pub fn find_like(&self, params: &FindParams<'_>) -> Result<Value, CallError> {
+        let FindParams {
+            path,
+            kinds,
+            limit,
+            under,
+            ext,
+        } = params;
+        let mut fields = op_fields("find_similar");
+        fields.insert("path".into(), Value::String(path.to_string()));
+        fields.insert("limit".into(), Value::from(*limit));
+        if !under.is_empty() {
+            fields.insert(
+                "under".into(),
+                Value::Array(under.iter().map(|p| Value::String(p.clone())).collect()),
+            );
+        }
+        if !ext.is_empty() {
+            fields.insert(
+                "ext".into(),
+                Value::Array(ext.iter().map(|e| Value::String(e.clone())).collect()),
+            );
+        }
+        if let Some(kinds) = kinds.clone().filter(|kinds| !kinds.is_empty()) {
+            fields.insert(
+                "kinds".into(),
+                Value::Array(kinds.into_iter().map(Value::String).collect()),
+            );
+        }
         self.call(&fields, None, true)
     }
 

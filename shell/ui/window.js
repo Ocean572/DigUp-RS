@@ -53,6 +53,8 @@ const state = {
   timer: null,
   composing: false,
   error: null,
+  findFrom: null,       // the last answer is a "find like this" (#162/#121): {path, kind} of the reference
+  warning: null,        // the engine's own warning on the last answer, relayed verbatim
   info: { folders: [], hotkey: null, hasCode: false },
   app: {},              // indexing and the model, from the shell (status.rs): line, progress, caveat, counts
   indexed: null,        // files indexed of each kind (the home)
@@ -85,6 +87,8 @@ function run() {
   clearTimeout(state.timer);
   state.navigated = false;
   state.error = null;
+  state.findFrom = null;   // the query answers a query — the find-like marker is the last answer's
+  state.warning = null;
   const typed = state.query.trim();
   const code = isCode();
   const text = /^code:/i.test(typed) ? typed.slice(5).trim() : typed;
@@ -621,6 +625,10 @@ function wire(item, hit) {
     showMenu(event.clientX, event.clientY, [
       ["Open", () => open(hit)],
       [`Show in ${FILE_MANAGER}`, () => reveal(hit)],
+      // Find like this (#162/#121): pictures only — the engine has no picture
+      // vector for a document row, so no doc/video/audio gets a dead item.
+      ...(["image", "screenshot"].includes(hit.kind)
+        ? [["Find like this", () => findLike(hit), `${MOD}9`]] : []),
       null,
       ["Copy", () => invoke("copy_file", { path: hit.path }).catch(failed)],
       ["Copy Path", () => copyPathText({ preventDefault: () => {} }, hit, true, true)],
@@ -658,6 +666,51 @@ function open(hit) {
 
 function reveal(hit) {
   invoke("reveal", { path: hit.path }).catch(failed);
+}
+
+/// `Find like this` (#162/#121, 2026-11-25): the reference picture rides the
+/// daemon verb as its local path (the shell IS local — `render` is the
+/// server-supplied-path precedent; the REST law of media handles is the
+/// server's, not the desktop's). The engine embeds it with its media encoder
+/// and ranks the pool: the same 2.0σ gate, the same filter chain, the same
+/// verbatim rows, and the reference's own row drops out of its answer. The
+/// chip filter and the Scope keeps ride the same fields as the query's
+/// (the chip law — the engine's z's ride verbatim, the UI invents nothing).
+async function findLike(hit) {
+  if (!hit || !["image", "screenshot"].includes(hit.kind)) return;
+  const generation = ++state.generation;
+  clearTimeout(state.timer);
+  state.navigated = false;
+  state.error = null;
+  state.warning = null;
+  const filter = FILTERS.find((item) => item.key === state.filter);
+  const scope = { under: state.scope ? [state.scope] : undefined,
+                  ext: state.ext ? [state.ext] : undefined };
+  try {
+    const all = await ask({ op: "find_similar", path: hit.path, limit: LIMIT, ...scope });
+    const shown = filter
+      ? await ask({ op: "find_similar", path: hit.path, limit: LIMIT, ...scope,
+                    kinds: filter.kinds }) : all;
+    if (generation !== state.generation) return;
+    const counts = {};
+    for (const row of shown.hits.slice(0, shown.strong)) {
+      const key = FILTER_OF_KIND[row.kind];
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    const exts = [...new Set(all.hits.map((row) => extensionOf(row.path)).filter(Boolean))].slice(0, 12);
+    Object.assign(state, { counts, meaning: shown.meaning, hasResults: true, showWeaker: false,
+                           ranked: shown.hits.slice(0, shown.strong),
+                           weaker: shown.hits.slice(shown.strong), exts,
+                           findFrom: shown.found_from || { path: hit.path, kind: hit.kind },
+                           warning: shown.warning || null });
+    state.selection = null;
+    if (!rows().some((row) => row.path === state.selection)) state.selection = rows()[0]?.path ?? null;
+    render();
+  } catch (error) {
+    if (generation !== state.generation) return;
+    state.error = String(error);
+    renderStatus();
+  }
 }
 
 function failed(error) {
@@ -757,9 +810,18 @@ function chooseFolders() {
 
 function nothingFound() {
   const icon = element("div", "quiet-icon " + (isCode() ? "code" : "lens"));   // the glyph is CSS (window.css icon law)
+  // `Find like this` answered empty (#162/#121): the reference has no look-alike
+  // past the engine's gate — its own answer, relayed, warning included.
+  if (state.findFrom) {
+    return centered(icon, element("h3", "", "Nothing stands out next to this picture"),
+                    element("p", "", "The engine shows only strong matches — pictures clearly "
+                            + "alike. Try Find like this on one of the pictures you got."
+                            + (state.warning ? ` (${state.warning})` : "")));
+  }
   return centered(icon, element("h3", "", `No good matches for “${state.query.trim()}”`),
                   element("p", "", isCode() ? "Try saying what the code does, or a name that's in it."
-                    : "Try describing what's in it: what you'd see or hear, or words you remember."));
+                    : "Try describing what's in it: what you'd see or hear, or words you remember. "
+                    + "DigUp shows only strong matches — rows standing out past its 2.0σ bar."));
 }
 
 /// "code:" with nothing after it (what to type), or without code folders (what code search is).
@@ -900,6 +962,14 @@ function renderBig() {
   close.title = "Close (Space)";
   close.onclick = closeBig;
   head.append(title, opening, close);
+  // Find like this (#162/#121): the big look carries the picture action too —
+  // the space where the photo is best seen is where "more like this" is asked.
+  if (["image", "screenshot"].includes(hit.kind)) {
+    const find = element("button", "", "Find like this");
+    find.title = `Find pictures like this one (${MOD}9)`;
+    find.onclick = () => { closeBig(); findLike(hit); };
+    head.append(find);
+  }
   sheet.append(head, bigView(hit));
   $big.replaceChildren(sheet);
 }
@@ -1099,6 +1169,14 @@ function actions(hit) {
   const revealButton = element("button", "", `Show in ${FILE_MANAGER}`);
   revealButton.onclick = () => reveal(hit);
   box.append(openButton, revealButton);
+  // Find like this (#162/#121): the picture rows carry the side-panel action —
+  // the same ask the context menu item makes.
+  if (["image", "screenshot"].includes(hit.kind)) {
+    const findButton = element("button", "", "Find like this");
+    findButton.title = `Find pictures like this one (${MOD}9)`;
+    findButton.onclick = () => findLike(hit);
+    box.append(findButton);
+  }
   return box;
 }
 
@@ -1118,8 +1196,16 @@ function renderStatus() {
   if (state.error) count = `DigUp's helper: ${state.error}`;
   else if (state.hasResults && state.query.trim()) {
     const strong = state.ranked.length, weaker = state.weaker.length;
+    // #151 (2026-11-25): the gate's own words — every row the engine publishes
+    // cleared its 2.0σ significance bar; few rows on a small index is the
+    // corpus's size, said plainly. The engine's warning rides verbatim when
+    // it answers one.
     count = app.caveat || (!state.meaning ? "Words only: meaning search isn't available"
-      : `${strong} ${strong === 1 ? "result" : "results"}` + (weaker ? ` · ${weaker} weaker` : ""));
+      : (state.findFrom ? `Find like this · ${state.findFrom.kind} · ` : "")
+        + `${strong} ${strong === 1 ? "result" : "results"}`
+        + (weaker ? ` · ${weaker} weaker` : "")
+        + (strong ? " · only strong matches shown" : "")
+        + (state.warning ? ` · ${state.warning}` : ""));
   }
   $("count").textContent = count;
   renderUpdate(app.update);
@@ -1270,6 +1356,13 @@ document.addEventListener("keydown", (event) => {
     if (number === 8) {
       event.preventDefault();
       setNamesOnly(!state.namesOnly);   // #66: the Names chip (2026-11-25)
+      return;
+    }
+    if (number === 9) {
+      // Find like this (#162/#121): the selected picture. findLike guards the
+      // kind itself — a document/sound row declines, the key stays calm.
+      event.preventDefault();
+      findLike(state.hasResults && state.query.trim() ? selectedHit() : null);
       return;
     }
     switch (event.key.toLowerCase()) {

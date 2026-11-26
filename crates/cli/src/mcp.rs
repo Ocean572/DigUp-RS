@@ -211,6 +211,36 @@ fn execute(
                 value: reply,
             })
         }
+        "find_like" => {
+            // #162/#121: the reference path rides the daemon verb verbatim —
+            // stdio is local, paths are the daemon's own `render`-law argument.
+            let Some(path) = call.get("path").and_then(Value::as_str) else {
+                return Err((mcp::INVALID_PARAMS, "find_like needs path".to_string()));
+            };
+            let mut fields = Map::new();
+            fields.insert("op".into(), json!("find_similar"));
+            fields.insert("path".into(), json!(path));
+            let limit = call
+                .get("limit")
+                .and_then(Value::as_i64)
+                .unwrap_or(10)
+                .clamp(1, 100);
+            fields.insert("limit".into(), json!(limit));
+            if let Some(kinds) = call.get("kinds").and_then(Value::as_array) {
+                fields.insert("kinds".into(), json!(kinds));
+            }
+            if let Some(under) = call.get("under").and_then(Value::as_array) {
+                fields.insert("under".into(), json!(under));
+            }
+            if let Some(ext) = call.get("ext").and_then(Value::as_array) {
+                fields.insert("ext".into(), json!(ext));
+            }
+            let reply = daemon.send(fields).map_err(|e| (mcp::INTERNAL_ERROR, e))?;
+            Ok(CallOutcome {
+                is_error: refused(&reply),
+                value: reply,
+            })
+        }
         "status" => {
             let mut fields = Map::new();
             fields.insert("op".into(), json!("status"));

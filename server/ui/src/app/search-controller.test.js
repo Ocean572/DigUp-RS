@@ -194,3 +194,77 @@ describe("search-controller — the name: prefix rides the text", () => {
     expect(JSON.parse(calls[0].options.body)).toMatchObject({ q: "name: in", code: true });
   });
 });
+
+// `find like this` (#162/#121, 2026-11-25): the clicked photo rides the REST law as its
+// MINTED handle — paths never cross the API, the server resolves the handle. The scope
+// keeps ride the same fields as a text search (the server relays, the engine narrows),
+// the People filter does NOT (find-like answers pictures), and the answer lands in the
+// SAME groups machinery under the "findLike" phase — the generation law guards it like
+// queryChanged's own.
+describe("search-controller — findLike (the picture IS the query)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const setup = () => {
+    const store = createStore({ results: initial(), filters, isCode: false, text: "", navigated: false });
+    const calls = installFetch({
+      "POST /api/v1/find-like": mockReply(200, { hits: [hit("m1", "image", 3.1)], strong: 1, meaning: true, ms: {} }),
+    });
+    const api = async (path, options) => (await globalThis.fetch(path, options)).json();
+    return { store, calls, c: createSearchController({ api, store }) };
+  };
+
+  it("the handle rides /find-like; unset keeps drop, all-kinds answers null", async () => {
+    const { store, calls, c } = setup();
+    c.findLike("m7");
+    expect(calls.map((x) => x.path)).toEqual(["/api/v1/find-like"]);
+    const body = JSON.parse(calls[0].options.body);
+    expect(body).toMatchObject({ media_id: "m7", limit: 40, kinds: null });
+    expect("q" in body).toBe(false);          // the picture IS the query — no words ride
+    expect("person" in body).toBe(false);     // the People filter does not ride
+    expect("under" in body).toBe(false);      // unset keeps keep the verb minimal
+    expect("ext" in body).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);     // the reply rides microtasks: flush them
+    expect(store.get().results.phase).toBe("findLike");
+    expect(store.get().results.strong[0].media_id).toBe("m1");
+    expect(store.get().results.selection).toBe("m1");
+  });
+
+  it("the scope keeps and the ticked kinds ride the body; the person filter does not", async () => {
+    const { calls, c } = setup();
+    c.queryChanged("", { ...filters, kinds: ["image", "screenshot"],
+                         under: ["/photos/vienna"], ext: ["jpg"], person: 3 });
+    expect(calls.length).toBe(0);             // empty text asks the engine nothing
+    c.findLike("m7");
+    const body = JSON.parse(calls[0].options.body);
+    expect(body).toMatchObject({ media_id: "m7", kinds: ["image", "screenshot"],
+                                 under: ["/photos/vienna"], ext: ["jpg"] });
+    expect("person" in body).toBe(false);
+  });
+
+  it("findLike silences the paused typing — no meaning call lands after it", async () => {
+    const { calls, c } = setup();
+    c.queryChanged("dog", filters);           // words + embed_ahead fire now, meaning at +120 ms
+    c.findLike("m7");
+    await vi.advanceTimersByTimeAsync(400);
+    expect(calls.filter((x) => x.path === "/api/v1/search").length).toBe(1);
+  });
+
+  it("a late find-like answer never overrides newer typing (generation law)", async () => {
+    const store = createStore({ results: initial(), filters, isCode: false, text: "", navigated: false });
+    let resolveFind;
+    const find = new Promise((r) => { resolveFind = r; });
+    const api = async (path) =>
+      path.endsWith("/find-like")
+        ? find
+        : { hits: [hit("m9", "image", 4)], strong: 1, meaning: true, ms: {} };
+    const c = createSearchController({ api, store });
+    c.findLike("m7");
+    c.queryChanged("dog", filters);           // typing continues: the find-like answer is stale
+    await vi.advanceTimersByTimeAsync(120);   // the fresh query's meaning lands
+    resolveFind({ hits: [hit("m1", "image", 3.1)], strong: 1, meaning: true, ms: {} });
+    await vi.advanceTimersByTimeAsync(1);     // flush the late answer's microtasks
+    expect(store.get().results.strong[0].media_id).toBe("m9");
+    expect(store.get().results.phase).toBe("meaning");
+  });
+});

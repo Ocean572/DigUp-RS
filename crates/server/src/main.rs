@@ -1789,6 +1789,99 @@ async fn embed_ahead(
     }
 }
 
+/// `POST /api/v1/find-like` (#162/#121, 2026-11-25): "Find like this photo".
+/// The client sends the minted `media_id` of the hit it clicked — the REST law
+/// keeps paths out of the API; the server resolves the handle through the
+/// HitCache (the `preview`/`render` precedent) and supplies the path to the
+/// daemon's `find_similar` op. The engine's answer rides verbatim: hits,
+/// strong, meaning, ms; fresh media ids are minted on the answer rows (the
+/// search law — every hit gets its own handle for preview/text/file). The
+/// daemon's `found_from` carries the reference's LOCAL path: the server never
+/// relays it — it echoes the request's handle and the engine's kind.
+async fn find_like(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let req = match validate::find_like(&value) {
+        Ok(req) => req,
+        Err(errors) => return detail_response(errors),
+    };
+    // An unknown handle is the media routes' 404, not a 422 — the id mint is
+    // the server's own bookkeeping, and `preview` answers this exact body.
+    let entry = match app.hit_cache.get(&req.media_id) {
+        Some(entry) => entry,
+        None => return no_media(&req.media_id).into_response(),
+    };
+    // The handle's path decides the target (media_scope_allows): a main-index
+    // row answers on the main searcher, an app's own row needs its key.
+    let owner = match media_scope_allows(&app, &ctx, &entry.path) {
+        Ok(owner) => owner,
+        Err(error) => return error.into_response(),
+    };
+    let result = in_scope(app.clone(), owner, move |scope| {
+        let reply = scope.service.find_like(&service::FindParams {
+            path: &entry.path,
+            kinds: req.kinds,
+            limit: req.limit,
+            under: req.under.unwrap_or_default(),
+            ext: req.ext.unwrap_or_default(),
+        })?;
+        let mut row = match strip(reply) {
+            Value::Object(row) => row,
+            _ => return Err(ApiError::Internal),
+        };
+        for field in ["hits", "strong", "meaning", "ms"] {
+            if !row.contains_key(field) {
+                return Err(ApiError::Internal);
+            }
+        }
+        row.entry("warning".to_string()).or_insert(Value::Null);
+        let rows: Vec<Value> = match row.get("hits").and_then(Value::as_array) {
+            Some(rows) => rows.clone(),
+            None => return Err(ApiError::Internal),
+        };
+        let hits = rows
+            .iter()
+            .map(|hit| {
+                let fields = hit_fields(hit, false)?;
+                let media_id = app.hit_cache.put(fields).map_err(|_| ApiError::Internal)?;
+                let mut row = hit.as_object().ok_or(ApiError::Internal)?.clone();
+                row.insert("media_id".into(), json!(media_id));
+                Ok(Value::Object(row))
+            })
+            .collect::<Result<Vec<Value>, ApiError>>()?;
+        row.insert("hits".into(), Value::Array(hits));
+        // `found_from`: relay the engine's kind, never its path (paths are
+        // private, the media handle is the public name for it).
+        match row
+            .get("found_from")
+            .and_then(|from| from.get("kind"))
+            .and_then(Value::as_str)
+        {
+            Some(kind) => {
+                row.insert(
+                    "found_from".into(),
+                    json!({"media_id": req.media_id, "kind": kind}),
+                );
+            }
+            None => {
+                row.remove("found_from");
+            }
+        }
+        Ok(Value::Object(row))
+    })
+    .await;
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
 /// `POST /api/v1/estimate` — the engine's own forecast, from its own JSON
 /// (`estimate --json`, one JSON line per root folder). ParentWatch rule: a
 /// direct child of this process. One full-tree crawl at a time (the UI
@@ -3499,6 +3592,7 @@ async fn main() -> ExitCode {
         .route("/api/v1/status", get_only(status_endpoint))
         .route("/api/v1/search", post_only(search))
         .route("/api/v1/embed_ahead", post_only(embed_ahead))
+        .route("/api/v1/find-like", post_only(find_like))
         .route("/api/v1/estimate", post_only(estimate))
         .route("/api/v1/index", post_only(index))
         // The Model Context Protocol peer (`mcp.rs`): JSON-RPC 2.0 per POST, riding

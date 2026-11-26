@@ -139,8 +139,9 @@ def test_the_read_key_sees_the_read_tools_the_admin_sees_the_mutating_pair(mcp_s
     # `people` is a read tool for the manifest (the faces GETs ride the ordinary
     # bearer gate, so a read key may call it — the consent wall then answers 400
     # through the relay, pinned below); `scan` inside it rides the REST admin gate.
-    assert tool_names(mcp_scoped, READ) == ["search", "status", "show", "people"]
-    assert tool_names(mcp_scoped, ADMIN) == ["search", "status", "show", "people", "estimate", "index"]
+    # `find_like` (#162/#121) is a read verb on the searcher — the read key sees it.
+    assert tool_names(mcp_scoped, READ) == ["search", "status", "show", "find_like", "people"]
+    assert tool_names(mcp_scoped, ADMIN) == ["search", "status", "show", "find_like", "people", "estimate", "index"]
 
 
 def test_the_inert_gate_advertises_the_full_tool_set_key_free(mcp_open):
@@ -148,7 +149,7 @@ def test_the_inert_gate_advertises_the_full_tool_set_key_free(mcp_open):
     # (test_security pins that). The MCP tools ride the SAME openness: an inert box is
     # the user's own localhost, and hiding tools the same key-free HTTP answers plainly
     # would invent a gate the deployment does not have.
-    assert tool_names(mcp_open, None) == ["search", "status", "show", "people", "estimate", "index"]
+    assert tool_names(mcp_open, None) == ["search", "status", "show", "find_like", "people", "estimate", "index"]
 
 
 def test_a_read_key_calling_the_mutating_tools_lands_on_the_rest_gate_words(mcp_scoped):
@@ -247,6 +248,53 @@ def test_the_search_tool_relays_the_scope_args(mcp_scoped, corpus):
     videos = f"{corpus}/videos"
     assert all(h["path"].startswith(videos) and h["path"].endswith(".webm")
                for h in relayed["hits"])
+
+
+# ── find_like (#162/#121, 2026-11-25): the tool IS the REST route (the `people`
+# law): the API surface names the reference by its minted handle — paths never
+# cross the API — and the answer relays field for field, refusals' bodies included.
+
+def test_the_find_like_tool_names_the_minted_handle_not_the_path(mcp_scoped):
+    defs = rpc(mcp_scoped, READ, "tools/list", msg_id=9).json()["result"]["tools"]
+    find = next(defn for defn in defs if defn["name"] == "find_like")
+    props = find["inputSchema"]["properties"]
+    assert "media_id" in props, "the API surface names the reference by its handle"
+    assert "path" not in props, "paths never cross the API surface"
+    assert find["inputSchema"]["required"] == ["media_id"]
+
+
+def test_the_find_like_tool_relays_the_rest_answer_field_for_field(mcp_scoped):
+    seed = mcp_scoped.post("/api/v1/search", json={"q": "wakeboarding", "limit": 20},
+                           headers={"Authorization": f"Bearer {READ}"}).json()
+    photo = next(h for h in seed["hits"] if h["kind"] == "image")
+    body = {"media_id": photo["media_id"], "limit": 8}
+    direct = mcp_scoped.post("/api/v1/find-like", json=body,
+                             headers={"Authorization": f"Bearer {READ}"})
+    assert direct.status_code == 200, direct.text
+    result = call(mcp_scoped, READ, "find_like", body)
+    assert result["isError"] is False
+    relayed, rest = dict(result["structuredContent"]), dict(direct.json())
+    for side in (relayed, rest):
+        side.pop("ms", None)
+        side.pop("warning", None)
+    for row in relayed.get("hits", []) + rest.get("hits", []):
+        row.pop("media_id", None)   # handles are per-reply: each call mints fresh ids
+    found = {"media_id": photo["media_id"], "kind": "image"}
+    assert relayed.pop("found_from", None) == found
+    assert rest.pop("found_from", None) == found
+    assert relayed == rest, "the tool must answer exactly what the REST endpoint answers"
+    # The suite pool's measured gate answer (see test_api's find-like pin): the tool
+    # relays the engine's honest empty — it never pads it.
+    assert relayed["hits"] == [] and relayed["meaning"] is True
+
+
+def test_find_like_with_an_unknown_handle_answers_the_media_404(mcp_scoped):
+    result = call(mcp_scoped, READ, "find_like", {"media_id": "deadbeef"})
+    assert result["isError"] is True
+    # The relay passes the REST body through verbatim (relay() in server/src/mcp.rs:
+    # strip the daemon id, add nothing) — the media route's 404 detail rides plain.
+    assert result["structuredContent"] == {"detail": "no media handle deadbeef"}
+    assert result["content"][0]["text"], "the skim text always rides"
 
 
 def test_the_status_tool_counts_match_the_rest_status(mcp_scoped):

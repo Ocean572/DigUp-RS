@@ -6,6 +6,10 @@ digup: search your files by meaning (DigUp developer CLI)
   digup search <words>... [--code | --all] [--in DIR]... [--here] [--kind K,K] [--keyword] [--strong]
                           [--text] [--ext EXT] [-n 10] [--json]
                                           "code: <words>" or --code searches the code index; --all searches both
+  digup find <photo> [--in DIR]... [--here] [--kind K,K] [--ext EXT] [--strong] [-n 10] [--json]
+                                          find pictures like this one: the reference's own vector (media
+                                          encoder, its indexed budget) ranks the pool — the reference itself
+                                          never answers its own search
   digup show <segment-id | file>... [--code | --all] [--json]
                                           read the full indexed text of a matched segment or file
   digup status [--code | --all] [--in DIR]... [--here] [--json]
@@ -34,7 +38,7 @@ digup: search your files by meaning (DigUp developer CLI)
                                           so --emb-model is required and --faces-consent must name an
                                           accepted consent record; needs the `faces` build feature
   digup mcp [--allow-admin] [FOLDER]...   the Model Context Protocol server over stdio (JSON-RPC, one message
-                                          per line): search/status/show tools (+ estimate with --allow-admin),
+                                          per line): search/find/status/show tools (+ estimate with --allow-admin),
                                           the engine's answers relayed verbatim — for Claude Desktop and local
                                           agents; the same folders and --index the search verb reads
 
