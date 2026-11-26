@@ -260,6 +260,12 @@ pub fn crawl(
     // path → the chosen folder it was found under (a folder inside another root would be
     // walked twice).
     let mut found_root: HashMap<String, String> = HashMap::new();
+    // Issue #3: nested chosen roots walk the SAME files twice, and every per-path report
+    // is reported ONCE — the first walk to reach it, attributed to the deepest root (the
+    // `under` computed below is the same string in both walks). Files and folder records
+    // keep their own sets: a file's facts and a folder's skip are different claims.
+    let mut seen_files: HashSet<String> = HashSet::new();
+    let mut seen_folders: HashSet<String> = HashSet::new();
     // `rootPaths = Set(roots.map { $0.standardizedFileURL.path })` (Crawler.swift:60) and
     // `for root in roots.map({ $0.standardizedFileURL })` (:65): the walk runs on the
     // STANDARDIZED roots — canonical strings for every join (candidate paths), every
@@ -272,6 +278,13 @@ pub fn crawl(
         .iter()
         .map(|root| root.to_string_lossy().into_owned())
         .collect();
+    // Issue #3 — the deepest chosen root containing a path is ITS root: a folder chosen
+    // inside another chosen folder is the more specific instruction, and every per-path
+    // report (the `leftOut` attribution, the `found_root` entry, the project-rule boundary)
+    // rides the deepest root. A single-root walk (every pinned fixture) has one root and
+    // reports exactly as before. Sorted longest-first so the first match is the deepest.
+    let mut sorted_roots: Vec<String> = root_paths.iter().cloned().collect();
+    sorted_roots.sort_by_key(|root| std::cmp::Reverse(root.chars().count()));
     let mut checked: i64 = 0;
 
     for root in roots {
@@ -338,6 +351,15 @@ pub fn crawl(
             // the scope ranges, counters, and Swift-era rows compare byte-wise.
             let path = paths::to_slashes(&entry.path().to_string_lossy());
             let name = paths::last_component(&path).to_string();
+            // Issue #3: the root a path is ATTRIBUTED to is the deepest chosen root that
+            // contains it — the more specific instruction. Every per-path report rides it:
+            // the `leftOut` key, the `found_root` entry, the project-rule boundary below.
+            // With one root (every pinned fixture) this is the root itself, byte-for-byte.
+            let under: &str = sorted_roots
+                .iter()
+                .find(|root| path == root.as_str() || paths::is_inside(&path, root))
+                .map(String::as_str)
+                .unwrap_or(&root);
             if name.starts_with('.') {
                 // Foundation's .skipsHiddenFiles: hidden entries are not enumerated, and
                 // their whole subtree with them. walkdir still descends, so prune here.
@@ -391,13 +413,17 @@ pub fn crawl(
                     if entry.file_type().is_dir() {
                         walker.skip_current_dir();
                     }
-                    *report.skipped_folders.entry(reason.clone()).or_default() += 1;
-                    *report
-                        .left_out
-                        .entry(root.clone())
-                        .or_default()
-                        .entry(format!("folders {}", reason))
-                        .or_default() += 1;
+                    // The count is per unique folder: an overlapping root walks past the
+                    // same skipped folder again, and the report must not double-count it.
+                    if seen_folders.insert(path.clone()) {
+                        *report.skipped_folders.entry(reason.clone()).or_default() += 1;
+                        *report
+                            .left_out
+                            .entry(under.to_string())
+                            .or_default()
+                            .entry(format!("folders {}", reason))
+                            .or_default() += 1;
+                    }
                 } else if options.code {
                     repos.enter(&path);
                 } else if rules::is_project_root(&path) {
@@ -411,18 +437,25 @@ pub fn crawl(
                     paths::extension(&name).to_lowercase().as_str(),
                     "photoslibrary" | "photolibrary"
                 );
-                report.left_out(
-                    if library {
-                        "Photos library"
-                    } else {
-                        "app or bundle"
-                    },
-                    &root,
-                );
+                if seen_folders.insert(path.clone()) {
+                    report.left_out(
+                        if library {
+                            "Photos library"
+                        } else {
+                            "app or bundle"
+                        },
+                        under,
+                    );
+                }
                 continue;
             }
             // Foundation skips hidden *files* by not enumerating them; the same filter here.
             if name.starts_with('.') {
+                continue;
+            }
+            // Issue #3: a nested chosen root reaches the same files again; each file is
+            // classified and reported once, by the first walk to it.
+            if !seen_files.insert(path.clone()) {
                 continue;
             }
             let classification = if options.code {
@@ -431,19 +464,19 @@ pub fn crawl(
                 rules::classify(&path, false, options)
             };
             match classification {
-                Classification::Ignore => report.left_out("other type", &root),
-                Classification::Skip(reason) => report.left_out(&reason, &root),
+                Classification::Ignore => report.left_out("other type", under),
+                Classification::Skip(reason) => report.left_out(&reason, under),
                 Classification::Index(kind) => {
                     let Some(info) = file_info(&path) else {
-                        report.left_out("link or special file", &root);
+                        report.left_out("link or special file", under);
                         continue;
                     };
                     if !info.is_regular {
-                        report.left_out("link or special file", &root);
+                        report.left_out("link or special file", under);
                         continue;
                     }
                     if info.dataless {
-                        report.left_out("in the cloud, not downloaded", &root);
+                        report.left_out("in the cloud, not downloaded", under);
                         continue;
                     }
                     if options.code {
@@ -454,18 +487,18 @@ pub fn crawl(
                             options.max_code_bytes
                         };
                         if info.size > limit {
-                            report.left_out("too big to be written by hand", &root);
+                            report.left_out("too big to be written by hand", under);
                             continue;
                         }
                         if repos.ignores(&path) {
-                            report.left_out("ignored by git", &root);
+                            report.left_out("ignored by git", under);
                             continue;
                         }
                     }
                     if found_root.contains_key(&path) {
                         continue; // found under another root already
                     }
-                    found_root.insert(path.clone(), root.clone());
+                    found_root.insert(path.clone(), under.to_string());
                     found.push(Candidate {
                         path,
                         kind,
@@ -480,21 +513,26 @@ pub fn crawl(
     }
 
     // Inside a code project only screenshots count (assets, fixtures and datasets don't).
-    let mut in_project: HashMap<String, bool> = HashMap::new();
-    let mut is_in_project = |folder: String, project_roots: &HashSet<String>| -> bool {
-        is_in_project_inner(&mut in_project, &folder, project_roots)
+    // Issue #3: the rule fires with the file's CONTAINING chosen root as its boundary, on
+    // project markers STRICTLY inside that root. "A folder chosen on purpose is read whole,
+    // whatever markers it holds" (Crawler.swift, the comment at the project registration):
+    // the files of a chosen root are not "inside" it. Single-root walks — every pinned
+    // fixture, parent-only roots and project-only roots alike — behave byte-for-byte as
+    // before; the new case is parent+project: the project's own media indexes, exactly as
+    // when the project is chosen alone.
+    let mut in_project: HashMap<(String, String), bool> = HashMap::new();
+    let mut is_in_project = |folder: String, root: String| -> bool {
+        is_in_project_under(&mut in_project, &folder, &root, &project_roots)
     };
     let mut kept: Vec<Candidate> = Vec::new();
     for file in found {
         let folder = paths::parent(&file.path);
+        let under = found_root.get(&file.path).cloned().unwrap_or_default();
         if !options.code
             && file.kind != FileKind::Screenshot
-            && is_in_project(folder, &project_roots)
+            && is_in_project(folder, under.clone())
         {
-            report.left_out(
-                "inside a code project",
-                found_root.get(&file.path).map(String::as_str).unwrap_or(""),
-            );
+            report.left_out("inside a code project", &under);
         } else {
             kept.push(file);
         }
@@ -516,14 +554,17 @@ pub fn crawl(
             &root_paths,
             300,
         );
-        if !datasets.is_empty() {
-            report.datasets = datasets;
+        if !datasets.counts.is_empty() {
+            report.datasets = datasets.counts;
+            // Issue #1: the drop is scoped to the kinds that TRIGGERED the folder. A 300-image
+            // training pile is dataset media; the one video and the one song parked beside it
+            // are the user's, and their rows live. (The old filter keyed on the folder and
+            // swept every media kind: the stragglers died with the pile.)
             kept.retain(|file| {
-                let skip = report.datasets.contains_key(&paths::parent(&file.path))
-                    && matches!(
-                        file.kind,
-                        FileKind::Image | FileKind::Audio | FileKind::Video
-                    );
+                let skip = datasets
+                    .kinds
+                    .get(&paths::parent(&file.path))
+                    .is_some_and(|kinds| kinds.contains(&file.kind));
                 if skip {
                     report.left_out(
                         "dataset",
@@ -542,21 +583,30 @@ pub fn crawl(
     report
 }
 
-/// `isInProject`: the folder or any of its parents is a project root (`parent.count > 1`
-/// bounds the recursion at "/"). Memoized like the engine's `inProject` dictionary.
-fn is_in_project_inner(
-    memo: &mut HashMap<String, bool>,
+/// `isInProject` with the issue #3 root boundary: the walk climbs from `folder` up and
+/// stops AT the file's containing chosen root (`folder == root` → false — "the code-project
+/// rule does not apply to the root itself (its files are not 'inside')", `crawler.rs`'s own
+/// chosen-folder pin); it fires only on project roots strictly inside that root.
+/// (`parent.count > 1` bounds the recursion at "/" as Swift's does.) Memoized per
+/// (folder, root) — the engine's `inProject` dictionary, keyed for the new argument.
+fn is_in_project_under(
+    memo: &mut HashMap<(String, String), bool>,
     folder: &str,
+    root: &str,
     project_roots: &HashSet<String>,
 ) -> bool {
-    if let Some(known) = memo.get(folder) {
+    if folder == root {
+        return false; // a chosen root is read whole, whatever markers it holds
+    }
+    let key = (folder.to_string(), root.to_string());
+    if let Some(known) = memo.get(&key) {
         return *known;
     }
     let parent = paths::parent(folder);
     let answer = project_roots.contains(folder)
         || (parent != folder
             && parent.len() > 1
-            && is_in_project_inner(memo, &parent, project_roots));
-    memo.insert(folder.to_string(), answer);
+            && is_in_project_under(memo, &parent, root, project_roots));
+    memo.insert(key, answer);
     answer
 }

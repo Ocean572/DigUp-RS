@@ -21,6 +21,9 @@ pub struct EngineConfig {
     pub excluded_extensions: Vec<String>,
     pub models_dir: Option<PathBuf>,
     pub encoder_idle: f64,
+    /// The engine's dataset rule (issue #1): `--include-datasets` on the index and
+    /// estimate argv; the excludes' sibling knob, carried per target like them.
+    pub include_datasets: bool,
 }
 
 impl EngineConfig {
@@ -56,6 +59,9 @@ impl EngineConfig {
         argv.extend(self.exclude_args());
         if backfill {
             argv.push("--backfill".to_string());
+        }
+        if self.include_datasets {
+            argv.push("--include-datasets".to_string());
         }
         if prune {
             argv.push("--prune".to_string());
@@ -97,6 +103,9 @@ impl EngineConfig {
         argv.push("--index".to_string());
         argv.push(self.index.to_string_lossy().into_owned());
         argv.extend(self.exclude_args());
+        if self.include_datasets {
+            argv.push("--include-datasets".to_string());
+        }
         argv.push("--json".to_string());
         argv
     }
@@ -153,6 +162,11 @@ pub struct ServerConfig {
     pub status_ttl_s: f64,
     pub prewarm: bool,
     pub backfill: bool,
+    /// `DIGUP_SERVER_INCLUDE_DATASETS` (off): index the big machine-named media folders
+    /// too — the 300+ file collections the engine calls datasets by default (issue #1).
+    /// It rides the index and estimate argv (`--include-datasets`), so the forecast
+    /// describes the tree the indexer walks (stage-12 §11.3).
+    pub include_datasets: bool,
     pub config: PathBuf,
     pub binary: String,
     pub models_dir: Option<PathBuf>,
@@ -411,6 +425,7 @@ impl ServerConfig {
             status_ttl_s: knob_float("DIGUP_SERVER_STATUS_TTL_S", 15.0)?,
             prewarm: env_flag("DIGUP_SERVER_PREWARM", true),
             backfill: env_flag("DIGUP_SERVER_BACKFILL", true),
+            include_datasets: env_flag("DIGUP_SERVER_INCLUDE_DATASETS", false),
             config: config_dir,
             // NOT a startup knob: the reference reads it per request (api.py:642), so a
             // typo must not kill the boot - the estimate call that reads it fails.
@@ -467,6 +482,7 @@ impl ServerConfig {
             excluded_extensions: self.excluded_extensions.clone(),
             models_dir: self.models_dir.clone(),
             encoder_idle: self.encoder_idle,
+            include_datasets: self.include_datasets,
         }
     }
 }

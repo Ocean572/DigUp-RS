@@ -79,11 +79,15 @@ const selection = {
       if (this.isSearched(folder)) this.skipped.push(folder);
     }
   },
-  /// What the indexer gets: the chosen folders, without those another one already searches whole.
+  /// What the indexer gets: every chosen folder, nested picks included (issue #1). The engine
+  /// walks overlapping roots once per path (its `foundRoot`/seen guards) and applies the
+  /// dataset and code-project rules only to folders the person did NOT choose — a folder
+  /// picked on its own is read whole, whatever lives in it (`FolderSelection`'s promise,
+  /// quoted by the engine's own crawler). Dropping the nested pick here made that promise
+  /// unexpressible: a numbered wallpaper collection ticked inside its parent was swept as a
+  /// dataset, because the engine never learned the person had picked it.
   folders() {
-    const all = unique(this.chosen);
-    return all.filter((folder) => !all.some((other) => !same(other, folder) && reaches(folder, other)
-      && !this.skipped.some((skip) => inside(skip, other) && (same(folder, skip) || inside(folder, skip)))));
+    return unique(this.chosen);
   },
   /// The skips that leave something out (inside a folder that's searched).
   skips() {

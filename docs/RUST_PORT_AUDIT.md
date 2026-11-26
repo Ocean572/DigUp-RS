@@ -265,3 +265,34 @@ normalized (the gate's own contract). The Swift sources are kept for parity on b
 The repo-shape decision (stay additive here vs a Rust-only publish layout) is deferred to the
 end, per the user. The inventory with each path's purpose and consumer is written when the
 report is filed.
+
+## GitHub issues #1–#3 — user-directed fixes (2026-11-25, stacked branches)
+
+Three fixes from infectiousstupidity's issues #1, #2 and #3. All three behaviors are
+INHERITED Swift design, verified byte-for-byte against `Crawler.swift` / `Indexer.swift`
+on `swift-reference` (the silent `errorHandler: { _, _ in true }`, the folder-keyed
+dataset sweep, the global project filter) — the Rust port faithfully mirrors them. The
+fixes make the Rust engine **deliberately diverge from the Swift reference at edges the
+parity gates do not exercise**, on user direction, the way the port itself was a
+user-directed override of README §1–2:
+
+- **#2** (data loss): the crawl records the paths its walk failed on (`CrawlReport::
+  scan_failures`, internal — the JSON-lines replies carry their pinned field set,
+  unchanged); the sync's vanished-root guard keeps rows under them. Real deletes prune.
+- **#3** (intent): per-path reports ride the DEEPEST chosen root; the code-project rule
+  fires only on markers strictly inside the containing root; overlapping walks report
+  each path once (seen guards). Single-root walks — every pinned fixture, every app
+  deployment — are byte-for-byte unchanged.
+- **#1** (datasets): the drop is scoped to the (folder, kind) groups that triggered it;
+  `datasets` keeps its wire shape (folder → count). Chosen nested picks stay roots
+  (shell `folders()`); the app exposes `include_datasets` (Settings → General) and the
+  server gets `DIGUP_SERVER_INCLUDE_DATASETS`; the default (exclusion ON) is unchanged.
+
+Gate coverage, measured on this box: the ⑨ suite corpus has no dataset folder, no
+unreadable directory, one root — the pinned fixtures, the ⑨ crawl+sync parity line
+(`crawl_line_matches`), the evals and the server contract suite are green by construction
+on these edges; the parity probes never walk them. Host gates per branch: `cargo fmt
+--check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test
+--workspace` (model-pinned tests on, `DIGUP_DEVICE=cpu DIGUP_THREADS=8`) + `node --test
+shell/tests/*.test.cjs` + `cargo check` in `shell/src-tauri`, all green; the E2E lines
+are in `.agent-journal.md` (the measured repro lines for #1/#2/#3, before/after).
