@@ -413,6 +413,18 @@ jobs:
           pattern: DigUp-*
           path: packages
           merge-multiple: true
+      - name: Flatten the artifacts for the feeds
+        # update-feed.py scans the folder flat (measured, Packages run 45812025009):
+        # upload-artifact v7 preserves source paths for multi-line `path:` globs, so the
+        # linux AppImage arrived nested under appimage/ and the macOS upload kept the whole
+        # shell/src-tauri/… tree (the macos/dist glob list has the repo root as common
+        # ancestor) — the flat scan found Windows only and update-feed.py exited
+        # "latest.json needs the Windows and Linux packages". Release assets live at the
+        # release root, so the names update-feed.py must see must sit at the folder root.
+        run: |
+          set -eu
+          find packages -mindepth 2 -type f -exec mv -t packages {} +
+          find packages -mindepth 1 -type d -delete
       - name: The feeds (scripts/update-feed.py)
         env:
           GH_TOKEN: ${{ github.token }}
