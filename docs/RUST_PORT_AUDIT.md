@@ -321,3 +321,14 @@ divergences at edges the parity gates do not exercise, the way issues #1–#3 we
 
 Issue #7's bigger ask (scoped, incremental sync) rides its own stacked branch
 (`feature/issue-7a-incremental-sync`): a wire-contract feature, not a defect fix.
+
+### Issue #8 and the ⑨ pins (2026-11-26)
+
+The secret rule in `classify()` lands on exactly ONE pinned line: the suite corpus carries
+`repo/id_ed25519` — the Swift main-store crawl left it out with reason `"other type"`; the
+Rust crawl now leaves it out with reason `"key or password file"`. Rows and vectors are
+identical (the file is left out on BOTH sides); the code-store fixture always carried
+`"key or password file"` (Swift's `classify_code` had the check) and the `skipped`
+kind-histogram is untouched. `index-main-events.jsonl`'s main-crawl `leftOut` histogram is
+updated to the new reason — the pin carries the disclosed divergence, the issues #1–#3
+pattern. `crawl_line_matches` + `cross_engine_index_build` measure green with it.

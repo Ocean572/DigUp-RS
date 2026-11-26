@@ -174,13 +174,21 @@ fn classify_skips_key_and_password_files_too() {
         "/x/server.pem",
         "/x/notes.key",
     ] {
-        assert_eq!(rules::classify(path, false, &options), secret, "classify({path})");
+        assert_eq!(
+            rules::classify(path, false, &options),
+            secret,
+            "classify({path})"
+        );
         assert_eq!(
             rules::classify(path, false, &with_code),
             secret,
             "classify({path}) with code on"
         );
-        assert_eq!(rules::classify_code(path, &with_code), secret, "classifyCode({path})");
+        assert_eq!(
+            rules::classify_code(path, &with_code),
+            secret,
+            "classifyCode({path})"
+        );
     }
     // The rule is prefixes and extensions, not the words: neighbors that merely mention
     // them stay documents, and a FOLDER named Secrets is not a secret file — its pictures
