@@ -377,6 +377,13 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     rest_filtered = mcp_open.post("/api/v1/search", json={"q": q, "limit": 100, "person": person}).json()
     tool_filtered = call(mcp_open, None, "search", {"q": q, "limit": 100, "person": person})
     assert tool_filtered["isError"] is False
+    # The mint law is read BEFORE the strip below: `dict()` is SHALLOW, so the pop
+    # loop walks the tool's OWN row dicts — a `h["media_id"]` assert after the pops
+    # is a KeyError on rows the strip already mutated (measured 2026-11-25: the
+    # `KeyError 'media_id'` in CI #68 and in the suite runs is this ordering —
+    # the relay itself carries the per-call minted ids just like REST does).
+    assert all(h.get("media_id") for h in tool_filtered["structuredContent"]["hits"]), \
+        "the filtered relay mints handles on every row"
     relayed = dict(tool_filtered["structuredContent"])
     rest = dict(rest_filtered)
     for row in relayed.get("hits", []) + rest.get("hits", []):
@@ -386,7 +393,6 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     assert relayed == rest, "the tool answers what REST answers, filter included"
     kept = {h["path"] for h in rest["hits"]}
     assert kept == plain_paths & owned, (kept, plain_paths, owned)  # membership relayed
-    assert all(h["media_id"] for h in tool_filtered["structuredContent"]["hits"])
     # The 422 law rides the tool as the REST body's own item.
     bad = call(mcp_open, None, "search", {"q": q, "person": 0})
     assert bad["isError"] is True and bad["structuredContent"]["detail"][0]["loc"] == ["body", "person"], bad

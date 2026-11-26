@@ -42,7 +42,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from conftest import _cfg
+from conftest import _cfg, _cli_index
 from support import LiveApp
 
 # The fixture-measured face rows (measured 2026-11-22, ai-ubuntu-computer, w600k_mbf, merge
@@ -108,7 +108,15 @@ def faces(faces_corpus, tmp_path_factory):
     """One server, one index, one scan stretch: face.sqlite lives beside a fresh index
     folder of its own (the store is the scan's, the module's mutations are its story)."""
     index = tmp_path_factory.mktemp("faces-index")
-    app = LiveApp(_cfg(index, (faces_corpus,)),
+    cfg = _cfg(index, (faces_corpus,))
+    # Fill the fixture's own index BEFORE serving (measured 2026-11-25): conftest's
+    # `_cli_index` fills the shared /index — the plain modules' story — and this fixture
+    # owns a fresh index folder, where plain search hits answer []: the People-filter
+    # pins below relay membership over the engine's OWN hits, and an unfilled index
+    # gives them nothing to relay. Indexing is not a faces verb — the consent wall,
+    # the scan's fresh-file counts and the store's face.sqlite are untouched by it.
+    _cli_index(cfg, 1800.0)
+    app = LiveApp(cfg,
                   config_dir=str(tmp_path_factory.mktemp("faces-config")),
                   # The core law is the engine's default now (FACES.md 2026-11-23: a person
                   # exists from 3 faces up — the daemon gates pin it). This suite pins the
@@ -445,8 +453,15 @@ def test_person_show_pages_the_gallery(faces):
         f"/api/v1/faces/person/{target}", params={"limit": 1, "offset": 1, "order": "photo"}
     ).json()["faces"]
     assert len(page1) == 1 and page1[0]["id"] != page0[0]["id"], "the pages are disjoint"
-    # The window over the whole store answers every row, scan order intact.
-    assert faces.client.get(f"/api/v1/faces/person/{target}", params={"limit": 9}).json()["faces"] == full
+    # The window over the whole store answers every row, scan order intact — the
+    # MINTED handle is the only difference: each call mints its own media ids
+    # (measured 2026-11-25, the suite's own mint law — an `==` over the rows as they
+    # come compares per-call ids, which no machine can make equal across two calls).
+    # Compare everything the store carries; the handles are pinned present above.
+    def strip_handles(rows):
+        return [{k: v for k, v in f.items() if k != "media_id"} for f in rows]
+    assert strip_handles(faces.client.get(
+        f"/api/v1/faces/person/{target}", params={"limit": 9}).json()["faces"]) == strip_handles(full)
     for params in ({"limit": 0}, {"limit": 10001}, {"offset": -1}, {"offset": "x"}, {"order": "date"}):
         assert faces.client.get(f"/api/v1/faces/person/{target}", params=params).status_code == 422, params
 
@@ -528,11 +543,19 @@ def test_search_person_filter_relays_the_faces_membership(faces):
 # ── one writer, answered busy (the index writer's flock law) ──────────────────
 
 def test_a_second_scan_is_answered_busy(faces, faces_corpus):
-    # Three new files arrive; the first scan is in the model for ~15 s (3 photos at
-    # ~4-5 s/photo). The second request lands inside that window: 409 with the lock's
-    # sentence, the first scan finishing as the engine reports.
+    # Nine new files arrive (3 copies of each face photo); the first scan is in the
+    # model for seconds-per-photo on every runner. The second request lands inside
+    # that window: 409 with the lock's sentence, the first scan finishing as the
+    # engine reports. Window sizing is a MEASURED law (2026-11-25): a 3-photo scan
+    # on a quiet warm box finished inside the 1.5 s sleep — the second request
+    # landed after the lock released and answered an honest 200 with
+    # {"files":0,"fresh":15} (main-tip module-scope repro). The window is the
+    # FILES' scan cost, so it is sized in files: nine copies run ≥ 4 s warm
+    # (~0.5 s/photo measured on ai-ubuntu-computer) and tens of seconds on CI
+    # (~4-5 s/photo) — the sleep fits on every machine, with 3× margin.
     for name in sorted(FACE_PHOTOS):
-        shutil.copy(faces_corpus / name, faces_corpus / f"copy-{name}")
+        for n in (1, 2, 3):
+            shutil.copy(faces_corpus / name, faces_corpus / f"copy{n}-{name}")
     with ThreadPoolExecutor(max_workers=1) as pool:
         first = pool.submit(faces.scan)
         time.sleep(1.5)
@@ -542,15 +565,16 @@ def test_a_second_scan_is_answered_busy(faces, faces_corpus):
     assert "a faces scan is already running" in busy.json()["detail"], busy.json()
     assert reply.status_code == 200, reply.text
     scan = reply.json()["scan"]
-    assert scan["files"] == 3, scan               # only the three new files were decoded
+    assert scan["files"] == 9, scan               # only the nine new files were decoded
     assert scan["fresh"] == PHOTO_COUNT, scan     # the 12 recorded files skipped as fresh
-    assert scan["faces"] == FACE_COUNT, scan      # the copies embed identically to their originals
+    # the copies embed identically to their originals: one face each, joining their person
+    assert scan["faces"] == 3 * FACE_COUNT, scan
     assert scan["skipped"] == 0, scan
-    # The window closed: the next scan finds the tree quiet, 0 files, 15 fresh.
+    # The window closed: the next scan finds the tree quiet, 0 files, 21 fresh.
     after = faces.scan()
     assert after.status_code == 200, after.text
     assert after.json()["scan"]["files"] == 0, after.json()
-    assert after.json()["scan"]["fresh"] == PHOTO_COUNT + 3, after.json()
+    assert after.json()["scan"]["fresh"] == PHOTO_COUNT + 9, after.json()
     # The law the suite pins: every face lands in a person, nothing is left queued,
     # and no person vanished. The exact person count is the engine's centroid
     # geometry, not a fixture constant — a byte-copy joins its person only when its
@@ -558,13 +582,16 @@ def test_a_second_scan_is_answered_busy(faces, faces_corpus):
     # of a cluster holding three different people sits near that line for a member's
     # own photo (measured on this box: 2 persons in the 4-photo probe, 3 in this
     # 12-photo run — the merged pair's geometry moves with the crawl order, the
-    # rowid artifact the repo notes pin). The merge/confirm verbs exist for exactly
-    # that marginal case; the suite does not pretend it is a constant.
+    # rowid artifact the repo notes pin). Byte-identical copies merge with each
+    # other (cos 1.0), so each marginal original can add AT MOST one new person:
+    # with nine copies the bound is the three originals' geometry, and the suite
+    # pins it wide (1..2×FACE_COUNT) because it is geometry, not a constant. The
+    # merge/confirm verbs exist for exactly that marginal case.
     counts = faces.counts()
-    assert counts["faces"] == 2 * FACE_COUNT, counts
-    assert counts["assigned"] == 2 * FACE_COUNT, counts
+    assert counts["faces"] == 4 * FACE_COUNT, counts
+    assert counts["assigned"] == 4 * FACE_COUNT, counts
     assert counts["pending"] == 0, counts
-    assert 1 <= counts["persons"] <= FACE_COUNT, counts
+    assert 1 <= counts["persons"] <= 2 * FACE_COUNT, counts
 
 
 # ── opting out ────────────────────────────────────────────────────────────────
