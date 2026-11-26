@@ -199,8 +199,14 @@ if [ "${1:-}" = "--shell" ]; then
   # secret key: Invalid symbol". A no-flag `sign` reads both env vars and the
   # .sig lands beside the tarball (proof: sign + verify with minisign-verify,
   # the updater's own verifier, against plugins.updater.pubkey).
+  # --app-version BINDS the signature (measured 2026-11-26, Packages run
+  # 45784058589): a versionless sign logs "Signing without an app version …
+  # updaters configured with requireSignedVersion will reject this signature"
+  # and plugins.updater.requireSignedVersion IS true in tauri.conf.json — the
+  # bundler embeds the version on Windows/Linux automatically; our manual
+  # sign must pass it explicitly, or the installed app refuses the update.
   if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-    "${tauri[@]}" signer sign "$tarball"
+    "${tauri[@]}" signer sign "$tarball" --app-version "$version"
   fi
   # The .dmg a person drags to Applications: the app plus the Applications symlink.
   staging=$(mktemp -d)
@@ -210,8 +216,21 @@ if [ "${1:-}" = "--shell" ]; then
   # (deliberately — the dmg merge is ours) creates only macos/. hdiutil's "create failed -
   # No such file or directory" is its output path missing the dmg/ folder (measured 2026-11-19).
   mkdir -p shell/src-tauri/target/release/bundle/dmg
-  hdiutil create -volname DigUp -srcfolder "$staging" -ov -format UDZO \
-    "shell/src-tauri/target/release/bundle/dmg/DigUp_${version}_${shellarch}.dmg" > /dev/null
+  dmg=shell/src-tauri/target/release/bundle/dmg/DigUp_${version}_${shellarch}.dmg
+  # Bounded retry: -srcfolder mounts the staged tree as a temp volume, and on the GitHub
+  # macOS runners the runner's volume auto-mount races with it — "hdiutil: create failed -
+  # Resource busy" (measured 2026-11-26, Packages run 45784058589: the sign step passed —
+  # the .sig was on disk — the dmg step died after it). Detaching the leftover /Volumes/DigUp*
+  # mount between attempts is the cure; a plain re-run of the job hit the same race.
+  dmg_ok=
+  for dmg_try in 1 2 3 4 5; do
+    if hdiutil create -volname DigUp -srcfolder "$staging" -ov -format UDZO "$dmg" > /dev/null; then
+      dmg_ok=1; break
+    fi
+    for v in /Volumes/DigUp*; do hdiutil detach "$v" -force > /dev/null 2>&1 || true; done
+    sleep 3
+  done
+  [ -n "$dmg_ok" ] || { echo "hdiutil create failed five times" >&2; exit 1; }
   rm -rf "$staging"
   echo "shell bundles: shell/src-tauri/target/release/bundle/macos/ + dmg/"
 fi
