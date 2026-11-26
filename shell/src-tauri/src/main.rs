@@ -218,6 +218,9 @@ impl Shell {
         if self.prune.swap(false, Ordering::SeqCst) {
             args.push("--prune".into());
         }
+        if settings.include_datasets {
+            args.push("--include-datasets".into());
+        }
         args.extend(self.index_arguments());
         args.extend(folder_arguments(&settings, &self.code_folders()));
         args.extend(self.folders());
@@ -353,12 +356,15 @@ async fn estimate(shell: State<'_, Arc<Shell>>, folders: Vec<String>, code: Opti
     let helper = shell.options.helper.clone();
     // Code folders: what the code index would read in them (its time and size, repository by repository).
     let code = if code == Some(true) { vec!["--code".to_string()] } else { Vec::new() };
+    // The dataset rule rides the estimate too (issue #1): the forecast describes the tree
+    // the indexer walks — the same rule the index helper gets.
+    let datasets = if shell.settings.lock().unwrap().include_datasets { vec!["--include-datasets".to_string()] } else { Vec::new() };
     // The index's costs.json: what indexing costs on this computer, once it has indexed enough.
     let index = shell.index_arguments();
     shell.estimating.fetch_add(1, Ordering::SeqCst);
     let answers = tauri::async_runtime::spawn_blocking(move || {
         let mut command = std::process::Command::new(&helper);
-        command.arg("estimate").args(&folders).args(&index).args(&code).arg("--json");
+        command.arg("estimate").args(&folders).args(&index).args(&code).args(&datasets).arg("--json");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -812,7 +818,7 @@ fn main() {
         .setup(move |app| setup(app, options))
         .invoke_handler(tauri::generate_handler![
             ask, estimate, setup_info, pick_folders, apply_setup_folders, finish_setup, open_path, open_code, reveal, hide_panel, panel_height,
-            panel_area, settings_info, set_open_at_login, set_center_panel, set_processor_only, debug_query, debug_report, window_info,
+            panel_area, settings_info, set_open_at_login, set_center_panel, set_processor_only, set_include_datasets, debug_query, debug_report, window_info,
             app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
             remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
             remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, relative_path_text, copy_text, drag_out, set_hotkey, hold_hotkey,
@@ -1426,6 +1432,7 @@ fn settings_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         "canOpenAtLogin": shell.opens_at_login(),
         "centered": shell.settings.lock().unwrap().center_panel,
         "processorOnly": settings.processor_only,
+        "includeDatasets": settings.include_datasets,
         "mcpClaude": settings.mcp_claude,
         // Windows' tray reports clicks (Linux's open the menu, a Mac's too).
         "canChooseTrayClick": cfg!(windows),
@@ -1781,6 +1788,23 @@ fn set_processor_only(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) ->
         settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
     }
     shell.search.stop();
+    shell.index.stop();
+    later(&app, run_index);
+    Ok(())
+}
+
+/// Settings → General: Index dataset folders (issue #1, the CLI's `--include-datasets`).
+/// The crawl rule changes, so the indexing helper is ended; it starts again with the flag and
+/// its sync relays the engine's numbers — ON brings the dataset folders in, OFF lets the next
+/// sync take them out, exactly as the engine counts them. Search is untouched: it answers for
+/// what is indexed, as ever.
+#[tauri::command]
+fn set_include_datasets(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
+    {
+        let mut settings = shell.settings.lock().unwrap();
+        settings.include_datasets = on;
+        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+    }
     shell.index.stop();
     later(&app, run_index);
     Ok(())

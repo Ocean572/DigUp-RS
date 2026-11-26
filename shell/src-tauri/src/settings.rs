@@ -40,6 +40,11 @@ pub struct Settings {
     /// The model runs on the processor even where the graphics card measured faster (Settings → General): for a card
     /// whose results come back wrong or empty. The helpers get `DIGUP_DEVICE=cpu`.
     pub processor_only: bool,
+    /// Index the big machine-named media folders too (Settings → General): the 300+ file collections the
+    /// engine calls datasets by default (wallpaper/artwork sequences named like machines name them, issue #1).
+    /// Off keeps the engine's default; on is the CLI's `--include-datasets` — the helpers get it for indexing
+    /// and estimates alike.
+    pub include_datasets: bool,
     /// Connect Claude Desktop (Settings → General): the app's MCP server is in Claude Desktop's
     /// settings file, refreshed whenever the folders change (mcp.rs).
     pub mcp_claude: bool,

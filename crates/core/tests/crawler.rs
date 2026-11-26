@@ -277,6 +277,66 @@ fn the_crawl_applies_the_rules_and_reports_what_it_leaves_out() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Issue #1 — the dataset drop is scoped to the kind that triggered it. Three hundred
+/// machine-named wallpapers make the folder a training pile FOR IMAGES; the song and the
+/// party clip parked beside it are the user's, not the pile's, and their rows live. The
+/// old filter keyed on the folder and swept every media kind: 302 files left out where 300
+/// are the dataset. (Under `--include-datasets` nothing is dropped, as ever.)
+#[test]
+fn dataset_filtering_stops_at_the_media_kind_that_triggered_it() {
+    let root = temp_tree("digup-crawler-dataset-kinds");
+    for i in 1..=300 {
+        touch(&root, &format!("collection/wall{i:03}.jpg"), b"x");
+    }
+    touch(&root, "collection/song.m4a", b"x");
+    touch(&root, "collection/party.mp4", b"x");
+
+    let report = crawl(&root, &IndexOptions::default());
+    let collection = root.join("collection").to_string_lossy().into_owned();
+    assert_eq!(report.datasets.get(&collection), Some(&300));
+    assert_eq!(count(&report, "skipped", "dataset"), 300);
+    let kept = names(&report.candidates);
+    assert!(
+        kept.contains("song.m4a") && kept.contains("party.mp4"),
+        "the stragglers of the kinds that did NOT trigger the folder keep their rows: {kept:?}"
+    );
+    assert!(!kept.contains("wall001.jpg") && !kept.contains("wall300.jpg"));
+
+    let with_data = IndexOptions {
+        include_datasets: true,
+        ..IndexOptions::default()
+    };
+    let with = crawl(&root, &with_data);
+    assert!(with.datasets.is_empty());
+    assert!(
+        with.candidates.len() == 302,
+        "300 + 2, all indexed: {}",
+        with.candidates.len()
+    );
+
+    // Issue #1b, engine side: the app now sends the nested pick too (`folders()` keeps
+    // it). A folder the person chose is never a dataset — the engine's own exemption —
+    // and the overlapping walks hand in every file EXACTLY once.
+    let collection = root.join("collection");
+    let both = crawler::crawl(
+        &[root.clone(), collection],
+        &IndexOptions::default(),
+        &mut |_| {},
+    );
+    assert!(
+        both.datasets.is_empty(),
+        "the chosen collection is not a dataset"
+    );
+    assert_eq!(count(&both, "skipped", "dataset"), 0);
+    assert_eq!(
+        both.candidates.len(),
+        302,
+        "all 302, each exactly once: {}",
+        names(&both.candidates).len()
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_chosen_folder_is_walked_whatever_markers_it_holds() {
     let root = temp_tree("digup-crawler-chosen");

@@ -246,15 +246,23 @@ fn folders_of_hundreds_of_machine_named_media_are_datasets() {
     // The 300 machine-named videos count; the 299 machine-named images are one short of the
     // minimum; the 300 camera-named images never qualify; the files right in the root are
     // the user's own choice and never a dataset.
-    assert_eq!(datasets.get(&dataset), Some(&300));
-    assert_eq!(datasets.get(&root), None);
-    assert_eq!(datasets.len(), 1);
+    assert_eq!(datasets.counts.get(&dataset), Some(&300));
+    assert_eq!(datasets.counts.get(&root), None);
+    assert_eq!(datasets.counts.len(), 1);
+    // Issue #1: the folder is a dataset FOR VIDEOS — the group that crossed the line. The
+    // 299 machine-named images beside them are not triggered (one short of the minimum),
+    // and the crawl keeps them; the old folder-keyed sweep dropped them too.
+    assert_eq!(
+        datasets.kinds.get(&dataset),
+        Some(&[FileKind::Video].into_iter().collect::<HashSet<FileKind>>())
+    );
+    assert_eq!(datasets.kinds.len(), 1);
 
     // Under the minimum, nothing.
     let few: Vec<(String, String, FileKind)> = (0..299)
         .map(|i| (dataset.clone(), format!("clip_{i:06}"), FileKind::Video))
         .collect();
-    assert!(rules::dataset_folders(&few, &roots, 300).is_empty());
+    assert!(rules::dataset_folders(&few, &roots, 300).counts.is_empty());
 
     // A folder that is a third camera-named and a third machine-named stays: 0.7 is the line.
     let mixed: Vec<(String, String, FileKind)> = (0..100)
@@ -263,7 +271,9 @@ fn folders_of_hundreds_of_machine_named_media_are_datasets() {
         .chain((0..40).map(|i| (dataset.clone(), format!("vid_{i:06}"), FileKind::Video)))
         .collect();
     // 140 of 240 machine-named: below 0.7.
-    assert!(rules::dataset_folders(&mixed, &roots, 300).is_empty());
+    assert!(rules::dataset_folders(&mixed, &roots, 300)
+        .counts
+        .is_empty());
 }
 
 #[test]

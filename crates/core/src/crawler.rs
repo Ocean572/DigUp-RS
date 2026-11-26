@@ -554,14 +554,17 @@ pub fn crawl(
             &root_paths,
             300,
         );
-        if !datasets.is_empty() {
-            report.datasets = datasets;
+        if !datasets.counts.is_empty() {
+            report.datasets = datasets.counts;
+            // Issue #1: the drop is scoped to the kinds that TRIGGERED the folder. A 300-image
+            // training pile is dataset media; the one video and the one song parked beside it
+            // are the user's, and their rows live. (The old filter keyed on the folder and
+            // swept every media kind: the stragglers died with the pile.)
             kept.retain(|file| {
-                let skip = report.datasets.contains_key(&paths::parent(&file.path))
-                    && matches!(
-                        file.kind,
-                        FileKind::Image | FileKind::Audio | FileKind::Video
-                    );
+                let skip = datasets
+                    .kinds
+                    .get(&paths::parent(&file.path))
+                    .is_some_and(|kinds| kinds.contains(&file.kind));
                 if skip {
                     report.left_out(
                         "dataset",

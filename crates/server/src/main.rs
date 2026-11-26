@@ -326,6 +326,7 @@ impl App {
             excluded_extensions: self.cfg.excluded_extensions.clone(),
             models_dir: self.cfg.models_dir.clone(),
             encoder_idle: self.cfg.encoder_idle,
+            include_datasets: self.cfg.include_datasets,
         };
         // os.makedirs(target.index, exist_ok=True) in scope_for: a failure raises
         // through the lifespan (same class as the job-log folder above).
@@ -415,6 +416,7 @@ impl App {
             excluded_extensions: Vec::new(),
             models_dir: self.cfg.models_dir.clone(),
             encoder_idle: config::DEFAULT_ENCODER_IDLE,
+            include_datasets: self.cfg.include_datasets,
         };
         match self.status.get(&cfg) {
             Ok(facts) => {

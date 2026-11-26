@@ -603,24 +603,36 @@ fn starts_with_date(name: &str) -> bool {
 
 /// Folders with hundreds of same-kind, machine-named media files: training data, not your
 /// stuff (`datasetFolders`). Roots you pick yourself are never datasets.
+///
+/// The report names WHICH KINDS triggered each folder (issue #1): the crawl drops the media
+/// of the triggering kinds only — a video parked beside 300 numbered images is not that
+/// dataset, and its row lives. The wire shape (`datasets`: folder → count) is unchanged.
+#[derive(Debug, Default)]
+pub struct Datasets {
+    /// folder → files in its triggering groups
+    pub counts: HashMap<String, i64>,
+    /// folder → the kinds whose groups crossed the line
+    pub kinds: HashMap<String, HashSet<FileKind>>,
+}
+
 pub fn dataset_folders(
     files: &[(String, String, FileKind)],
     roots: &HashSet<String>,
     minimum: usize,
-) -> HashMap<String, i64> {
-    let mut groups: HashMap<(String, String), Vec<String>> = HashMap::new();
+) -> Datasets {
+    let mut groups: HashMap<(String, FileKind), Vec<String>> = HashMap::new();
     for (folder, stem, kind) in files {
         if matches!(kind, FileKind::Image | FileKind::Audio | FileKind::Video)
             && !roots.contains(folder)
         {
             groups
-                .entry((folder.clone(), kind.as_str().to_string()))
+                .entry((folder.clone(), *kind))
                 .or_default()
                 .push(stem.clone());
         }
     }
-    let mut datasets: HashMap<String, i64> = HashMap::new();
-    for ((folder, _kind), stems) in groups {
+    let mut datasets = Datasets::default();
+    for ((folder, kind), stems) in groups {
         if stems.len() < minimum {
             continue;
         }
@@ -629,7 +641,8 @@ pub fn dataset_folders(
             .filter(|stem| looks_machine_named(stem))
             .count();
         if machine as f64 / stems.len() as f64 >= 0.7 {
-            *datasets.entry(folder).or_default() += stems.len() as i64;
+            *datasets.counts.entry(folder.clone()).or_default() += stems.len() as i64;
+            datasets.kinds.entry(folder).or_default().insert(kind);
         }
     }
     datasets
