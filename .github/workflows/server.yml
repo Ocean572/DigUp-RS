@@ -211,6 +211,7 @@ jobs:
       # clip are missing (conftest) — "57 passed, 20 skipped" would be green-by-construction
       # and a lie. In CI every test must RUN: any skip is red, loudly.
       - name: Contract tests (every test runs — skips are red in CI)
+        shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/index"
           # tini is the image's ENTRYPOINT (the ParentWatch rule: the test process must be a
@@ -222,10 +223,18 @@ jobs:
             -v "$RUNNER_TEMP/models:/models:ro" \
             -v "$RUNNER_TEMP/index:/index" \
             digup-server-test:ci /srv/server/.venv/bin/pytest -rs 2>&1 | tee "$RUNNER_TEMP/suite.log"
+          # `| tee` masks pytest's exit code — the pipeline answers tee's zero. Run #68
+          # (2026-11-25) logged `3 failed, 167 passed` on a job that REPORTED success:
+          # pytest's own code must be read off PIPESTATUS, and a red suite exits red.
+          rc=${PIPESTATUS[0]}
           if grep -qE '^(SKIPPED|tests/.*SKIPPED)' "$RUNNER_TEMP/suite.log"; then
             echo "::error::a test SKIPPED in CI — the suite self-skipping is a green-by-construction lie"
             grep -E 'SKIPPED' "$RUNNER_TEMP/suite.log" | head -20
             exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pytest exited $rc — a red suite is red on CI (the tee pipeline masks it otherwise)"
+            exit "$rc"
           fi
           grep -qE '[0-9]+ passed' "$RUNNER_TEMP/suite.log"
 
