@@ -399,7 +399,12 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
 
 
 def test_the_show_tool_reads_a_segments_stored_text(mcp_scoped):
-    hits = mcp_scoped.post("/api/v1/search", json={"q": "wakeboarding", "limit": 5},
+    # The folder token answers ONLY name segments (every file's name row carries its
+    # excerpt text), so hits[0] is a name row on every crawl — a visual query's top
+    # hit can be an image/frame row, which stores no text, making the pick
+    # crawl-dependent (measured 2026-11-25: the "wakeboarding" pick flipped between
+    # suite runs — the relay merge / rowid-tie law the repo notes pin).
+    hits = mcp_scoped.post("/api/v1/search", json={"q": "name: corpus", "limit": 5},
                            headers={"Authorization": f"Bearer {READ}"}).json()["hits"]
     assert hits
     result = call(mcp_scoped, READ, "show", {"segment_id": hits[0]["segment_id"]})

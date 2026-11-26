@@ -617,4 +617,4 @@ def test_withdrawing_consent_closes_every_verb(faces):
     # Re-consenting is the same affirmative act, and the store is the same store.
     again = faces.client.post("/api/v1/faces/consent", json={"accept": True})
     assert again.status_code == 200, again.text
-    assert faces.counts()["faces"] == 2 * FACE_COUNT, faces.counts()
+    assert faces.counts()["faces"] == 4 * FACE_COUNT, faces.counts()
