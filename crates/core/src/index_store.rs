@@ -870,10 +870,17 @@ PRAGMA user_version = 5;"
     /// of them lands on the live path, so the newest row is as good a pick as any.
     pub fn file_by_inode(&self, device: u64, inode: u64) -> Result<Option<FileRecord>> {
         let mut found: Option<FileRecord> = None;
+        // v7 (#195): the lookup rides the assembly — `select_cols` + the anchors join, the
+        // (device, inode) filter qualified for the joined FROM. The record's path answers
+        // ASSEMBLED absolute, the shape every consumer follows (#7a's move detection
+        // re-paths rows, and the relative form is not a client fact). v6 reads verbatim.
         self.db.query(
             &format!(
-                "SELECT {} FROM files WHERE device = ? AND inode = ? LIMIT 1",
-                Self::FILE_COLUMNS
+                "SELECT {} FROM {} WHERE {} = ? AND {} = ? LIMIT 1",
+                self.select_cols(),
+                self.files_from(),
+                self.qualified("device"),
+                self.qualified("inode")
             ),
             vec![Sql::Int(device as i64), Sql::Int(inode as i64)],
             |row| {
@@ -1006,6 +1013,16 @@ PRAGMA user_version = 5;"
             "f.id"
         } else {
             "id"
+        }
+    }
+
+    /// A mode-qualified column name for filters in `files_from()`'s FROM: v7's join spells
+    /// the files table as `f`; v6's FROM is the aliasless table.
+    fn qualified(&self, col: &str) -> String {
+        if self.is_v7() {
+            format!("f.{col}")
+        } else {
+            col.to_string()
         }
     }
 

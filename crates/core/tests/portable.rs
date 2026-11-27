@@ -386,3 +386,25 @@ fn a_note_under_no_root_marks_nothing() {
         "the v7 split refusal answers false, like v6's no-row lookup"
     );
 }
+
+/// The #7a ride-over (#195): `file_by_inode` (the device+inode lookup, added on main while
+/// this port ran — the scoped sync's move detection follows it) must answer the ASSEMBLED
+/// path on a v7 store: the record's path is the shape consumers re-path and report, and the
+/// relative form is not a client fact.
+#[test]
+fn file_by_inode_answers_the_assembled_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store.set_scope(Some(vec!["/data".to_string()])).unwrap();
+    store
+        .insert(&cand("/data/photos/x.png", FileKind::Image))
+        .unwrap();
+    let found = store
+        .file_by_inode(3, 7)
+        .unwrap()
+        .expect("the row sharing (device, inode)");
+    assert_eq!(
+        found.path, "/data/photos/x.png",
+        "the inode lookup answers ASSEMBLED absolute, like every other reader"
+    );
+}
