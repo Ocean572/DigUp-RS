@@ -175,6 +175,7 @@ def test_status_reports_the_faces_state_before_any_consent(faces):
     ("post", "/api/v1/faces/name", {"person": 1, "name": "x"}),
     ("post", "/api/v1/faces/merge", {"into": 1, "from": 2}),
     ("post", "/api/v1/faces/delete", {"person": 1}),
+    ("post", "/api/v1/faces/unload", {}),
     ("post", "/api/v1/faces/confirm", {"face": 1, "person": 1}),
 ])
 def test_every_faces_verb_refuses_before_consent(faces, method, path, body):
@@ -639,3 +640,33 @@ def test_withdrawing_consent_closes_every_verb(faces):
     again = faces.client.post("/api/v1/faces/consent", json={"accept": True})
     assert again.status_code == 200, again.text
     assert faces.counts()["faces"] == 4 * FACE_COUNT, faces.counts()
+
+
+# ── the bulk unload (the user's law 2026-11-27, the "Unload unnamed" button) ──
+
+def test_unload_dissolves_the_unnamed_group_and_keeps_the_named(faces):
+    # The named people are the anchors: the unnamed clusters dissolve, their faces
+    # requeue for the next clustering pass, no photo is deleted. The reply relays
+    # the engine's own counts — the server invents no numbers.
+    persons = faces.persons()
+    assert persons, persons
+    anchor = max(persons, key=lambda p: p["count"])
+    named = faces.client.post("/api/v1/faces/name",
+                              json={"person": anchor["id"], "name": "Anchor Person"})
+    assert named.status_code == 200, named.text
+    before = faces.counts()
+    reply = faces.client.post("/api/v1/faces/unload", json={})
+    assert reply.status_code == 200, reply.text
+    body = reply.json()
+    assert body["ok"] is True, body
+    assert body["persons"] == before["persons"] - 1, body      # exactly the unnamed group
+    assert body["faces"] == before["assigned"] - anchor["count"], body
+    after = faces.counts()
+    assert after["faces"] == before["faces"], "no photo was deleted"
+    assert (after["persons"], after["named"]) == (1, 1), after
+    assert after["assigned"] == anchor["count"], after
+    assert after["pending"] == body["faces"], after            # the requeued evidence
+    # Idempotent: with nothing unnamed left, nothing moves.
+    again = faces.client.post("/api/v1/faces/unload", json={})
+    assert again.status_code == 200, again.text
+    assert (again.json()["persons"], again.json()["faces"]) == (0, 0), again.json()

@@ -427,7 +427,7 @@ pub const OPEN_PATHS: [&str; 3] = ["/api/v1/health", "/api/v1/docs", "/api/v1/op
 /// Faces (FACES.md Phase 3): consent writes, scans (they crawl the tree) and the
 /// person mutations are the deployment's mutating acts; the faces READS ride the
 /// ordinary bearer gate.
-pub const ADMIN_ROUTES: [(&str, &str); 9] = [
+pub const ADMIN_ROUTES: [(&str, &str); 10] = [
     ("POST", "/api/v1/index"),
     ("POST", "/api/v1/estimate"),
     ("POST", "/api/v1/faces/scan"),
@@ -436,6 +436,7 @@ pub const ADMIN_ROUTES: [(&str, &str); 9] = [
     ("POST", "/api/v1/faces/name"),
     ("POST", "/api/v1/faces/merge"),
     ("POST", "/api/v1/faces/delete"),
+    ("POST", "/api/v1/faces/unload"),
     ("POST", "/api/v1/faces/confirm"),
 ];
 

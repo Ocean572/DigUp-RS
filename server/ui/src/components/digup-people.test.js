@@ -98,6 +98,12 @@ describe("digup-people", () => {
     expect(badges).toContain("2 people");
     expect(badges).toContain("1 to review");
     expect(el.shadowRoot.getElementById("faces-withdraw")).not.toBe(null);
+    // The user's law (2026-11-27): with an unnamed person in the store the bulk
+    // unload button is there; the named count keeps it out of an all-named store.
+    expect(el.shadowRoot.getElementById("faces-unload")).not.toBe(null);
+    el.remove();
+    el = await mount({ ...CONSENTED, counts: { ...CONSENTED.counts, named: 2 } });
+    expect(el.shadowRoot.getElementById("faces-unload")).toBe(null);
   });
 
   it("the scan state line: spinner while in flight, ✓ + the engine's counts after", async () => {

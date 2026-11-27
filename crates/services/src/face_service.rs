@@ -6,7 +6,7 @@
 //! The verbs are the compiled list in `handle`: `scan` (crawl roots → decode →
 //! SCRFD detect → embed → record, streaming `face-scan` events, then one online
 //! clustering pass), `cluster`, `persons`, `person`, `faces`, `name`, `merge`,
-//! `delete`, `confirm`, `pending`, `similar`, `prune`, `counts`, `quit`.
+//! `delete`, `unload`, `confirm`, `pending`, `similar`, `prune`, `counts`, `quit`.
 //! The store law (FACES.md §2/§3): piggyback freshness is `(path, size, mtime)`
 //! — a file already recorded with those exact facts is not re-decoded; the
 //! models load once per batch and unload after `--model-idle` seconds (FACES.md
@@ -559,6 +559,20 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .delete_person(id)
                 .map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"ok": true}))
+        }
+        "unload" => {
+            // The bulk `delete` over the unnamed group (the app/server "Unload
+            // unnamed" button, the user's law 2026-11-27): unnamed persons are
+            // dropped, their faces requeue onto the named centroids' pass;
+            // named persons are never touched. The reply relays the engine's
+            // own counts — no invented numbers.
+            let (persons, faces) = state
+                .store
+                .lock()
+                .unwrap()
+                .unload_unnamed()
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"ok": true, "persons": persons, "faces": faces}))
         }
         "confirm" => {
             let face = need_num(request, "face")?;

@@ -33,7 +33,7 @@ const People = {
   openId: null, facesFor: null,
   detail: null,                     // the person whose gallery fills the panel (round-six view)
   names: [],                        // the named people (autocomplete/merge targets, ?named=1 law)
-  withdrawing: false, deleting: null,
+  withdrawing: false, deleting: null, unloading: false,
   error: null,
 };
 
@@ -513,10 +513,18 @@ function peopleConsentedView() {
   scanButton.title = "Scan the whole folder for faces — one long run; files already recorded are skipped, so the next press resumes";
   scanButton.disabled = People.scanning;
   scanButton.onclick = peopleScan;
+  // The user's law (2026-11-27): the named people are the anchors — the unnamed
+  // clusters are dissolved so the next scan re-clusters every face onto the names.
+  // The engine's own bulk delete; counts shown after the act are the engine's.
+  const named = c.named ?? 0;
+  const unnamed = Math.max(0, (c.persons ?? 0) - named);
+  const unload = element("button", "", "Unload unnamed");
+  unload.title = "Dissolve every unnamed person — their faces move to the review queue, the named people stay, no photo is deleted";
+  unload.onclick = () => { People.unloading = true; peopleRender(); };
   const withdraw = element("button", "", "Withdraw consent");
   withdraw.title = "Withdraw the acceptance — the People verbs close";
   withdraw.onclick = () => { People.withdrawing = true; peopleRender(); };
-  line.append(scanButton, withdraw);
+  line.append(scanButton, ...(unnamed > 0 ? [unload] : []), withdraw);
   const badges = element("span", "people-facts");
   badges.replaceChildren(
     peopleBadge(`${c.faces.toLocaleString()} faces`, c.faces > 0),
@@ -531,6 +539,11 @@ function peopleConsentedView() {
   if (People.withdrawing) view.append(peopleConfirm(
     "Withdraw face-recognition consent? The People verbs close; the face store stays on disk until you delete it.",
     "Withdraw", peopleWithdraw, () => { People.withdrawing = false; peopleRender(); }));
+  if (People.unloading) view.append(peopleConfirm(
+    `Unload all ${unnamed.toLocaleString()} unnamed people? Their faces move to the review queue, the ${named.toLocaleString()} named ${named === 1 ? "person stays" : "people stay"} — no photo is deleted. The next Scan re-clusters them onto the names.`,
+    "Unload unnamed",
+    () => { People.unloading = false; peopleVerb("faces_unload", {}, "unload"); },
+    () => { People.unloading = false; peopleRender(); }));
   if (People.error) view.append(element("p", "note problem", People.error));
   peopleProgressLine();
 

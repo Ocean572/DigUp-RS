@@ -2599,6 +2599,41 @@ async fn faces_delete(
     }
 }
 
+/// `POST /api/v1/faces/unload` — the bulk `delete` over the unnamed group (the
+/// user's law 2026-11-27, the "Unload unnamed" button on both frontends):
+/// unnamed persons drop, their faces requeue for the next clustering pass,
+/// named persons are never touched. The reply relays the engine's own counts.
+async fn faces_unload(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let _ = value;
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "unload",
+            Map::new(),
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
 /// The human confirm of a queued collision (FACES.md Phase 2 §3 — the
 /// active-learning loop): a face joins the person the human names.
 async fn faces_confirm(
@@ -3536,6 +3571,7 @@ async fn main() -> ExitCode {
         .route("/api/v1/faces/name", post_only(faces_name))
         .route("/api/v1/faces/merge", post_only(faces_merge))
         .route("/api/v1/faces/delete", post_only(faces_delete))
+        .route("/api/v1/faces/unload", post_only(faces_unload))
         .route("/api/v1/faces/confirm", post_only(faces_confirm))
         .route("/api/v1/faces/pending", get_only(faces_pending))
         .route("/api/v1/faces/similar", get_only(faces_similar))

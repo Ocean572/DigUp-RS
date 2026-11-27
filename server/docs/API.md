@@ -376,18 +376,22 @@ answer every row (the shape this route has always answered). Validation: limit
 first — the autocomplete list of the People tab's name box (picking one of these names on
 another card is the human's merge act). `named=0`/absent answers the full list.
 
-### `POST /api/v1/faces/name` · `merge` · `delete` · `confirm` (admin operations)
+### `POST /api/v1/faces/name` · `merge` · `delete` · `unload` · `confirm` (admin operations)
 
 ```sh
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/name   -d '{"person": 3, "name": "Angela"}' -H 'content-type: application/json'
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/merge  -d '{"into": 3, "from": 4}' -H 'content-type: application/json'
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/delete -d '{"person": 1}' -H 'content-type: application/json'
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/unload -d '{}' -H 'content-type: application/json'
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/confirm -d '{"face": 5, "person": 3}' -H 'content-type: application/json'
-# → 200 {"ok": true} on each
+# → 200 {"ok": true} on each; `unload` answers {"ok": true, "persons": N, "faces": M}
 ```
 
 Naming is a label. `merge` joins two clusters. `delete` dissolves a person — its faces go to
 the pending queue (deleting a person is **not** deleting photos; the faces re-cluster).
+`unload` is the bulk `delete` over the whole unnamed group: every person without a name is
+dissolved, their faces requeue, the named people stay — the next scan re-clusters onto the
+names (the engine relays its own counts, `{"ok": true, "persons": N, "faces": M}`).
 `confirm` is the human answer to a collision: a queued face joins the named person and is
 pinned there. `name` is 1–120 characters; ids are integers > 0; bad bodies answer `422`.
 

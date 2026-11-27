@@ -1038,6 +1038,7 @@ fn main() {
             faces_name,
             faces_merge,
             faces_delete,
+            faces_unload,
             faces_confirm,
             faces_download,
             faces_paths
@@ -2517,6 +2518,14 @@ async fn faces_delete(shell: State<'_, Arc<Shell>>, person: i64) -> Result<Value
         faces_fields(&[("person", &json!(person))]),
     )
     .await
+}
+
+/// The bulk dissolve over the unnamed group (the user's law 2026-11-27): unnamed persons
+/// drop, their faces land in the review queue, the named people stay — the next scan
+/// clusters matching faces into the named clusters. The engine relays its own counts.
+#[tauri::command]
+async fn faces_unload(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    faces_verb(shell.inner().clone(), "unload", faces_fields(&[])).await
 }
 
 #[tauri::command]
