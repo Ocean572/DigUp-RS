@@ -15,8 +15,11 @@ use crate::schema::*;
 use crate::search_text::{has_words, normalized, PageTextProblem};
 use crate::vectors;
 
-/// The layout version this build writes and requires (IndexStore.swift:25).
-pub const SCHEMA_VERSION: i64 = 6;
+/// The layout version this build writes (IndexStore.swift:25 was 6; v7 is the portable layout,
+/// #195). A v6 store opens and READS verbatim — `mode()` says `V6` and every reader answers the
+/// stored absolute paths. The v7 conversion is an explicit WRITE verb (`migrate_portable_store`,
+/// S2): reads never migrate, and a v6 store's write verbs refuse with the migration sentence.
+pub const SCHEMA_VERSION: i64 = 7;
 const MAX_PAGES: i64 = 5_000; // IndexOptions.maxPages
 const MAX_CHUNKS: i64 = 5_000; // IndexOptions.maxChunks
 
@@ -24,6 +27,36 @@ const MAX_CHUNKS: i64 = 5_000; // IndexOptions.maxChunks
 pub const MAIN_FILE: &str = "index.sqlite";
 /// The code index, a file of its own beside it (IndexStore.swift:181).
 pub const CODE_FILE: &str = "code.sqlite";
+
+/// Which layout this store's file speaks (v7 = anchors + relative paths, #195; v6 = the
+/// Swift-era absolute-path layout, read-only for this build).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreMode {
+    V6,
+    V7,
+}
+
+/// One crawl root of a v7 store: `abs` in the engine's ONE form, `real` when symlinks resolve
+/// it differently (the dual-spelling law).
+#[derive(Debug, Clone)]
+pub struct Anchor {
+    pub id: i64,
+    pub abs: String,
+    pub real: Option<String>,
+}
+
+/// The assembly SQL for an absolute answer path from (anchor, rel) at the row edge: the POSIX
+/// root anchor `"/"` carries its own slash, every other root gets one between. The clients —
+/// server HitCache, media scope, MCP, shell — keep seeing one absolute path, byte-identical to
+/// what v6 stored.
+pub fn abs_path_sql() -> &'static str {
+    "CASE WHEN substr(a.abs, -1, 1) = '/' THEN a.abs || f.path ELSE a.abs || '/' || f.path END"
+}
+
+/// v7 scope range lists: merged per-anchor relative ranges (anchor, lo, hi) and the merged
+/// counter-bucket ranges over the anchor-prefixed key space.
+type ScopeFileRanges = Vec<(i64, String, String)>;
+type ScopeBucketRanges = Vec<(String, String)>;
 
 #[derive(Debug, Clone, Default)]
 pub struct Counts {
@@ -40,6 +73,9 @@ pub struct IndexStore {
     pub db: Database,
     scope: RefCell<Option<Vec<String>>>,
     scope_sql: RefCell<String>,
+    mode: std::cell::Cell<StoreMode>,
+    anchors: RefCell<Vec<Anchor>>,
+    anchors_loaded: std::cell::Cell<bool>,
 }
 
 impl IndexStore {
@@ -57,12 +93,35 @@ impl IndexStore {
             db,
             scope: RefCell::new(None),
             scope_sql: RefCell::new(String::new()),
+            mode: std::cell::Cell::new(StoreMode::V6),
+            anchors: RefCell::new(Vec::new()),
+            anchors_loaded: std::cell::Cell::new(false),
         };
         store.migrate()?;
         Ok(store)
     }
 
     // MARK: Migration (IndexStore.swift:202)
+
+    /// Which layout the opened file speaks (`V6` until the migration verb converts it).
+    pub fn mode(&self) -> StoreMode {
+        self.mode.get()
+    }
+
+    fn is_v7(&self) -> bool {
+        self.mode.get() == StoreMode::V7
+    }
+
+    /// The write guard (#195): a v6 store reads verbatim; its write verbs refuse with the
+    /// migration sentence. The index verb answers it until S2 wires the auto-migration.
+    fn write_guard(&self) -> Result<()> {
+        if self.mode.get() == StoreMode::V6 {
+            return Err(crate::db::Error::Failure(
+                "this index is schema 6 (absolute paths); the portable migration runs on the first write verb".to_string(),
+            ));
+        }
+        Ok(())
+    }
 
     fn migrate(&self) -> Result<()> {
         let version = self.db.user_version()?;
@@ -72,6 +131,13 @@ impl IndexStore {
             )));
         }
         if version == SCHEMA_VERSION {
+            self.mode.set(StoreMode::V7);
+            return Ok(());
+        }
+        if version == 6 {
+            // v6 read compatibility (the compat law): opening a v6 store is a verbatim v6 read —
+            // no re-fill, no re-check, no stamp. The v6 → v7 conversion is the migration verb.
+            self.mode.set(StoreMode::V6);
             return Ok(());
         }
         // The app and its helper can open the index at the same moment: one migrates while the
@@ -98,10 +164,29 @@ impl IndexStore {
                 self.migrate_long_files()?;
             }
             self.migrate_counters()?; // 5 → 6, fresh databases included
+            if version == 0 {
+                // A fresh store is born portable (#195): the v7 conversion runs on the empty
+                // tables — no rows to relativize, the counters check already passed in
+                // `migrate_counters`. A store with rows converts through the migration verb.
+                self.migrate_portable()?;
+            }
             Ok(())
         });
         self.db.set_busy_timeout_ms(crate::db::BUSY_TIMEOUT_MS)?;
+        if self.db.user_version()? == SCHEMA_VERSION {
+            self.mode.set(StoreMode::V7);
+        }
         result
+    }
+
+    /// Fresh-store v6 → v7 (schema shape only, `schema::portable_sql`): the anchors table, the
+    /// `files` rebuild with `anchor` + `UNIQUE(anchor, path)` (the table swap preserves ids —
+    /// the copy carries `id` explicitly, the v6 UNIQUE law is replaced), and all eight triggers
+    /// re-created on the new table (the three segment triggers reference `files` and go
+    /// schema-invalid mid-swap — they come down with the files triggers). The counters tables
+    /// and their fill stand untouched.
+    fn migrate_portable(&self) -> Result<()> {
+        self.db.execute(&portable_sql())
     }
 
     /// Schema 1 → 2: whole Bengali/Arabic words over normalized text. Words are rebuilt from what's
@@ -143,7 +228,7 @@ impl IndexStore {
             "DROP TABLE fts; ALTER TABLE fts_new RENAME TO fts; PRAGMA user_version = 2;",
         )?;
         for file in garbled {
-            self.requeue(file)?;
+            self.requeue_raw(file)?;
         }
         Ok(())
     }
@@ -279,10 +364,193 @@ PRAGMA user_version = 5;"
         self.db.execute(PRUNE_ZERO_SQL)
     }
 
+    // MARK: Anchors (v7, #195)
+
+    /// The store's crawl roots, in id order. The list is small (roots, not files) and cached
+    /// per connection; `ensure_anchor` invalidates the cache.
+    pub fn anchors(&self) -> Result<Vec<Anchor>> {
+        if !self.is_v7() {
+            return Ok(Vec::new());
+        }
+        if self.anchors_loaded.get() {
+            return Ok(self.anchors.borrow().clone());
+        }
+        let mut out = Vec::new();
+        self.db
+            .query("SELECT id, abs, real FROM anchors ORDER BY id", [], |row| {
+                out.push(Anchor {
+                    id: row.int(0),
+                    abs: row.text(1).unwrap_or_default(),
+                    real: row.text(2),
+                });
+                Ok(())
+            })?;
+        *self.anchors.borrow_mut() = out.clone();
+        self.anchors_loaded.set(true);
+        Ok(out)
+    }
+
+    /// Registers one crawl root (the engine's ONE form: slashes + standardize) and answers its
+    /// id. `real` carries the symlink-resolved spelling when it differs — the dual-spelling law
+    /// `path_ranges` already rides, carried into the rel space.
+    pub fn ensure_anchor(&self, abs: &str) -> Result<i64> {
+        self.write_guard()?;
+        let abs = crate::paths::standardize(&crate::paths::to_slashes(abs));
+        if let Some(found) = self
+            .anchors()?
+            .into_iter()
+            .find(|a| a.abs == abs)
+            .map(|a| a.id)
+        {
+            return Ok(found);
+        }
+        let real = crate::paths::real_path(&abs);
+        let real = (real.as_bytes() != abs.as_bytes()).then_some(real);
+        self.db.run(
+            "INSERT INTO anchors(abs, real) VALUES(?, ?) ON CONFLICT(abs) DO NOTHING",
+            vec![Sql::Text(abs.clone()), Sql::opt_text(real.as_deref())],
+        )?;
+        self.anchors_loaded.set(false);
+        let mut id = 0i64;
+        self.db.query(
+            "SELECT id FROM anchors WHERE abs = ?",
+            vec![Sql::Text(abs.clone())],
+            |row| {
+                id = row.int(0);
+                Ok(())
+            },
+        )?;
+        if let Ok(mut cache) = self.anchors.try_borrow_mut() {
+            cache.push(Anchor { id, abs, real });
+        }
+        Ok(id)
+    }
+
+    /// The (anchor, rel) split of an absolute path: the anchor with the LONGEST bound prefix
+    /// over both spellings (`abs` and `real` — a walk reports `/private/var/...` where the root
+    /// says `/var/...`; ties break to the lower id, the cache is id-ordered). Err when no root
+    /// covers the path — the honest out-of-anchor refusal.
+    fn split_anchor(&self, path: &str) -> Result<(i64, String)> {
+        let mut best: Option<(usize, i64)> = None;
+        for anchor in self.anchors()? {
+            for spelling in std::iter::once(&anchor.abs).chain(anchor.real.iter()) {
+                let bound = crate::paths::bound(spelling);
+                if path.starts_with(&bound) {
+                    match best {
+                        Some((len, _)) if len >= bound.len() => {}
+                        _ => best = Some((bound.len(), anchor.id)),
+                    }
+                }
+            }
+        }
+        match best {
+            Some((cut, id)) => {
+                let rel = path[cut..].trim_start_matches('/').to_string();
+                if rel.is_empty() {
+                    return Err(crate::db::Error::Failure(format!(
+                        "{path} is an anchor folder, not a file under it"
+                    )));
+                }
+                Ok((id, rel))
+            }
+            None => Err(crate::db::Error::Failure(format!(
+                "{path} is under none of this index's roots"
+            ))),
+        }
+    }
+
+    /// The writer's split: a path under no registered root anchors at its own parent folder (a
+    /// store whose roots were never registered — the unit pins, a store opened bare; the crawl
+    /// registers its roots through `set_scope`, so its rows anchor at the roots themselves).
+    fn split_for_write(&self, path: &str) -> Result<(i64, String)> {
+        match self.split_anchor(path) {
+            Ok(found) => Ok(found),
+            Err(_) => {
+                let parent = bucket_of(path);
+                let anchor = if parent.is_empty() {
+                    if path.starts_with('/') {
+                        "/".to_string()
+                    } else {
+                        return Err(crate::db::Error::Failure(format!(
+                            "{path} has no folder to anchor at"
+                        )));
+                    }
+                } else {
+                    parent
+                };
+                let id = self.ensure_anchor(&anchor)?;
+                let name = crate::paths::last_component(path).to_string();
+                Ok((id, name))
+            }
+        }
+    }
+
+    /// The counters' bucket key in v7: the anchor id prefixes the relative folder, so bucket
+    /// strings stay globally unique and the eight triggers, the counters fill, the consistency
+    /// check, and the scoped bucket ranges ride v6 SQL UNCHANGED. Root-level files get the
+    /// prefix alone (`"<id>/"`).
+    fn prefixed_bucket(&self, anchor: i64, rel: &str) -> String {
+        format!("{}/{}", anchor, bucket_of(rel))
+    }
+
+    /// The FROM clause carrying (files, anchors) for v7 reads; v6 reads the plain table.
+    pub fn files_from(&self) -> &'static str {
+        if self.is_v7() {
+            "files f JOIN anchors a ON a.id = f.anchor"
+        } else {
+            "files"
+        }
+    }
+
+    /// The anchors JOIN for readers whose FROM spells the files table itself (the searcher's
+    /// `files f` / `JOIN files f` shapes).
+    pub fn anchors_join(&self) -> &'static str {
+        if self.is_v7() {
+            " JOIN anchors a ON a.id = f.anchor"
+        } else {
+            ""
+        }
+    }
+
+    /// The SELECT-list expression for an absolute answer path: v6's stored path column, v7's
+    /// assembly at the row edge (see `abs_path_sql`). Readers spell the files table as `f`.
+    pub fn abs_path_sql(&self) -> &'static str {
+        if self.is_v7() {
+            crate::index_store::abs_path_sql()
+        } else {
+            "f.path"
+        }
+    }
+
+    /// The SELECT list for `FileRecord`, per mode: v6's stored absolute path, v7's assembly at
+    /// the row edge (every client answer keeps the byte-identical absolute shape).
+    fn select_cols(&self) -> &'static str {
+        if self.is_v7() {
+            "f.id, CASE WHEN substr(a.abs, -1, 1) = '/' THEN a.abs || f.path ELSE a.abs || '/' || f.path END, f.kind, f.size, f.mtime, f.inode, f.device, f.state, f.detail"
+        } else {
+            Self::FILE_COLUMNS
+        }
+    }
+
+    /// The assembled-path SELECT for id+path scans (`files_under`'s v7 form, `prune`): v6 reads
+    /// the stored path, v7 assembles.
+    fn select_abs(&self) -> &'static str {
+        if self.is_v7() {
+            "f.id, CASE WHEN substr(a.abs, -1, 1) = '/' THEN a.abs || f.path ELSE a.abs || '/' || f.path END"
+        } else {
+            "id, path"
+        }
+    }
+
     // MARK: Scope (IndexStore.swift:53)
 
     /// Sets the folder scope. When set, `pending`/`pendingCount`/`counts` see only files under these
     /// folders. The merged ranges ride in a temp table so scoped reads cost one PK seek per folder.
+    /// v6 (read mode): the Swift-era ranges over the absolute path/bucket keys, verbatim.
+    /// v7 (#195): the scope folders ARE the crawl roots — each is registered as an anchor (the
+    /// argv-roots-to-anchors law), file ranges become per-anchor relative ranges, and counter
+    /// bucket ranges ride the anchor-prefixed key space (globally unique strings, so the scoped
+    /// `counts` SQL is shared with v6 unchanged).
     pub fn set_scope(&self, folders: Option<Vec<String>>) -> Result<()> {
         let folders = match folders {
             None => {
@@ -296,6 +564,24 @@ PRAGMA user_version = 5;"
             .into_iter()
             .map(|folder| crate::paths::standardize(&crate::paths::to_slashes(&folder)))
             .collect();
+        if self.is_v7() {
+            for folder in &folders {
+                self.ensure_anchor(folder)?;
+            }
+            let (file_ranges, bucket_ranges) = self.scope_ranges_v7(&folders)?;
+            self.db.transaction(|| {
+                create_scope_anchor(&self.db, "scope", &file_ranges)?;
+                create_scope(&self.db, "scopeb", &bucket_ranges)?;
+                Ok(())
+            })?;
+            *self.scope.borrow_mut() = Some(folders);
+            *self.scope_sql.borrow_mut() = if file_ranges.is_empty() {
+                " AND 0".to_string()
+            } else {
+                " AND (SELECT s.hi FROM scope s WHERE s.anchor = f.anchor AND s.lo <= f.path ORDER BY s.lo DESC LIMIT 1) > f.path".to_string()
+            };
+            return Ok(());
+        }
         let ranges = merged_ranges(folders.iter().flat_map(|f| path_ranges(f)).collect());
         let bucket = merged_ranges(folders.iter().flat_map(|f| bucket_ranges(f)).collect());
         self.db.transaction(|| {
@@ -310,6 +596,61 @@ PRAGMA user_version = 5;"
             " AND (SELECT s.hi FROM scope s WHERE s.lo <= files.path ORDER BY s.lo DESC LIMIT 1) > files.path".to_string()
         };
         Ok(())
+    }
+
+    /// v7 scope ranges: (anchor, rel-lo, rel-hi) merged per anchor + the counter-bucket ranges
+    /// over the anchor-prefixed key space. Two cases per (folder, anchor) spelling:
+    /// - the anchor sits inside the folder (or is the folder): every row of the anchor is in
+    ///   scope — the whole relative range `("", MAX)`, whole prefix range `("<id>/", <id>/+MAX)`;
+    /// - the folder sits under the anchor: strip the anchor bound (of that spelling — the
+    ///   `/var`↔`/private/var` law) from the folder bound → the relative prefix; its files range
+    ///   is `(prefix, prefix+MAX)`, its buckets the own-key range (`prefix+MAX`, the folder's own
+    ///   bucket, one unit past) plus the subfolder range — the v6 `bucket_ranges` shapes, in the
+    ///   prefixed space.
+    fn scope_ranges_v7(&self, folders: &[String]) -> Result<(ScopeFileRanges, ScopeBucketRanges)> {
+        const MAX: char = char::MAX;
+        let mut per_anchor: std::collections::BTreeMap<i64, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
+        let mut buckets: Vec<(String, String)> = Vec::new();
+        for folder in folders {
+            let folder_bound = crate::paths::bound(folder);
+            for anchor in self.anchors()? {
+                let prefix = format!("{}/", anchor.id);
+                for spelling in std::iter::once(&anchor.abs).chain(anchor.real.iter()) {
+                    let whole =
+                        |ranges: &mut Vec<(String, String)>,
+                         buckets: &mut Vec<(String, String)>| {
+                            ranges.push((String::new(), MAX.to_string()));
+                            buckets.push((prefix.clone(), format!("{prefix}{MAX}")));
+                        };
+                    if folder == spelling || crate::paths::is_inside(spelling, folder) {
+                        whole(per_anchor.entry(anchor.id).or_default(), &mut buckets);
+                        continue;
+                    }
+                    let spelling_bound = crate::paths::bound(spelling);
+                    if folder.starts_with(&spelling_bound) {
+                        let rel = folder_bound[spelling_bound.len()..].to_string();
+                        per_anchor
+                            .entry(anchor.id)
+                            .or_default()
+                            .push((rel.clone(), format!("{rel}{MAX}")));
+                        let own = format!("{prefix}{}", bucket_of(&format!("{rel}x")));
+                        buckets.push((own.clone(), format!("{own}\u{1}")));
+                        let sub = format!("{prefix}{rel}");
+                        buckets.push((sub.clone(), format!("{sub}{MAX}")));
+                    }
+                }
+            }
+        }
+        let file_ranges: Vec<(i64, String, String)> = per_anchor
+            .into_iter()
+            .flat_map(|(id, ranges)| {
+                merged_ranges(ranges)
+                    .into_iter()
+                    .map(move |r| (id, r.0, r.1))
+            })
+            .collect();
+        Ok((file_ranges, merged_ranges(buckets)))
     }
 
     fn scope_active(&self) -> bool {
@@ -370,7 +711,40 @@ PRAGMA user_version = 5;"
     }
 
     /// Adds a file (pending) and returns its id — the row and its name entry together.
+    /// v7: the path splits to (anchor, rel) and the bucket rides the anchor-prefixed key;
+    /// the name row keeps tokenizing the ASSEMBLED absolute path (the s343 law: excerpts quote
+    /// the folder path as FTS tokens — tokens are spelling-of-the-root, not relative).
     pub fn insert(&self, file: &Candidate) -> Result<i64> {
+        self.write_guard()?;
+        if !self.is_v7() {
+            return self.insert_v6(file);
+        }
+        let path = crate::paths::standardize(&crate::paths::to_slashes(&file.path));
+        self.db.transaction(|| {
+            let (anchor, rel) = self.split_for_write(&path)?;
+            let bucket = self.prefixed_bucket(anchor, &rel);
+            self.db.run(
+                "INSERT INTO files(anchor, path, kind, size, mtime, inode, device, bucket) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                vec![
+                    Sql::Int(anchor),
+                    Sql::Text(rel),
+                    Sql::Text(file.kind.as_str().to_string()),
+                    Sql::Int(file.size),
+                    Sql::Double(file.mtime),
+                    Sql::Int(file.inode as i64),
+                    Sql::Int(file.device as i64),
+                    Sql::Text(bucket),
+                ],
+            )?;
+            let id = self.db.last_insert_rowid();
+            self.add_name_row(id, &path)?;
+            Ok(id)
+        })
+    }
+
+    /// The v6 write path kept for one release: a v6 store refuses writes (`write_guard`), so
+    /// this runs only after the migration verb converts a store — it has no v6 call site.
+    fn insert_v6(&self, file: &Candidate) -> Result<i64> {
         self.db.transaction(|| {
             self.db.run(
                 "INSERT INTO files(path, kind, size, mtime, inode, device, bucket) VALUES(?, ?, ?, ?, ?, ?, ?)",
@@ -392,6 +766,9 @@ PRAGMA user_version = 5;"
 
     /// Every file under one of `roots` (IndexStore.swift:603). A folder inside another listed is
     /// already covered; each file once, also where two spellings of a folder meet.
+    /// v7: the roots map onto the anchors — an anchor inside a root answers whole, a root under
+    /// an anchor answers its relative range (both spellings: `/var` reaches `/private/var`
+    /// rows, the law `path_ranges` rides in v6); answers carry the ASSEMBLED absolute path.
     pub fn files_under(&self, roots: &[String]) -> Result<Vec<FileRecord>> {
         // Root strings arrive from callers in any spelling; the byte-wise ranges below
         // only see the engine's ONE form (slashes + standardize) — see `set_scope`.
@@ -402,6 +779,63 @@ PRAGMA user_version = 5;"
         let roots: &[String] = &normalized;
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        if self.is_v7() {
+            for root in roots {
+                if roots
+                    .iter()
+                    .any(|other| crate::paths::is_inside(root, other))
+                {
+                    continue;
+                }
+                let root_bound = crate::paths::bound(root);
+                for anchor in self.anchors()? {
+                    // One mapping per spelling: None = the anchor sits under the root, answer
+                    // whole; Some = the root sits under the anchor, answer its relative range.
+                    let mut mappings: Vec<Option<(String, String)>> = Vec::new();
+                    for spelling in std::iter::once(&anchor.abs).chain(anchor.real.iter()) {
+                        if root == spelling || crate::paths::is_inside(spelling, root) {
+                            mappings.push(None);
+                            continue;
+                        }
+                        let spelling_bound = crate::paths::bound(spelling);
+                        if root.starts_with(&spelling_bound) {
+                            // The v6 bound+MAX shape: the lo keeps its trailing slash, so a
+                            // sibling folder ("photos1/x") falls outside ("photos1/" > "photos/￿").
+                            let lo = root_bound[spelling_bound.len()..].to_string();
+                            mappings.push(Some((lo.clone(), format!("{lo}{}", char::MAX))));
+                        }
+                    }
+                    for mapping in mappings {
+                        let (sql, args) = match mapping {
+                            None => (
+                                format!(
+                                    "SELECT {} FROM {} WHERE f.anchor = ?",
+                                    self.select_cols(),
+                                    self.files_from()
+                                ),
+                                vec![Sql::Int(anchor.id)],
+                            ),
+                            Some((lo, hi)) => (
+                                format!(
+                                    "SELECT {} FROM {} WHERE f.anchor = ? AND f.path >= ? AND f.path < ?",
+                                    self.select_cols(),
+                                    self.files_from()
+                                ),
+                                vec![Sql::Int(anchor.id), Sql::Text(lo), Sql::Text(hi)],
+                            ),
+                        };
+                        self.db.query(&sql, args, |row| {
+                            let record = IndexStore::record(row);
+                            if seen.insert(record.id) {
+                                out.push(record);
+                            }
+                            Ok(())
+                        })?;
+                    }
+                }
+            }
+            return Ok(out);
+        }
         for root in roots {
             if roots
                 .iter()
@@ -457,6 +891,7 @@ PRAGMA user_version = 5;"
     /// (`requeue(_:as:)`, IndexStore.swift:634) — kind/size/date/inode/device ride the new
     /// reading; the name row stays.
     pub fn requeue_as(&self, id: i64, file: &Candidate) -> Result<()> {
+        self.write_guard()?;
         self.db.transaction(|| {
             self.delete_segments(id, true)?;
             self.db.run(
@@ -476,6 +911,13 @@ PRAGMA user_version = 5;"
 
     /// The file changed on disk: drop what was extracted and queue it again (keeps the name row).
     pub fn requeue(&self, id: i64) -> Result<()> {
+        self.write_guard()?;
+        self.requeue_raw(id)
+    }
+
+    /// Unguarded `requeue` for the migration chain (it runs INSIDE a migration, where the
+    /// store's layout is being rewritten under it — the guard is for runtime writers).
+    fn requeue_raw(&self, id: i64) -> Result<()> {
         self.db.transaction(|| {
             self.delete_segments(id, true)?;
             self.db.run(
@@ -485,8 +927,34 @@ PRAGMA user_version = 5;"
         })
     }
 
-    /// Same inode/size/date at a new path: a move. Only path/bucket change; nothing re-embedded.
+    /// Same inode/size/date at a new path: a move. Only path/bucket change (v7: the anchor too,
+    /// when the move crosses roots); nothing re-embedded — the vectors ride `segments.vec`,
+    /// which a path UPDATE never touches (the FK is delete-only).
     pub fn move_file(&self, id: i64, to: &str) -> Result<()> {
+        self.write_guard()?;
+        if !self.is_v7() {
+            return self.move_file_v6(id, to);
+        }
+        let to = crate::paths::standardize(&crate::paths::to_slashes(to));
+        self.db.transaction(|| {
+            let (anchor, rel) = self.split_for_write(&to)?;
+            let bucket = self.prefixed_bucket(anchor, &rel);
+            self.db.run(
+                "UPDATE files SET anchor = ?, path = ?, bucket = ? WHERE id = ?",
+                vec![Sql::Int(anchor), Sql::Text(rel), Sql::Text(bucket), Sql::Int(id)],
+            )?;
+            self.db.run(
+                "UPDATE fts SET name = ?, body = ? WHERE rowid IN (SELECT id FROM segments WHERE file = ? AND kind = 'name')",
+                vec![
+                    Sql::Text(normalized(&name_text(&to))),
+                    Sql::Text(normalized(&folder_text(&to))),
+                    Sql::Int(id),
+                ],
+            )
+        })
+    }
+
+    fn move_file_v6(&self, id: i64, to: &str) -> Result<()> {
         self.db.transaction(|| {
             self.db.run(
                 "UPDATE files SET path = ?, bucket = ? WHERE id = ?",
@@ -504,6 +972,7 @@ PRAGMA user_version = 5;"
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
+        self.write_guard()?;
         self.db.run(
             "DELETE FROM fts WHERE rowid IN (SELECT id FROM segments WHERE file = ?)",
             vec![Sql::Int(id)],
@@ -514,6 +983,7 @@ PRAGMA user_version = 5;"
 
     /// Queues every file again and forgets the fingerprint (after the model/settings changed).
     pub fn reset_all(&self) -> Result<()> {
+        self.write_guard()?;
         self.db.transaction(|| {
             self.db.run(
                 "DELETE FROM fts WHERE rowid IN (SELECT id FROM segments WHERE kind != 'name')",
@@ -527,6 +997,16 @@ PRAGMA user_version = 5;"
             )?;
             self.set_meta("fingerprint", None)
         })
+    }
+
+    /// The mode-qualified `id` column for filters in `files_from()`'s FROM: v7's join makes a
+    /// bare `id` ambiguous (`files.id` vs `anchors.id`) — the `only:` filter must qualify.
+    fn qualified_id(&self) -> &'static str {
+        if self.is_v7() {
+            "f.id"
+        } else {
+            "id"
+        }
     }
 
     /// Files waiting to be embedded, in indexing order; `only` narrows it to some files
@@ -545,7 +1025,8 @@ PRAGMA user_version = 5;"
             let mut sorted: Vec<i64> = ids.iter().copied().collect();
             sorted.sort_unstable();
             format!(
-                " AND id IN ({})",
+                " AND {} IN ({})",
+                self.qualified_id(),
                 sorted
                     .iter()
                     .map(|id| id.to_string())
@@ -554,9 +1035,10 @@ PRAGMA user_version = 5;"
             )
         });
         let sql = format!(
-            "SELECT {} FROM files WHERE state = 'pending'{}{}
+            "SELECT {} FROM {} WHERE state = 'pending'{}{}
              ORDER BY {}, mtime DESC LIMIT ?",
-            Self::FILE_COLUMNS,
+            self.select_cols(),
+            self.files_from(),
             filter.as_deref().unwrap_or(""),
             self.scope_sql(),
             FileKind::INDEXING_ORDER_SQL,
@@ -586,7 +1068,8 @@ PRAGMA user_version = 5;"
             let mut sorted: Vec<i64> = ids.iter().copied().collect();
             sorted.sort_unstable();
             format!(
-                " AND id IN ({})",
+                " AND {} IN ({})",
+                self.qualified_id(),
                 sorted
                     .iter()
                     .map(|id| id.to_string())
@@ -595,7 +1078,8 @@ PRAGMA user_version = 5;"
             )
         });
         let sql = format!(
-            "SELECT DISTINCT kind FROM files WHERE state = 'pending'{}{}",
+            "SELECT DISTINCT kind FROM {} WHERE state = 'pending'{}{}",
+            self.files_from(),
             filter.as_deref().unwrap_or(""),
             self.scope_sql(),
         );
@@ -613,8 +1097,9 @@ PRAGMA user_version = 5;"
     /// (`unfinished`, IndexStore.swift:749).
     pub fn unfinished(&self) -> Result<Vec<FileRecord>> {
         let sql = format!(
-            "SELECT {} FROM files WHERE state = 'partial'{} ORDER BY {}, mtime DESC",
-            Self::FILE_COLUMNS,
+            "SELECT {} FROM {} WHERE state = 'partial'{} ORDER BY {}, mtime DESC",
+            self.select_cols(),
+            self.files_from(),
             self.scope_sql(),
             FileKind::INDEXING_ORDER_SQL,
         );
@@ -684,6 +1169,7 @@ PRAGMA user_version = 5;"
         detail: Option<&str>,
         info: HashMap<String, String>,
     ) -> Result<()> {
+        self.write_guard()?;
         let json = if info.is_empty() {
             None
         } else {
@@ -721,6 +1207,7 @@ PRAGMA user_version = 5;"
         text: Option<&str>,
         vector: Option<&[f32]>,
     ) -> Result<()> {
+        self.write_guard()?;
         self.db.transaction(|| {
             let modality_text = if vector.is_some() { modality } else { Modality::None };
             let blob = vector.map(vectors::half_bytes);
@@ -871,6 +1358,7 @@ PRAGMA user_version = 5;"
     /// aliasing the scope ranges make). Each gone file is deleted as the store deletes a
     /// file that moved away.
     pub fn prune_keeping_under(&self, roots: &[String]) -> Result<i64> {
+        self.write_guard()?;
         let prefixes: Vec<String> = roots
             .iter()
             // The engine's ONE path form (see `set_scope`): the byte-wise prefix test
@@ -880,7 +1368,10 @@ PRAGMA user_version = 5;"
             .map(|range| range.0)
             .collect();
         let mut gone: Vec<i64> = Vec::new();
-        self.db.query("SELECT id, path FROM files", [], |row| {
+        // v7 compares the ASSEMBLED absolute path against the same prefixes (the ghost-row
+        // cure is root-shape law, not storage-shape law); v6 reads the stored path.
+        let sql = format!("SELECT {} FROM {}", self.select_abs(), self.files_from());
+        self.db.query(&sql, [], |row| {
             let path = row.text(1).unwrap_or_default();
             if !prefixes.iter().any(|p| path.starts_with(p)) {
                 gone.push(row.int(0));
@@ -906,6 +1397,7 @@ PRAGMA user_version = 5;"
     /// the portable `OCR.isAvailable` and `ImageExtractor.drawsVectorPictures` are false,
     /// so on this platform the answer is 0 by the engine's own reading.
     pub fn read_again_once(&self) -> Result<i64> {
+        self.write_guard()?;
         let (ocr_available, draws_pictures) = (false, false);
         let mut files: std::collections::HashSet<i64> = std::collections::HashSet::new();
         let mut flags: Vec<&str> = Vec::new();
@@ -953,15 +1445,33 @@ PRAGMA user_version = 5;"
     /// being finished keeps what was read of it — `partial` closes to `done` with the
     /// note; anything else becomes `failed`. False when no file has that path.
     pub fn mark_stopped(&self, path: &str, why: &str) -> Result<bool> {
+        self.write_guard()?;
         let mut found: Option<(i64, String)> = None;
-        self.db.query(
-            "SELECT id, state FROM files WHERE path = ?",
-            [Sql::Text(path.to_string())],
-            |row| {
-                found = Some((row.int(0), row.text(1).unwrap_or_default()));
-                Ok(())
-            },
-        )?;
+        if self.is_v7() {
+            // The stopped-file note carries an absolute path; the row lookup rides the
+            // (anchor, rel) key. A path under no root names no row — the honest false.
+            let path = crate::paths::standardize(&crate::paths::to_slashes(path));
+            let Ok((anchor, rel)) = self.split_anchor(&path) else {
+                return Ok(false);
+            };
+            self.db.query(
+                "SELECT id, state FROM files WHERE anchor = ? AND path = ?",
+                [Sql::Int(anchor), Sql::Text(rel)],
+                |row| {
+                    found = Some((row.int(0), row.text(1).unwrap_or_default()));
+                    Ok(())
+                },
+            )?;
+        } else {
+            self.db.query(
+                "SELECT id, state FROM files WHERE path = ?",
+                [Sql::Text(path.to_string())],
+                |row| {
+                    found = Some((row.int(0), row.text(1).unwrap_or_default()));
+                    Ok(())
+                },
+            )?;
+        }
         let Some((id, state)) = found else {
             return Ok(false);
         };
@@ -983,7 +1493,8 @@ PRAGMA user_version = 5;"
     pub fn full_pending_count(&self) -> Result<i64> {
         let mut count = 0;
         let sql = format!(
-            "SELECT COUNT(*) FROM files WHERE state = 'pending'{}",
+            "SELECT COUNT(*) FROM {} WHERE state = 'pending'{}",
+            self.files_from(),
             self.scope_sql()
         );
         self.db.query(&sql, [], |row| {
@@ -997,7 +1508,8 @@ PRAGMA user_version = 5;"
         let mut files = 0;
         let mut left = 0;
         let sql = format!(
-            "SELECT COUNT(*), SUM(MAX(0, CAST(json_extract(info, '$.read_end') AS INTEGER) - CAST(json_extract(info, '$.read_to') AS INTEGER))) FROM files WHERE state = 'partial'{}",
+            "SELECT COUNT(*), SUM(MAX(0, CAST(json_extract(info, '$.read_end') AS INTEGER) - CAST(json_extract(info, '$.read_to') AS INTEGER))) FROM {} WHERE state = 'partial'{}",
+            self.files_from(),
             self.scope_sql()
         );
         self.db.query(&sql, [], |row| {
@@ -1011,7 +1523,8 @@ PRAGMA user_version = 5;"
     pub fn full_counts(&self) -> Result<Counts> {
         let mut counts = Counts::default();
         let sql = format!(
-            "SELECT kind, state, COUNT(*) FROM files WHERE 1{} GROUP BY kind, state",
+            "SELECT kind, state, COUNT(*) FROM {} WHERE 1{} GROUP BY kind, state",
+            self.files_from(),
             self.scope_sql()
         );
         self.db.query(&sql, [], |row| {
@@ -1027,7 +1540,8 @@ PRAGMA user_version = 5;"
         counts.left = left;
         let in_scope = if self.scope_active() {
             format!(
-                " AND file IN (SELECT id FROM files WHERE 1{})",
+                " AND file IN (SELECT f.id FROM {} WHERE 1{})",
+                self.files_from(),
                 self.scope_sql()
             )
         } else {
@@ -1130,6 +1644,37 @@ fn create_scope(db: &Database, table: &str, ranges: &[(String, String)]) -> Resu
         let placeholders = vec!["(?, ?)"; chunk.len()].join(",");
         db.run(
             &format!("INSERT INTO {table}(lo, hi) VALUES{placeholders}"),
+            values,
+        )?;
+        start = end;
+    }
+    Ok(())
+}
+
+/// The v7 scope table (#195): ranges are anchor-relative, so the temp table carries the anchor
+/// and the scoped predicate matches `f.anchor` — a rel range is only meaningful inside its
+/// anchor. The bucket scope table (`scopeb`) rides `create_scope` unchanged: anchor-prefixed
+/// bucket strings are globally unique, so v6's range join is exact in v7 too.
+fn create_scope_anchor(db: &Database, table: &str, ranges: &[(i64, String, String)]) -> Result<()> {
+    db.execute(&format!("CREATE TEMP TABLE IF NOT EXISTS {table}(anchor INTEGER NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(anchor, lo)) WITHOUT ROWID"))?;
+    db.execute(&format!("DELETE FROM {table}"))?;
+    let mut start = 0;
+    while start < ranges.len() {
+        let end = (start + 200).min(ranges.len());
+        let chunk = &ranges[start..end];
+        let values: Vec<Sql> = chunk
+            .iter()
+            .flat_map(|r| {
+                [
+                    Sql::Int(r.0),
+                    Sql::Text(r.1.clone()),
+                    Sql::Text(r.2.clone()),
+                ]
+            })
+            .collect();
+        let placeholders = vec!["(?, ?, ?)"; chunk.len()].join(",");
+        db.run(
+            &format!("INSERT INTO {table}(anchor, lo, hi) VALUES{placeholders}"),
             values,
         )?;
         start = end;

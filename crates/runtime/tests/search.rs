@@ -154,13 +154,25 @@ fn install_pinned_vectors(index: &Path, tag: &str, root: &str) -> (usize, usize,
         // machine's. Both spellings are offered (they are the same string on Linux and macOS).
         let host = full.to_string_lossy().to_string();
         let slashed = host.replace('/', std::path::MAIN_SEPARATOR_STR);
-        let Ok(file_id) = db.query_row(
-            "SELECT id FROM files WHERE path = ?1 OR path = ?2",
-            rusqlite::params![host, slashed],
-            |row| row.get::<_, i64>(0),
-        ) else {
-            unmatched += 1;
-            continue;
+        // v7 (#195): the row key is (anchor, rel). Match the path through the anchors —
+        // both the registered spelling and the realpath spelling (the same dual-spelling law
+        // `files_under` rides), so the vendored dump's host spelling reaches the row.
+        let host_is = |col: &str| {
+            db.query_row(
+                "SELECT f.id FROM files f JOIN anchors a ON a.id = f.anchor \
+                 WHERE (?1 = CASE WHEN substr(a.abs, -1, 1) = '/' THEN a.abs || f.path ELSE a.abs || '/' || f.path END) \
+                    OR (?1 = CASE WHEN a.real IS NOT NULL THEN CASE WHEN substr(a.real, -1, 1) = '/' THEN a.real || f.path ELSE a.real || '/' || f.path END ELSE NULL END) \
+                 LIMIT 1",
+                rusqlite::params![col],
+                |row| row.get::<_, i64>(0),
+            )
+        };
+        let file_id = match host_is(&host).or_else(|_| host_is(&slashed)) {
+            Ok(id) => id,
+            Err(_) => {
+                unmatched += 1;
+                continue;
+            }
         };
         let bytes = hex::decode(parts[8]).expect("a vendored fp16 vector, in hex");
         // `name` rows carry no vector (skipped above), and an `image` segment has NO loc at all:

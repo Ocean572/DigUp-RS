@@ -498,15 +498,20 @@ impl<'a> Searcher<'a> {
     }
 
     /// `reloadFiles` (Searcher.swift:92, #189): the file-kind and file-path maps, and
-    /// `vector_source`.
+    /// `vector_source`. v7 (#195): paths arrive ASSEMBLED (anchor + rel) — the map keeps the
+    /// same absolute shape v6 stored, so `under:`, the hits, and every client contract are
+    /// byte-identical.
     pub fn reload_files(&mut self) -> Result<(), crate::db::Error> {
         let mut rows: Vec<(i64, Option<String>, Option<String>)> = Vec::new();
-        self.store
-            .db
-            .query("SELECT id, kind, path FROM files", [], |row| {
-                rows.push((row.int(0), row.text(1), row.text(2)));
-                Ok(())
-            })?;
+        let sql = format!(
+            "SELECT f.id, f.kind, {} FROM files f{}",
+            self.store.abs_path_sql(),
+            self.store.anchors_join()
+        );
+        self.store.db.query(&sql, [], |row| {
+            rows.push((row.int(0), row.text(1), row.text(2)));
+            Ok(())
+        })?;
         self.file_kind.clear();
         self.file_path.clear();
         for (id, kind, path) in rows {
@@ -558,50 +563,51 @@ impl<'a> Searcher<'a> {
     /// covers (a vector-only image) reports metadata with `text: nil`.
     pub fn segment(&self, id: i64) -> Result<Option<SegmentDetail>, crate::db::Error> {
         let mut detail: Option<SegmentDetail> = None;
-        self.store.db.query(
-            "SELECT s.id, f.path, f.kind, s.kind, s.loc, s.loc_end, s.excerpt, f.mtime, f.size, f.info, \
+        let sql = format!(
+            "SELECT s.id, {}, f.kind, s.kind, s.loc, s.loc_end, s.excerpt, f.mtime, f.size, f.info, \
              coalesce(fts.original, fts.body) \
-             FROM segments s JOIN files f ON f.id = s.file \
+             FROM segments s JOIN files f ON f.id = s.file{} \
              LEFT JOIN fts ON fts.rowid = s.id WHERE s.id = ?",
-            [Sql::Int(id)],
-            |row| {
-                // Swift casts the info JSON to [String: String]; any non-string value fails
-                // the cast, and the whole map falls back to empty (the hit loop's rule).
-                let mut info: HashMap<String, String> = HashMap::new();
-                if let Some(json) = row.text(9) {
-                    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&json) {
-                        let mut all_strings = true;
-                        let mut entries: HashMap<String, String> = HashMap::new();
-                        for (key, value) in map {
-                            match value {
-                                Value::String(text) => {
-                                    entries.insert(key, text);
-                                }
-                                _ => all_strings = false,
+            self.store.abs_path_sql(),
+            self.store.anchors_join()
+        );
+        self.store.db.query(&sql, [Sql::Int(id)], |row| {
+            // Swift casts the info JSON to [String: String]; any non-string value fails
+            // the cast, and the whole map falls back to empty (the hit loop's rule).
+            let mut info: HashMap<String, String> = HashMap::new();
+            if let Some(json) = row.text(9) {
+                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&json) {
+                    let mut all_strings = true;
+                    let mut entries: HashMap<String, String> = HashMap::new();
+                    for (key, value) in map {
+                        match value {
+                            Value::String(text) => {
+                                entries.insert(key, text);
                             }
-                        }
-                        if all_strings {
-                            info = entries;
+                            _ => all_strings = false,
                         }
                     }
+                    if all_strings {
+                        info = entries;
+                    }
                 }
-                detail = Some(SegmentDetail {
-                    segment_id: row.int(0),
-                    path: row.text(1).unwrap_or_default(),
-                    kind: FileKind::parse(&row.text(2).unwrap_or_default()).unwrap_or(FileKind::Doc),
-                    segment: SegmentKind::parse(&row.text(3).unwrap_or_default())
-                        .unwrap_or(SegmentKind::Name),
-                    loc: (!row.is_null(4)).then(|| row.double(4)),
-                    loc_end: (!row.is_null(5)).then(|| row.double(5)),
-                    excerpt: row.text(6),
-                    text: row.text(10),
-                    modified: row.double(7),
-                    size: row.int(8),
-                    info,
-                });
-                Ok(())
-            },
-        )?;
+            }
+            detail = Some(SegmentDetail {
+                segment_id: row.int(0),
+                path: row.text(1).unwrap_or_default(),
+                kind: FileKind::parse(&row.text(2).unwrap_or_default()).unwrap_or(FileKind::Doc),
+                segment: SegmentKind::parse(&row.text(3).unwrap_or_default())
+                    .unwrap_or(SegmentKind::Name),
+                loc: (!row.is_null(4)).then(|| row.double(4)),
+                loc_end: (!row.is_null(5)).then(|| row.double(5)),
+                excerpt: row.text(6),
+                text: row.text(10),
+                modified: row.double(7),
+                size: row.int(8),
+                info,
+            });
+            Ok(())
+        })?;
         Ok(detail)
     }
 
@@ -1030,19 +1036,19 @@ impl<'a> Searcher<'a> {
             let mut modified = 0.0;
             let mut size = 0i64;
             let mut info_json: Option<String> = None;
-            self.store.db.query(
-                "SELECT path, kind, mtime, size, info FROM files WHERE id = ?",
-                [Sql::Int(file)],
-                |row| {
-                    path = row.text(0).unwrap_or_default();
-                    kind =
-                        FileKind::parse(&row.text(1).unwrap_or_default()).unwrap_or(FileKind::Doc);
-                    modified = row.double(2);
-                    size = row.int(3);
-                    info_json = row.text(4);
-                    Ok(())
-                },
-            )?;
+            let show_sql = format!(
+                "SELECT {}, f.kind, f.mtime, f.size, f.info FROM files f{} WHERE f.id = ?",
+                self.store.abs_path_sql(),
+                self.store.anchors_join()
+            );
+            self.store.db.query(&show_sql, [Sql::Int(file)], |row| {
+                path = row.text(0).unwrap_or_default();
+                kind = FileKind::parse(&row.text(1).unwrap_or_default()).unwrap_or(FileKind::Doc);
+                modified = row.double(2);
+                size = row.int(3);
+                info_json = row.text(4);
+                Ok(())
+            })?;
             // Swift casts the info JSON to [String: String]; any non-string value fails
             // the cast, and the whole map falls back to empty.
             let mut info: HashMap<String, String> = HashMap::new();

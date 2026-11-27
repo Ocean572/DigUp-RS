@@ -188,3 +188,87 @@ pub fn counters_consistency_sql() -> String {
 /// this clears them; the triggers' upserts re-create them on demand.
 pub const PRUNE_ZERO_SQL: &str =
     "DELETE FROM counters WHERE n = 0 AND leftsum = 0; DELETE FROM segcounters WHERE n = 0;";
+
+// MARK: Schema v7 — the portable layout (#195)
+
+/// v7 (#195): the store's crawl roots. `abs` is the root in the engine's ONE form
+/// (`to_slashes` + `standardize`); `real` carries the symlink-resolved spelling when it
+/// differs — the dual-spelling law `path_ranges` already rides (`/var` vs `/private/var`).
+/// `files.path` becomes RELATIVE to an anchor; answers assemble `abs + '/' + rel` at the row
+/// edge, so every client contract keeps its byte-identical absolute shape.
+pub const ANCHORS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS anchors(
+    id INTEGER PRIMARY KEY,
+    abs TEXT NOT NULL UNIQUE,
+    real TEXT
+);";
+
+/// The v7 `files` table (as `files_new`, swapped in by `portable_sql`): `path` is relative
+/// (`/`-separated, no leading slash, no `./`, no `..`, raw bytes — no Unicode normalization),
+/// `UNIQUE(anchor, path)` lets the same relative name stand under two roots, and `bucket` is
+/// the anchor-prefixed folder key `'<anchor id>/<bucket of rel>'` — a distinct byte string per
+/// (anchor, folder), so the counters, the segcounters, and all eight triggers ride v7
+/// UNCHANGED (schema law: their SQL is shared with v6 verbatim).
+pub fn files_v7_sql() -> String {
+    "CREATE TABLE files_new(
+    id INTEGER PRIMARY KEY,
+    anchor INTEGER NOT NULL REFERENCES anchors(id),
+    path TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mtime REAL NOT NULL,
+    inode INTEGER NOT NULL,
+    device INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',   -- pending | done | partial | skipped | failed
+    detail TEXT,
+    info TEXT,
+    indexed_at REAL,
+    bucket TEXT NOT NULL,
+    UNIQUE(anchor, path)
+);"
+    .to_string()
+}
+
+/// The fresh-store v6 → v7 conversion (a store built this round by `create_sql` +
+/// `migrate_counters`, so it is EMPTY when this runs: the copy rides an empty SELECT).
+/// All eight triggers come DOWN before the swap: the three segment triggers reference `files`
+/// in subqueries and go schema-invalid the moment the table drops (measured: the plain swap
+/// died `error in trigger seg_ai: no such table: main.files` on the very next write) —
+/// `counter_triggers_sql` re-creates the same eight on the new table (`IF NOT EXISTS` re-run
+/// precedent, `migrate_counters`). The counters tables and their fill stand untouched. The gate
+/// is the same law as v6: the counters check passed before the stamp (the fill ran in
+/// `migrate_counters`, an empty store is consistent).
+/// A store with rows converts through the migration verb (`migrate_portable_store`, S2), not
+/// here — reads never migrate, and opening a v6 store stays a verbatim v6 read.
+pub fn portable_sql() -> String {
+    let drop_triggers = [
+        "files_ai",
+        "files_ad",
+        "files_au_state",
+        "files_au_path",
+        "files_bd",
+        "seg_ai",
+        "seg_ad",
+        "seg_au_vec",
+    ]
+    .iter()
+    .map(|t| format!("DROP TRIGGER IF EXISTS {t};"))
+    .collect::<Vec<_>>()
+    .join("\n");
+    format!(
+        "{anchors}
+{files}
+INSERT INTO files_new(id, anchor, path, kind, size, mtime, inode, device, state, detail, info, indexed_at, bucket)
+SELECT id, 0, path, kind, size, mtime, inode, device, state, detail, info, indexed_at, bucket FROM files;
+{drop_triggers}
+DROP TABLE files;
+ALTER TABLE files_new RENAME TO files;
+CREATE INDEX IF NOT EXISTS files_inode ON files(device, inode);
+CREATE INDEX IF NOT EXISTS files_state ON files(state, kind);
+{triggers}
+PRAGMA user_version = 7;",
+        anchors = ANCHORS_TABLE_SQL,
+        files = files_v7_sql(),
+        drop_triggers = drop_triggers,
+        triggers = counter_triggers_sql()
+    )
+}

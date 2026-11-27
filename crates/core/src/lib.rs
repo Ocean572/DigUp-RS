@@ -5,6 +5,10 @@
 //! the FTS5 table + tokenizer, and the v6 counters + 8 triggers. The value model (`model`), text
 //! normalization (`search_text`), and the vector format (`vectors`) support it. Crawler, extractors,
 //! and search land in later phases.
+//!
+//! v7 (#195, round ten): the portable layout — `anchors` + anchor-relative `files.path` +
+//! `UNIQUE(anchor, path)`, answers assembled at the row edge. A v6 store opens and reads
+//! verbatim (`StoreMode::V6`); its write verbs refuse with the migration sentence.
 
 pub mod code;
 pub mod code_lookup;
@@ -40,5 +44,7 @@ pub mod xmlscan;
 pub mod zipfile;
 
 pub use db::{Database, Error, Result, Sql};
-pub use index_store::{Counts, IndexStore, CODE_FILE, MAIN_FILE, SCHEMA_VERSION};
+pub use index_store::{
+    Anchor, Counts, IndexStore, StoreMode, CODE_FILE, MAIN_FILE, SCHEMA_VERSION,
+};
 pub use model::{Candidate, FileKind, FileRecord, Modality, SegmentKind};
