@@ -354,7 +354,18 @@ impl IndexStore {
         .map(|t| format!("DROP TRIGGER IF EXISTS {t};"))
         .collect::<Vec<_>>()
         .join("\n");
-        self.db.transaction(|| {
+        // The measured cascade law (matrix 2026-11-27): DROP TABLE with `foreign_keys = ON`
+        // cascade-DELETEs every child row — in a transaction and with `defer_foreign_keys`
+        // alike (the drop's implicit delete fires the actions; deferral moves only the
+        // CHECK). On this store that is every segment, every vector, every name row — and the
+        // emptied rowid then RESTARTS ids at 1 for the next insert (measured: the "surviving"
+        // row was a fresh name segment for the migrated store's new file). The swap runs
+        // with FK OFF on THIS connection: the pragma is a no-op INSIDE a transaction, so it
+        // toggles around the swap tx (crash = connection dies = pragma dies; the window is
+        // exactly the swap). Nothing is lost by the swap itself — the copy preserves every
+        // id, so `segments.file` points at live rows when FK comes back ON.
+        self.db.execute("PRAGMA foreign_keys = OFF")?;
+        let result = self.db.transaction(|| {
             for table in ["counters", "segcounters"] {
                 self.db.execute(&format!(
                     "UPDATE {table} SET bucket = (SELECT m.new FROM migration_map m WHERE m.old = {table}.bucket) \
@@ -378,7 +389,9 @@ impl IndexStore {
             self.db.run("DELETE FROM meta WHERE key = 'portable_migration'", [])?;
             self.db.execute("PRAGMA user_version = 7")?;
             Ok(())
-        })
+        });
+        self.db.execute("PRAGMA foreign_keys = ON")?;
+        result
     }
 
     fn migrate(&self) -> Result<()> {

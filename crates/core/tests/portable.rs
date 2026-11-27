@@ -789,3 +789,89 @@ fn a_migration_without_roots_parent_anchors_every_row() {
     );
     assert!(store.counters_are_consistent().unwrap());
 }
+
+/// Migration on a store WITH segments — the measured cascade law (matrix, 2026-11-27):
+/// `DROP TABLE` with `foreign_keys = ON` cascade-DELETEs every child row (in-tx and
+/// `defer_foreign_keys` alike), the emptied rowid restarts ids at 1, and the migration
+/// silently loses every vector, name row and fts row. The swap runs with FK OFF around its
+/// transaction. This pin is the seal: segment ids, vector BYTES, name rows and fts rows all
+/// stand byte-identically after migration, and the ids the FK points at stand with them.
+#[test]
+fn migration_preserves_segments_vectors_and_name_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(
+        tmp.path(),
+        &[("/data/a.jpg", "image"), ("/data/b.png", "image")],
+    );
+    {
+        let conn = Connection::open(tmp.path().join(digup_core::MAIN_FILE)).unwrap();
+        conn.execute(
+            "INSERT INTO segments(id, file, kind, modality, excerpt) VALUES(1, 1, 'name', 'text', 'a jpg')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO segments(id, file, kind, modality, vec) VALUES(2, 1, 'image', 'image', ?1)",
+            rusqlite::params![vec![0x55u8; 1536]],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO fts(rowid, name, body, original) VALUES(2, '', 'alpha text', 'alpha text')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(&digup_core::schema::fill_counters_sql())
+            .unwrap();
+    }
+    let vec_before: Vec<u8> = Connection::open(tmp.path().join(digup_core::MAIN_FILE))
+        .unwrap()
+        .query_row("SELECT vec FROM segments WHERE id = 2", [], |r| r.get(0))
+        .unwrap();
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store.set_scope(Some(vec!["/data".to_string()])).unwrap();
+    store.insert(&cand("/data/c.png", FileKind::Image)).unwrap();
+    assert_eq!(store.db.user_version().unwrap(), 7);
+    let conn = open_conn(&store);
+    let segs: Vec<(i64, i64, String)> = conn
+        .prepare("SELECT id, file, kind FROM segments ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        segs,
+        vec![
+            (1, 1, "name".to_string()),
+            (2, 1, "image".to_string()),
+            (3, 3, "name".to_string()),
+        ],
+        "the v6 segment rows stand with their ids; the inserted row adds its name row"
+    );
+    let vec_after: Vec<u8> = conn
+        .query_row("SELECT vec FROM segments WHERE id = 2", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        vec_after, vec_before,
+        "the vector bytes stand verbatim (the v7 parity law: vec bytes pre/post migration are EXACT)"
+    );
+    let body: String = conn
+        .query_row("SELECT body FROM fts WHERE rowid = 2", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(body, "alpha text", "the fts row survives the swap");
+    assert!(store.counters_are_consistent().unwrap());
+    let full = store.full_counts().unwrap();
+    assert_eq!(
+        (full.segments, full.vectors),
+        (1, 1),
+        "content segments (name rows excluded from `segments`, the counts law) + vectors exact"
+    );
+    // FK came back ON (the connection contract) and the new writes enforce it.
+    let fk: i64 = conn
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        fk, 1,
+        "the swap's FK window closed — the connection is back on the contract"
+    );
+}
