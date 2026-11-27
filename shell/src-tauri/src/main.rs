@@ -1080,7 +1080,11 @@ fn watch_folders(app: &AppHandle) {
     let index = shell.options.index_folder();
     *shell.watcher.lock().unwrap() = (!folders.is_empty()).then(|| {
         let app = app.clone();
-        FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::MAX, move || run_index(&app))
+        // Issue #7b: a finite ceiling, like the code watcher's measured "ten at most".
+        // With Duration::MAX a stream that never goes quiet (a sync client writing files,
+        // a long recording, a torrent) keeps resetting the 2-second timer and sync is
+        // delayed indefinitely; a burst now runs sync at most ten minutes after it began.
+        FolderWatcher::start(&folders, skipped, index.clone(), Duration::from_secs(2), Duration::from_secs(600), move || run_index(&app))
     });
     *shell.code_watcher.lock().unwrap() = (!code_folders.is_empty()).then(|| {
         let app = app.clone();

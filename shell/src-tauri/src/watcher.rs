@@ -1,5 +1,6 @@
 //! Watching the chosen folders: a change where indexing reads asks the index helper to sync, two seconds after the last
-//! one (a camera import or an unzip is a burst of events); in code search's folders a minute after the code goes quiet
+//! one, ten at most (a camera import or an unzip is a burst of events; issue #7b: a stream of changes that never goes
+//! quiet — a sync client, a recording — must not starve sync forever); in code search's folders a minute after the code goes quiet
 //! (ten at most), as on the Mac, so the code index doesn't follow every save. `notify` uses ReadDirectoryChangesW on Windows, inotify on
 //! Linux, FSEvents on a Mac. Changes where the crawl never goes are passed over (the engine's `Rules.isWalked`): hidden
 //! folders (a leading dot, or Windows' hidden flag, which AppData has), developer folders, `.noindex` folders, skipped

@@ -296,3 +296,39 @@ on these edges; the parity probes never walk them. Host gates per branch: `cargo
 --workspace` (model-pinned tests on, `DIGUP_DEVICE=cpu DIGUP_THREADS=8`) + `node --test
 shell/tests/*.test.cjs` + `cargo check` in `shell/src-tauri`, all green; the E2E lines
 are in `.agent-journal.md` (the measured repro lines for #1/#2/#3, before/after).
+
+## GitHub issues #7(b) and #8 — user-directed fixes (2026-11-26, branch `fix/issues-7b-8`)
+
+Two review findings from infectiousstupidity's issues #7 and #8, verified line-for-line
+against the code and fixed on user direction. Both behaviors are INHERITED Swift design,
+confirmed against `Rules.swift` / `Files+Portable.swift` / `main` of the era on
+`swift-reference` — the Rust port faithfully mirrors them; the fixes are deliberate
+divergences at edges the parity gates do not exercise, the way issues #1–#3 were.
+
+- **#8** (privacy): `classifyCode` checks `isSecret` (`Rules.swift:80`); the portable
+  `classify` never did — so names the rule calls secret (`secrets.txt`, `credentials.md`,
+  `id_rsa.md`, `htpasswd.txt`, `.npmrc*`, document extensions) were indexed with full text
+  extraction in NORMAL mode, while `is_secret`'s own comment reads "never read, wherever
+  they are". `classify` now fires the same check with the same reason string
+  ("key or password file"), relayed verbatim; the extension-based secret types
+  (`pem/key/kdbx/…`) were already inert in normal mode (nothing indexed their extensions);
+  rows indexed earlier drop out at the next sync. Name rule unchanged: prefixes +
+  extensions, not words; a folder named `Secrets` stays readable like the code path.
+- **#7b** (watcher starvation): the shell's media watcher passed `Duration::MAX` as its
+  debounce ceiling (the code watcher has the finite 600 s "ten at most"). With continuous
+  churn inside walked folders (a sync client, a recording), the 2-second-quiet loop never
+  expires and sync is delayed indefinitely; the ceiling is now finite (600 s).
+
+Issue #7's bigger ask (scoped, incremental sync) rides its own stacked branch
+(`feature/issue-7a-incremental-sync`): a wire-contract feature, not a defect fix.
+
+### Issue #8 and the ⑨ pins (2026-11-26)
+
+The secret rule in `classify()` lands on exactly ONE pinned line: the suite corpus carries
+`repo/id_ed25519` — the Swift main-store crawl left it out with reason `"other type"`; the
+Rust crawl now leaves it out with reason `"key or password file"`. Rows and vectors are
+identical (the file is left out on BOTH sides); the code-store fixture always carried
+`"key or password file"` (Swift's `classify_code` had the check) and the `skipped`
+kind-histogram is untouched. `index-main-events.jsonl`'s main-crawl `leftOut` histogram is
+updated to the new reason — the pin carries the disclosed divergence, the issues #1–#3
+pattern. `crawl_line_matches` + `cross_engine_index_build` measure green with it.
