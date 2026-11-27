@@ -1092,6 +1092,7 @@ fn watch_folders(app: &AppHandle) {
             index.clone(),
             Duration::from_secs(2),
             Duration::from_secs(600),
+            true,
             move |dirs: &[PathBuf], full: bool| run_index_scoped(&app, dirs, full),
         )
     });
@@ -1104,7 +1105,10 @@ fn watch_folders(app: &AppHandle) {
             Duration::from_secs(60),
             Duration::from_secs(600),
             // The code index keeps its full-folder sync: issue #7a scopes
-            // only the media watcher, whose walks are the expensive ones.
+            // only the media watcher, whose walks are the expensive ones. `false` asks the
+            // watcher for no fold at all — the review caught it computing the burst's
+            // folders for a callback that discards them.
+            false,
             move |_: &[PathBuf], _: bool| sync_code(&app),
         )
     });

@@ -272,3 +272,225 @@ fn a_scoped_sync_reconciles_only_the_directories_the_watcher_named() {
     let _ = std::fs::remove_dir_all(&twin);
     let _ = std::fs::remove_dir_all(&pair);
 }
+
+#[test]
+fn a_scope_the_chosen_folders_do_not_contain_is_answered_as_a_full_sync() {
+    // The review's finding 2, engine side: the crawl and the prune run on exactly what the
+    // verb names, so a scope above the chosen folders (`sync ["/"]`, `sync ["/home/secret"]`,
+    // a helper written by anything that can reach its stdin) indexes trees the user never
+    // chose and deletes rows for paths the sync has no business touching. It is answered as
+    // the full sync: the roots, never less.
+    let work = temp_folder("clamp");
+    let corpus = work.join("corpus");
+    let stray = work.join("stray");
+    let index = work.join("index");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::create_dir_all(&stray).unwrap();
+    std::fs::create_dir_all(&index).unwrap();
+    write(&corpus, "a/keep.jpg", b"not really a jpeg");
+    write(&stray, "private.txt", b"never chosen");
+    let indexer = model_free_indexer(index.clone());
+    let in_corpus = |indexer: &Indexer| {
+        indexer
+            .store
+            .files_under(&[slash(&corpus)])
+            .expect("rows")
+            .len()
+    };
+    let full = indexer
+        .sync(std::slice::from_ref(&corpus), &mut |_| {})
+        .expect("the full sync");
+    assert_eq!(full.added, 1);
+    assert_eq!(
+        indexer
+            .store
+            .files_under(&[slash(&work)])
+            .expect("rows")
+            .len(),
+        1,
+        "the full sync never indexed the folder outside the chosen one"
+    );
+    // The out-of-roots scope, and the filesystem root itself: both answer the full sync.
+    for escape in [work.clone(), PathBuf::from("/")] {
+        let escaped = indexer
+            .sync_scoped(std::slice::from_ref(&corpus), &[escape], &mut |_| {})
+            .expect("the escaped scope");
+        assert_eq!(
+            (escaped.added, escaped.removed),
+            (0, 0),
+            "an out-of-roots scope is the whole set's job, and the whole set has nothing to do"
+        );
+        assert_eq!(in_corpus(&indexer), 1, "the chosen folder's rows stand");
+        assert_eq!(
+            indexer
+                .store
+                .files_under(&[slash(&work)])
+                .expect("rows")
+                .len(),
+            1,
+            "and nothing outside them entered"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+#[test]
+fn a_scope_folder_keeps_the_full_crawls_dataset_and_project_verdict() {
+    // The review's finding 3: the crawl treats what it walks as ITS roots, and the two
+    // root-exempt rules key on that — a chosen root is never a dataset, a chosen root's own
+    // files are not "inside a code project". A scope dir handed to `crawl` is therefore a
+    // root: the recorder's frame dump and the media inside a code project the user chose —
+    // folders the FULL crawl excludes — get indexed and embedded by the scoped sync (the
+    // model is the expensive part) and deleted by the next full crawl: add, embed, prune,
+    // repeat, every burst. The rules ride the folders the user chose.
+    let work = temp_folder("rules");
+    let corpus = work.join("corpus");
+    let index = work.join("index");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::create_dir_all(&index).unwrap();
+    write(&corpus, "pile/clip_000000.mp4", b"not really a video");
+    for i in 1..=300 {
+        write(
+            &corpus,
+            &format!("pile/clip_{i:06}.mp4"),
+            b"not really a video",
+        );
+    }
+    // A code project inside the chosen folder, with media in it.
+    std::fs::create_dir_all(corpus.join("repo/.git")).unwrap();
+    write(&corpus, "repo/media/photo.jpg", b"not really a jpeg");
+    write(&corpus, "own/photo.jpg", b"not really a jpeg");
+
+    let indexer = model_free_indexer(index.clone());
+    let full = indexer
+        .sync(std::slice::from_ref(&corpus), &mut |_| {})
+        .expect("the full sync");
+    assert_eq!(
+        full.added, 1,
+        "the full crawl keeps the user's own photo and leaves out the dataset pile and the \
+         project's media"
+    );
+
+    // The two churn shapes, scoped: the pile, and the project's media folder.
+    let scoped = indexer
+        .sync_scoped(
+            std::slice::from_ref(&corpus),
+            &[corpus.join("pile"), corpus.join("repo/media")],
+            &mut |_| {},
+        )
+        .expect("the scoped sync");
+    assert_eq!(
+        (scoped.added, scoped.removed),
+        (0, 0),
+        "the scope dirs are treated as what they are: INSIDE the chosen folder, so the full \
+         crawl's verdict rides and nothing is embedded to be pruned next time"
+    );
+    assert_eq!(
+        indexer
+            .store
+            .files_under(&[slash(&corpus)])
+            .expect("rows")
+            .len(),
+        1,
+        "the dataset pile and the project's media stay out of the index"
+    );
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+#[test]
+fn a_scope_edge_is_a_folder_boundary_not_a_string_prefix() {
+    // The reviewer verified the range scan's boundary (`bound` = the folder plus a trailing
+    // slash, the upper bound `bound + char::MAX`) and asked for it PINNED, because the whole
+    // no-over-prune argument rests on it: a scope of `/a/b` must never touch the rows of the
+    // sibling `/a/bc`, which shares its string prefix.
+    let work = temp_folder("boundary");
+    let corpus = work.join("corpus");
+    let index = work.join("index");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::create_dir_all(&index).unwrap();
+    write(&corpus, "b/one.jpg", b"not really a jpeg");
+    write(&corpus, "bc/two.jpg", b"not really a jpeg");
+    write(&corpus, "b/three.jpg", b"not really a jpeg");
+    let indexer = model_free_indexer(index.clone());
+    let full = indexer
+        .sync(std::slice::from_ref(&corpus), &mut |_| {})
+        .expect("the full sync");
+    assert_eq!(full.added, 3);
+    // A delete inside the SIBLING, with only `/a/b` scoped: the sibling's rows stand — the
+    // scope's range ends at the component boundary.
+    std::fs::remove_file(corpus.join("bc/two.jpg")).expect("unlink the sibling's file");
+    let scoped = indexer
+        .sync_scoped(
+            std::slice::from_ref(&corpus),
+            &[corpus.join("b")],
+            &mut |_| {},
+        )
+        .expect("the scoped sync");
+    assert_eq!(
+        scoped.removed, 0,
+        "the sibling's vanished row is not this scope's business — a full sync prunes it"
+    );
+    let rows = indexer.store.files_under(&[slash(&corpus)]).expect("rows");
+    assert_eq!(
+        rows.len(),
+        3,
+        "/a/bc's row survives a /a/b scope (the string-prefix leak would have deleted it)"
+    );
+    assert!(rows.iter().any(|row| row.path.ends_with("bc/two.jpg")));
+    // And the scope's own delete prunes, exactly: the boundary cuts both ways.
+    std::fs::remove_file(corpus.join("b/one.jpg")).expect("unlink the scoped file");
+    let scoped = indexer
+        .sync_scoped(
+            std::slice::from_ref(&corpus),
+            &[corpus.join("b")],
+            &mut |_| {},
+        )
+        .expect("the scoped sync of the real delete");
+    assert_eq!(scoped.removed, 1, "the scope's own delete prunes");
+    let _ = std::fs::remove_dir_all(&work);
+}
+
+#[test]
+fn a_file_entering_the_scope_from_outside_repaths_its_row() {
+    // The review's finding 7: the inode lookup rides the scope's rows, so a file that moves
+    // INTO the scope from a folder the watcher never reported (notify adds watches lazily for
+    // newly created folders; FSEvents coalesces on a Mac) has no row in scope: a second row
+    // is inserted while the old path keeps standing inside the store's scope, so search
+    // answers a path that no longer exists and the open fails until a full sync cleans it.
+    // The schema indexes `(device, inode)` for exactly this lookup.
+    let work = temp_folder("ghost");
+    let corpus = work.join("corpus");
+    let index = work.join("index");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::create_dir_all(&index).unwrap();
+    write(&corpus, "seen/keep.jpg", b"not really a jpeg");
+    write(&corpus, "dark/keep.jpg", b"not really a jpeg");
+    let indexer = model_free_indexer(index.clone());
+    let full = indexer
+        .sync(std::slice::from_ref(&corpus), &mut |_| {})
+        .expect("the full sync");
+    assert_eq!(full.added, 2);
+    // A move from the unwatched folder into the scoped one: one burst, one side.
+    std::fs::create_dir_all(corpus.join("lit")).unwrap();
+    std::fs::rename(corpus.join("dark/keep.jpg"), corpus.join("lit/keep.jpg")).expect("the move");
+    let scoped = indexer
+        .sync_scoped(
+            std::slice::from_ref(&corpus),
+            &[corpus.join("lit")],
+            &mut |_| {},
+        )
+        .expect("the scoped sync");
+    assert_eq!(
+        (scoped.added, scoped.moved, scoped.removed),
+        (0, 1, 0),
+        "the row rides the inode across the scope's edge: no second row, no embedding bill"
+    );
+    let rows = indexer.store.files_under(&[slash(&corpus)]).expect("rows");
+    assert_eq!(rows.len(), 2, "no ghost row left behind");
+    assert!(
+        !rows.iter().any(|row| row.path.ends_with("dark/keep.jpg")),
+        "the old path is gone from the index — search cannot answer a file that is not there"
+    );
+    assert!(rows.iter().any(|row| row.path.ends_with("lit/keep.jpg")));
+    let _ = std::fs::remove_dir_all(&work);
+}

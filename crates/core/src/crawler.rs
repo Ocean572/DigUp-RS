@@ -252,6 +252,35 @@ pub fn crawl(
     options: &IndexOptions,
     progress: &mut dyn FnMut(&CrawlProgress),
 ) -> CrawlReport {
+    crawl_with(roots, roots, options, progress)
+}
+
+/// Issue #7a: crawl the `walk` folders under the rules of the folders the USER chose: the
+/// scope is what gets walked, the chosen folders are what the ROOT-level rules key on.
+/// Handing `crawl` the scope as its own chosen set makes the scope folder a root, and the
+/// two root-exempt rules then flip for it — a chosen root is never a dataset
+/// (`rules::dataset_folders`' roots exclusion) and a chosen root's own files are not
+/// "inside a code project" (`is_in_project_under`'s `folder == root` boundary). A scope dir
+/// that a full crawl excludes — a recorder's frame dump, a sync client's numbered pile,
+/// the media inside a code project the user chose — is then indexed and EMBEDDED by the
+/// scoped sync (the model is the expensive part) and deleted by the next full crawl: add,
+/// embed, prune, repeat, every burst. With the chosen folders as the rules' set the scope
+/// is treated as what it is: inside its root.
+pub fn crawl_scoped(
+    walk: &[PathBuf],
+    rules: &[PathBuf],
+    options: &IndexOptions,
+    progress: &mut dyn FnMut(&CrawlProgress),
+) -> CrawlReport {
+    crawl_with(walk, rules, options, progress)
+}
+
+fn crawl_with(
+    roots: &[PathBuf],
+    rules: &[PathBuf],
+    options: &IndexOptions,
+    progress: &mut dyn FnMut(&CrawlProgress),
+) -> CrawlReport {
     let home = paths::home().to_string_lossy().into_owned();
     let mut report = CrawlReport::default();
     let mut project_roots: HashSet<String> = HashSet::new();
@@ -274,9 +303,13 @@ pub fn crawl(
         .iter()
         .map(|root| PathBuf::from(paths::standardize(&root.to_string_lossy())))
         .collect();
-    let root_paths: HashSet<String> = roots
+    // Issue #7a: the ROOT-level rules key on the folders the USER chose (`crawl_scoped`),
+    // not on the folders the scope happens to walk. With the full crawl `rules == roots`,
+    // so every pinned fixture, every `leftOut` key and every dataset verdict is byte-for-byte
+    // the Swift-era value.
+    let root_paths: HashSet<String> = rules
         .iter()
-        .map(|root| root.to_string_lossy().into_owned())
+        .map(|root| paths::standardize(&root.to_string_lossy()))
         .collect();
     // Issue #3 — the deepest chosen root containing a path is ITS root: a folder chosen
     // inside another chosen folder is the more specific instruction, and every per-path
@@ -285,6 +318,30 @@ pub fn crawl(
     // reports exactly as before. Sorted longest-first so the first match is the deepest.
     let mut sorted_roots: Vec<String> = root_paths.iter().cloned().collect();
     sorted_roots.sort_by_key(|root| std::cmp::Reverse(root.chars().count()));
+    // Issue #7a: the code-project rule reads the markers a WALK SEES, and the folders above
+    // the scope dir are exactly what a scope walk does not see — media inside a code project
+    // the user chose is a project root's DESCENDANT, so from the scope dir down the marker is
+    // invisible and the media indexes here and goes on the next full crawl. Seed the markers
+    // along the chain from each walked folder up to the chosen folder containing it: a handful
+    // of listings per scope dir, not a walk. The full crawl is unaffected — `is_in_project_under`
+    // stops AT the root (`folder == root` is false before the marker set is read), so a root's
+    // own marker is never consulted, exactly as the walk that never enumerates the root leaves it.
+    for root in &roots {
+        let mut folder = root.to_string_lossy().into_owned();
+        loop {
+            if rules::is_project_root(&folder) {
+                project_roots.insert(folder.clone());
+            }
+            if root_paths.contains(&folder) {
+                break;
+            }
+            let parent = paths::parent(&folder);
+            if parent == folder {
+                break;
+            }
+            folder = parent;
+        }
+    }
     let mut checked: i64 = 0;
 
     for root in roots {

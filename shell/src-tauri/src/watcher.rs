@@ -58,17 +58,24 @@ impl FolderWatcher {
     /// the events, so the helper reconciles the neighborhood the events touched (one walk of
     /// a folder covers everything inside it: a dir whose parent also changed folds into the
     /// parent) — and `full` says when the whole set is the job: dropped events, a
-    /// too-wide burst, or a scope the collapse gave up on.
+    /// too-wide burst, a scope the collapse gave up on, or `scope = false`, which asks for
+    /// none of that work at all (the code watcher's sync is the cheap walk: it never scopes,
+    /// so it never pays for a fold it discards).
     pub fn start(
         folders: &[PathBuf],
         skipped: Vec<PathBuf>,
         ignore: Option<PathBuf>,
         quiet: Duration,
         longest: Duration,
+        scope: bool,
         changed: impl Fn(&[PathBuf], bool) + Send + 'static,
     ) -> FolderWatcher {
         let (sender, receiver) = mpsc::channel::<WatchEvent>();
         let roots = folders.to_vec();
+        // The burst's folders are clamped to these same chosen folders (below): the watcher
+        // thread needs the list the events were filtered by, and the notify closure takes its
+        // own copy of it.
+        let scope_roots = roots.clone();
         let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
             let Ok(event) = result else { return };
             if event.kind.is_access() {
@@ -118,10 +125,10 @@ impl FolderWatcher {
                         Err(_) => break,
                     }
                 }
-                let (dirs, full) = if full {
+                let (dirs, full) = if full || !scope {
                     (Vec::new(), true)
                 } else {
-                    collapse_to_dirs(&paths)
+                    collapse_to_dirs(&paths, &scope_roots)
                 };
                 changed(&dirs, full);
                 event = match receiver.recv() {
@@ -140,14 +147,54 @@ impl FolderWatcher {
 /// (issue #7a — one walk of a folder covers everything inside it, so a dir whose parent also
 /// changed folds into the parent; distant folders stay separate). More kept dirs than
 /// `MAX_SCOPED_DIRS` answers `(empty, true)`: the whole crawl is then the cheaper walk.
-fn collapse_to_dirs(paths: &[PathBuf]) -> (Vec<PathBuf>, bool) {
+/// So is a burst whose folder names are not valid UTF-8, and an event the chosen folders do
+/// not contain: the plain `sync` verb carries no paths, so giving up on the scope is always
+/// answerable, and it is answered by the full crawl — never by a narrower one.
+fn collapse_to_dirs(paths: &[PathBuf], roots: &[PathBuf]) -> (Vec<PathBuf>, bool) {
     let mut dirs: Vec<PathBuf> = Vec::new();
     for path in paths {
-        if let Some(parent) = path.parent() {
-            if !dirs.iter().any(|kept| kept == parent) {
-                dirs.push(parent.to_path_buf());
+        // The event's own folder, CLAMPED to the chosen folder it lives in: notify names the
+        // watched folder itself for several events (`DELETE_SELF` on a deleted root,
+        // `MOVE_SELF` on a renamed one, and the nameless ATTRIB/MODIFY spellings — a chmod
+        // or touch of a root, a sync client stamping a folder's mtime, a download tool), so
+        // `parent()` of such an event is the chosen root's PARENT. Handing the helper a scope
+        // above the folders the user chose indexes the neighbour trees (rows its own scope
+        // never embeds, so they sit in `files` forever), prunes the chosen root's rows by
+        // rules the parent does not see (a code project, a dataset, a root-exempt folder —
+        // add them, embed them, prune them, repeat), bypasses the ejected-drive keep (the
+        // keep is keyed to the CHOSEN root), and for a root at the filesystem's top crawls
+        // the whole disk. The deepest chosen root containing the event is the scope's floor.
+        let Some(root) = roots
+            .iter()
+            .filter(|root| path.starts_with(root))
+            .max_by_key(|root| root.components().count())
+        else {
+            return (Vec::new(), true);
+        };
+        let dir = match path.parent() {
+            // The event's own folder, when that is at or inside the chosen folder the event
+            // lives in (component-wise `starts_with`: `/a/bc` is not inside `/a/b`).
+            Some(parent) if parent.starts_with(root) => parent.to_path_buf(),
+            // The event NAMED the chosen folder itself — its scope is that folder, never its
+            // parent.
+            _ => root.clone(),
+        };
+        if !dirs.iter().any(|kept| kept == &dir) {
+            dirs.push(dir.clone());
+            // The cap belongs HERE, where the dirs are collected: checking it only in the
+            // fold's second pass paid an O(n²) dedupe of a whole queue's worth of events
+            // (inotify's queue is ~16k) before giving up on the scope.
+            if dirs.len() > MAX_SCOPED_DIRS {
+                return (Vec::new(), true);
             }
         }
+    }
+    // The scope rides a JSON array on the helper's stdin, and serde serializes a path by its
+    // UTF-8 `str` — a folder named by an SMB/FTP/GBK restore (the common source on Linux)
+    // makes the verb fail to build, and this tree would never sync again, every burst
+    // answering the same error. A burst that touches one is the whole set's job.
+    if dirs.iter().any(|dir| dir.to_str().is_none()) {
+        return (Vec::new(), true);
     }
     dirs.sort_by_key(|dir| dir.components().count());
     let mut kept: Vec<PathBuf> = Vec::new();
@@ -156,9 +203,6 @@ fn collapse_to_dirs(paths: &[PathBuf]) -> (Vec<PathBuf>, bool) {
             continue;
         }
         kept.push(dir);
-        if kept.len() > MAX_SCOPED_DIRS {
-            return (Vec::new(), true);
-        }
     }
     (kept, false)
 }
@@ -226,18 +270,22 @@ mod tests {
     #[test]
     fn a_burst_collapses_to_the_outermost_dirs() {
         let p = |s: &str| PathBuf::from(s);
+        let roots = vec![p("/home/me"), p("/mnt/nas")];
         // Two sibling folders' files: the dirs that saw events stay SEPARATE scopes —
         // scoping is the neighborhood the events touched, never a wider walk (folding
         // siblings to their shared parent would scope MORE folders than the events name).
-        let (dirs, full) = collapse_to_dirs(&[p("/home/me/a/x.png"), p("/home/me/b/y.png")]);
+        let (dirs, full) = collapse_to_dirs(&[p("/home/me/a/x.png"), p("/home/me/b/y.png")], &roots);
         assert!(!full);
         assert_eq!(dirs, vec![p("/home/me/a"), p("/home/me/b")]);
         // Distant folders stay separate — each is its own scope.
-        let (dirs, full) = collapse_to_dirs(&[p("/home/me/a/x.png"), p("/mnt/nas/photos/z.jpg")]);
+        let (dirs, full) = collapse_to_dirs(
+            &[p("/home/me/a/x.png"), p("/mnt/nas/photos/z.jpg")],
+            &roots,
+        );
         assert!(!full);
         assert_eq!(dirs, vec![p("/home/me/a"), p("/mnt/nas/photos")]);
         // A folder and a deeper folder inside it: the outer walk covers the inner.
-        let (dirs, full) = collapse_to_dirs(&[p("/a/b/one.txt"), p("/a/b/c/two.txt")]);
+        let (dirs, full) = collapse_to_dirs(&[p("/a/b/one.txt"), p("/a/b/c/two.txt")], &[p("/a")]);
         assert!(!full);
         assert_eq!(dirs, vec![p("/a/b")]);
         // A burst spread wider than the scoped sync is worth: the whole crawl (issue #7a:
@@ -245,8 +293,61 @@ mod tests {
         let many: Vec<PathBuf> = (0..=MAX_SCOPED_DIRS)
             .map(|i| p(&format!("/root/d{i}/f.txt")))
             .collect();
-        let (dirs, full) = collapse_to_dirs(&many);
+        let (dirs, full) = collapse_to_dirs(&many, &[p("/root")]);
         assert!(full, "a 201-folder burst scopes to nothing");
+        assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn a_scope_never_leaves_the_chosen_folders() {
+        let p = |s: &str| PathBuf::from(s);
+        // notify names the WATCHED FOLDER ITSELF for several events (`DELETE_SELF`,
+        // `MOVE_SELF`, the nameless ATTRIB/MODIFY spellings: a chmod of a root, a sync client
+        // stamping its mtime). The review measured the leak: the parent of such an event is
+        // the chosen root's PARENT, and a parent scope indexes the neighbour trees, prunes
+        // the chosen root's own rows by rules the parent cannot see, bypasses the
+        // ejected-drive keep, and for a root at the filesystem's top crawls the whole disk.
+        // The clamp: an event naming the chosen folder scopes THAT folder.
+        let roots = vec![p("/home/me/Pictures")];
+        let (dirs, full) = collapse_to_dirs(&[p("/home/me/Pictures")], &roots);
+        assert!(!full);
+        assert_eq!(dirs, vec![p("/home/me/Pictures")], "never /home/me");
+        // The same for a folder chosen at the filesystem's top (the bench shape): the scope
+        // is the chosen folder, never `/`.
+        let (dirs, full) = collapse_to_dirs(&[p("/data"), p("/data/photos/x.jpg")], &[p("/data")]);
+        assert!(!full);
+        assert_eq!(dirs, vec![p("/data"), p("/data/photos")]);
+        // A folder chosen INSIDE another chosen folder: the deepest instruction owns its
+        // events (the crawler's own rule, issue #3) — the shared folder's event does not
+        // scope the whole home tree.
+        let roots = vec![p("/home/me"), p("/home/me/Pictures/.private/shared")];
+        let (dirs, full) = collapse_to_dirs(
+            &[p("/home/me/Pictures/.private/shared/photo.jpg")],
+            &roots,
+        );
+        assert!(!full);
+        assert_eq!(dirs, vec![p("/home/me/Pictures/.private/shared")]);
+        // The component boundary, at the shell edge too: a path that is not inside any chosen
+        // folder (`/a/bc` beside the chosen `/a/b`) is not a scope — the burst is the whole
+        // set's job, answered by a verb that names no paths at all.
+        let (dirs, full) = collapse_to_dirs(&[p("/a/bc/x.jpg")], &[p("/a/b")]);
+        assert!(full);
+        assert!(dirs.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_scope_that_cannot_be_written_is_the_whole_set() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
+        // A folder named by an SMB/FTP/GBK restore (the common source on Linux) is not valid
+        // UTF-8, and serde serializes a path by its UTF-8 `str`: the scoped verb cannot be
+        // built, and the tree would never sync again — every burst in it answering the same
+        // error. The collapse gives up on the scope, and the plain `sync` line needs no paths.
+        let raw = OsString::from_vec(vec![b'/a/', 0xff, 0xfe, b'/x.jpg']);
+        let (dirs, full) = collapse_to_dirs(&[PathBuf::from(raw)], &[PathBuf::from("/a")]);
+        assert!(full, "a non-UTF-8 scope is the whole set's job");
         assert!(dirs.is_empty());
     }
 }

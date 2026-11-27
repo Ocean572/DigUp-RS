@@ -375,3 +375,61 @@ swaps and drains under that lock, and a scope arriving while a full request wait
 nothing. The seam is crate-internal again (`pub(crate)`, the verb suite rides it from
 inside the crate — a test must not widen a daemon's internals into the public API).
 Pinned: `verb_tests`' plain-then-scope order, and "a taken scope leaves no request behind".
+**A scope never leaves the folders the user chose.** The watcher built each burst's dirs from
+`parent()`, and notify names the WATCHED FOLDER ITSELF for several events (`DELETE_SELF` on a
+deleted root, `MOVE_SELF` on a renamed one, the nameless ATTRIB/MODIFY spellings — a chmod of
+a root, a sync client stamping a folder's mtime). The parent of such an event is the chosen
+root's PARENT, and the helper crawled and pruned exactly what it was handed: the neighbour
+trees indexed (rows the helper's own scope never embeds, so they sit in `files` forever), the
+chosen root's rows pruned by rules the parent cannot see, the ejected-drive keep bypassed (the
+keep is keyed to the CHOSEN root), and a root at the filesystem's top → a walk of `/`. The fix
+is the clamp at both layers: `collapse_to_dirs` takes the chosen roots and clamps every dir to
+the deepest one containing the event (an event naming a folder scopes THAT folder), and
+`sync_scoped` answers a verb naming a folder outside the roots as a full sync — the roots,
+never less. Pinned: the scope-above-the-root transition, the component boundary (`/a/b`
+pruning nothing under `/a/bc`, which shares its string prefix — the reviewer verified the
+range scan's `bound` + `char::MAX` upper bound and asked for it pinned, because the whole
+no-over-prune argument rests on it), and the shell's own clamp test.
+
+**The root-level rules ride the chosen folders.** A scoped crawl handed the scope to `crawl`
+declared the scope dir a ROOT, and the two root-exempt rules key on that: a chosen root is
+never a dataset, a chosen root's own files are not "inside a code project". A scope dir the
+full crawl excludes — a recorder's frame dump, a sync client's numbered pile, the media inside
+a code project the user chose — was therefore indexed and EMBEDDED by the scoped sync (the
+model is the expensive part) and deleted by the next full crawl: add, embed, prune, repeat,
+every burst, with the doc comment promising the opposite. `crawler::crawl_scoped(walk, rules,
+…)` walks the scope under the rules of the user's folders (with `rules == walk` the full crawl
+is byte-for-byte what it was, which the pinned crawl lines and the ⑨ gate measure). The
+code-project marker above the scope is seeded along the chain from the chosen folder down to
+the scope dir — a scope walk never sees the repo root above it, and the rule reads markers the
+walk sees. Pinned: the dataset and project transitions, scoped.
+
+**A folder is gone only when its own stat says so.** The keep/prune table decided
+gone-vs-existing with `Path::exists`, which answers false for every stat ERROR: a network
+mount in the middle of a remount answers `ESTALE`/`EIO`/`ENOTCONN`/`EACCES`, and the live
+folder was then read as "the deleted folder the events named" — every row and vector under it
+pruned. `folder_is_gone` asks the stat and accepts only `NotFound` and `NotADirectory`; an
+inconclusive stat keeps (a keep is free and the next sync rechecks; a delete is not). The
+keep's polarity is pinned by the #2 suite: a LIVE root never keeps rows (the root rule speaks
+only for a CONFIRMED-gone root), and a real delete under a readable folder still prunes.
+
+**A file entering the scope from outside re-paths its row.** The inode lookup rode the
+scope's rows, so a move whose far side the watcher never reported (notify adds watches lazily
+for newly created folders; FSEvents coalesces on a Mac) inserted a second row while the old
+path kept standing inside the store's scope: search answered a path that no longer exists and
+the open failed, until a full sync cleaned it up. `IndexStore::file_by_inode` looks the inode
+up store-wide on the schema's own `files_inode` index and `move_file` re-paths the row — no
+second embedding bill. Scoped only: the full sync's pinned behavior (its scope is every chosen
+folder) is unchanged.
+
+**A scope that cannot be written is the whole set's job.** serde serializes a path by its
+UTF-8 `str`, so a folder named by an SMB/FTP/GBK restore (the common source on Linux) made the
+scoped verb impossible to write: the tree answered the same error on every burst and never
+synced. The collapse gives up on such a scope, and `run_scoped` answers it with the plain
+`sync` line, which needs no paths. The 200-dir cap moved into the loop that collects the dirs
+(checking it only after the fold paid an O(n²) dedupe of a whole inotify queue's worth of
+events first), and the code watcher asks for no fold at all (`scope = false`) — it was
+computing the burst's folders for a callback that discards them.
+
+Pinned by this round: `sync_scoped`'s five transitions (four new), `verb_tests` (three), the
+watcher's clamp/boundary/non-UTF-8 tests, and `folder_is_gone`'s four arms.

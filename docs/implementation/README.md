@@ -140,8 +140,12 @@ interface for the server adapter (reconnaissance §5):
   warm; real timings; real index counts; renders preview JPEGs (photos, PDF pages, video
   frames at a second).
 - `digup index-service <roots>… --index DIR` — commands `sync`, `sync code`, `stop`,
-  `backfill on|off`; emits `scanning`, `sync` (added/changed/moved/removed/unchanged), `file`
-  (done/total), `rest`, `summary`, `waiting`, `idle`, `error`, `exit`. Real progress counts.
+  `backfill on|off`, and the scoped form `sync ["<dir>", …]` (issue #7a: reconcile only the
+  named folders' neighborhoods — an additive verb, so the plain `sync` line and every pinned
+  event shape are unchanged; a line that is not a JSON array of strings is passed over, as
+  every unknown verb is); emits `scanning`, `sync` (added/changed/moved/removed/unchanged),
+  `file` (done/total), `rest`, `summary`, `waiting`, `idle`, `error`, `exit`. Real progress
+  counts.
 - `digup status` / `digup index` / `digup search --json` / `digup estimate --json` /
   `digup download-model` — one-shot commands, useful for diagnostics.
 - The adapter exposes `health() / index() / search() / status() / close()` and nothing about
