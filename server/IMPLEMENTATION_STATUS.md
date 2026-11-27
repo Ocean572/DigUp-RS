@@ -4996,3 +4996,65 @@ for multi-line globs — flatten before the flat scan), feeds-onto-main `TAG` en
 `set -eu` (`92402e8`), macOS sign at repo root with env key no-flags + `--app-version`
 binding (the conf's `requireSignedVersion` is true; a versionless sig is rejected by the
 updater) + hdiutil Resource-busy retry (`031b355`, `0b16515`).
+## 2026-11-27 — round ten (feature/index-portability, unpushed): schema v7 portable index + faces privacy move + the gated walk (#195/#110)
+
+Branch `feature/index-portability`, commits `a1ac54b … d309a20` on main tip `acea65e`. Unpushed;
+push/merge is user-driven. Everything below is measured on `ai-ubuntu-computer` (x86_64,
+Ryzen 9 7950X, driver 580.178.04; GPU facts elided).
+
+**Schema v7 (the portable store).** `anchors(id, abs UNIQUE, real)`; `files.anchor REFERENCES
+anchors`, `files.path` RELATIVE with `UNIQUE(anchor, path)`; bucket `"<anchor id>/<bucket of
+rel>"` — a distinct byte string per (anchor, folder), so the counters, the segcounters, and all
+eight triggers ride v6 VERBATIM. Every answer assembles `abs + '/' + rel` at the row edge; a v6
+store opens for a verbatim read with writes refused, and the FIRST write verb migrates
+(`write_guard → migrate_portable`), answering `MigrationReport{rows, migrated, pruned, anchors,
+rewritten}` for the relay to carry verbatim. Migration follows the spec law: anchors from the
+stored rows' bucket clusters, argv roots VALIDATE them (exact / inside / contains), a tail run
+matching exactly one root is the remount REWRITE (anchor rebases, name rows re-tokenize through
+`move_file`), an unvalidated/ambiguous cluster is PRUNED with its count, and the
+UNIQUE(anchor,path) pre-check rides the read-only plan so a collision refuses BEFORE any write
+(store stays verbatim v6, marker stands, re-runs refuse identically). Pins: portable 21/21
+(cluster/remount/prune/collision/multi-root), storage 14/14, twin gate 2/2.
+
+**Faces privacy move.** The faces' file lives at the device home `--faces-dir/<anchor-hash>/
+face.sqlite` (env `DIGUP_FACES_DIR`, default `$XDG_DATA_HOME/digup/faces`; the server passes
+`<DIGUP_SERVER_CONFIG>/faces`, the shell `<app config>/faces` — Windows/macOS ride the same
+code). The home is keyed by the store's identity: 16 hex of sha256 over the anchor spellings in
+id order (v6/anchorless → the index path); measured byte-identical between the Rust daemon and
+the python pin (56c009533657af07 / 20e5cb62a1afa2b6). A legacy `face.sqlite` beside index.sqlite
+moves on first open, sidecars with it, never destructive. An in-tree `.digup` carries index +
+previews, never faces; the crawler's hidden-entry law keeps it invisible to walks. Pins:
+services `faces_move` 3/3 (required-features), the server faces module's home-path asserts.
+
+**The gated walk (#110).** Measured first (Phase-M, bench HDD): full walk 1262.53 s / 1.7 M
+files (`digup estimate`, RC=0); row-stat proxy 7.51 s / 131,973 rows warm (≈102 s extrapolated
+to 1.8 M) → the gate ships. Inside the engine sync (verbs unchanged): prefilter `dir_facts`
+(readdir + stat per folder, the walk's own descent law), the rule walk enters only folders whose
+(mtime, entries) pair moved ∪ never-seen ∪ their ancestors ∪ roots, and the row-check stats the
+stored paths under skipped folders — the content-edit-in-place edge (file mtime moves, parent
+dir mtime does NOT) is caught there. A delete masked by a dir-mtime restore (`utimes`) is caught
+by the row-check; a file added inside an unchanged pair enters at the next FULL crawl (the
+gate's stated limitation, pinned). `dirs(anchor, rel, mtime, entries)` rides v7; the rules
+fingerprint lives in meta `dirs_rules` (mismatch = full sync + refill). Pins: gated_sync 6/6 —
+steady-state candidates = the root's own files ONLY with unchanged == total, rename moved == 1,
+deep add through closed ancestors, rules change forces the full crawl.
+
+**Container contract suite (checkpoint gates, `digup-server-test:local`, target
+`server-test-rust`).`** Run 1: 12 failed / 163 passed / 0 skipped (291.07 s) — two root causes,
+both environmental laws re-measured: (1) the CLI parses a valued flag ONLY if it rides the
+VALUED list — `--faces-dir` was silently ignored (fixed, `912691a`); (2) the suite's cached
+index sat over a corpus whose mtimes moved at the worktree checkout → all 15 rows requeued
+(the requeue parent-anchors: counters re-keyed to parent buckets `1/..3/`), the suite's clock
+embedded 8, `searchable 8 < files 15`, hits degraded — the 2026-11-22 staleness law; cure =
+wipe `/index` from INSIDE the container (uid-990 files) and let conftest refill fresh. Run 2
+with the fixes: 175 passed / 1 failed / 0 skipped (296.50 s) — the 1 failure was my own new
+pin asserting absolute paths on the relative v7 column (fixed, `d309a20`: store layer relative,
+assembled layer absolute). **Run 3 (full suite, fixed module riding the repo bind-mount):
+`176 passed, 0 failed, 0 skipped, 1 deselected` in 273.99 s, RC=0 — the contract gate is
+GREEN on this branch.** The v6→v7 migration on real bytes rode green in run 1 (the Nov-19 v6
+store: cluster anchors, counters re-key, parent-anchor requeue); post-migration store kept as a
+local backup (local-only, gitignored).
+
+**Gates on the branch tip:** fmt clean; clippy `--workspace --all-targets -D warnings` 0;
+workspace 46 suites ok / 0 failed (twin 2/2, 370.75 s); faces-feature gates plain + faces 0.
+Bench gated-vs-full seconds on the 1.8 M tree, app rebuild/relaunch: S7, next.
