@@ -5058,3 +5058,55 @@ local backup (local-only, gitignored).
 **Gates on the branch tip:** fmt clean; clippy `--workspace --all-targets -D warnings` 0;
 workspace 46 suites ok / 0 failed (twin 2/2, 370.75 s); faces-feature gates plain + faces 0.
 Bench gated-vs-full seconds on the 1.8 M tree, app rebuild/relaunch: S7, next.
+
+## 2026-11-27 — round ten tail: S7 bench, GPU gates, app chain, the faces-home key fix, and the `unload` verb (branch `feature/index-portability`)
+
+**S7 bench (the HDD pilot tree, debug CLI, CPU).** Cold walk baseline (full sync over the
+1.8 M tree) **1262.53 s**; full fresh sync of the scoped roots **131,972 new files in
+53.49 s** warm; the gated walk (#110) steady-state **7.93 s** answering all 131,972 rows
+(dirs 3,973, anchors 1); deep add **8.43 s** → 1 new; remove **8.45 s** → 1 removed.
+
+**GPU gates (Stage 9 shape, the Pascal card).** Gate A green: suite **176 / 0 / 0**, CPU
+stack healthy, graceful lifespan exit 143 + `Application shutdown complete`. Gate B green
+RC=0: `device: gpu`, agreement **0.9997194609668691**, GPU picture 0.1896 s vs CPU
+0.6215 s, utilization peak 100 % / busy 100 % of 85 samples / model on card 85/85.
+Three gate-script repairs rode in (`9868c0f`, `c28d85d`, `df0159c`): the model pins read
+`models.rs`, the compose legs run under their own project (`COMPOSE_PROJECT_NAME=digup-gate`
+— it had recreated the live pilot container before the isolation; restored byte-exact from
+`docker inspect`, healthy, 3 hits on the pinned query, top z 5.909), and the CUDA leg asks
+the payload stage's Rust-era name.
+
+**The faces home keys the index PATH (`04672c5`).** The privacy move keyed the device-side
+home by the store's anchor set — measured on the live store (173,225 rows): the v6→v7
+migration creates one anchor per row cluster (dozens) and every roots change adds anchors,
+so an anchor-keyed home MOVES under the running app (the People tab would empty and
+re-scan). The key is now `sha256(index path)[:16]` — stable across migration and roots
+changes; the pins rewritten 3/3 + the server pin mirrors it. Migration-order law: migrate
+the store BEFORE the first faces-daemon open (the live store migrated 173,225 rows in
+**43.40 s**, `user_version 7`, backup kept local).
+
+**App chain (the faces UI law: evaluated on the Linux desktop app).** `scripts/package-linux.sh`
+(the bundler that declares the helper as a resource; `scripts/rust/package-linux.sh --shell`
+builds engine-less bundles — recorded in the script header): PKG3 RC=0 553.5 s, deb 1.28 GiB
++ AppImage 746.21 MiB carrying `usr/lib/DigUp/helper/{digup,ffmpeg,ffprobe}` + the CUDA
+seams (`libggml-cuda.so`, cublas/cublasLt/cudart/nvrtc/nvrtc-builtins/nccl, 11.8). Extract →
+kill old instance → relaunch via the canonical GPU-pin script. The bundle's own binary
+answers the live store on the app's surfaces: `ok:true · faces 195,604 · persons 8,837 ·
+assigned 150,196 · named 36` (adaface tier; the embedder-switch guard fires — the store's
+tier is enforced, not assumed).
+
+**`unload` — the bulk dissolve of the unnamed group (c553d91, both frontends).** The user's
+law: named clusters are the anchors — unload the unnamed people and the next scan
+re-clusters every face onto the names. Engine verb `unload` = the `delete-person` law
+verbatim over the unnamed group (faces requeue as evidence, no photo touched), the reply
+relays the engine's own counts; `POST /api/v1/faces/unload` (admin wall, consent guard);
+the shell's `faces_unload` command + the People panel's "Unload unnamed" button with its
+confirm; the server UI carries the same button (controller + panel + vitest pins).
+Gates: workspace suite **46 suites / 306 passed / 0 failed** RC=0; contract suite
+**178 / 0 / 0** (251.32 s); vitest 90/90; faces feature 3/3 + 3/3; clippy plain + faces 0;
+the store gate's unload pin 13/13 (named members stand, unnamed requeue, re-cluster joins
+the named centroid, idempotent). PKG4 RC=0 rebuilt the bundles with the button.
+**Live unload on the app store (the bundle's binary, 5.7 s):** reply
+`{"ok":true,"persons":8800,"faces":87896}` → persons 8,836 → **36** (all named), assigned
+150,196 → 62,300, review queue 45,408 → **133,304**, faces **195,604 unchanged** — every
+count reconciles; full store backup taken first (local, gitignored).
