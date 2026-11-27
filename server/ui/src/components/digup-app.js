@@ -28,21 +28,6 @@ const IDLE_NOTE = "Say what you'd see, hear, or read in a file — the meaning, 
 const BUSY_NOTE = "Matching words now — the meaning results follow when you stop typing.";
 const CODE_HINT = "Searching your code — say what the code does, or type a name that's in it.";
 
-/* The scope select's file-type list (#206/#132/#188, 2026-11-25): the extensions the
-   last answer's rows carry, in answer order — observed engine rows, invented nothing
-   (the desktop shell follows the same law). Capped: a 100-hit answer is already wide. */
-const observedExtensions = (r) => {
-  const seen = [];
-  for (const hit of [...(r.strong || []), ...(r.weaker || [])]) {
-    const base = (hit.path || "").split(/[\\/]/).pop() || "";
-    const dot = base.lastIndexOf(".");
-    const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
-    if (ext && !seen.includes(ext)) seen.push(ext);
-    if (seen.length >= 12) break;
-  }
-  return seen;
-};
-
 const SUGGESTIONS = ["a dog running on the beach", "people gathered around a campfire",
                      "a cat sitting on a sofa", "wakeboarding on a lake"];
 
@@ -306,10 +291,9 @@ class DigupApp extends LitElement {
       </header>
 
       <main>
-        <digup-search .isCode=${Boolean(s.isCode)} .isNames=${Boolean(s.isNames)} .navigated=${Boolean(s.navigated)}
+        <digup-search .isCode=${Boolean(s.isCode)} .navigated=${Boolean(s.navigated)}
                       .hasSelection=${Boolean(r.selection)}
                       .names=${(s.people && s.people.names) || []}
-                      .roots=${s.roots || []} .extensions=${observedExtensions(r)}
                       @digup:query-change=${(e) => this._ctl?.search?.queryChanged(e.detail.text, e.detail)}
                       @digup:nav=${(e) => this._ctl?.search?.move(e.detail.step)}
                       @digup:activate=${() => {

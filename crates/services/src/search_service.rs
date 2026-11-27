@@ -42,6 +42,13 @@ pub struct SearchConfig {
     pub code_roots: Vec<String>,
     pub code_skipped: Vec<String>,
     pub idle_seconds: f64,
+    /// The faces home (the #195 device-side root; `None` = the store is never read).
+    /// Only the `person:` field of `search` opens it, and only through the read-only
+    /// window — the daemon's plain searches never touch the store (round twelve).
+    pub faces_dir: Option<PathBuf>,
+    /// The consent record path (the faces daemon's own gate, `--faces-consent`): every
+    /// People-scoped request re-reads it engine-side, GUI walls and engine walls alike.
+    pub faces_consent: Option<PathBuf>,
 }
 
 /// `Arguments.folderURL(_:)` (main.swift:127): `~` expanded, the path
@@ -101,6 +108,15 @@ struct State {
     last_query: Instant,
     warned_about_source: bool,
     log: PathBuf,
+    /// The faces home and consent record from the launch (round twelve): `person:` reads
+    /// the store through `face_reader`, the read-only window opened lazily on the first
+    /// People-scoped request that cleared the consent check.
+    #[cfg_attr(not(feature = "faces"), allow(dead_code))] // the plain-build stub refuses before reading
+    faces_dir: Option<PathBuf>,
+    #[cfg_attr(not(feature = "faces"), allow(dead_code))]
+    faces_consent: Option<PathBuf>,
+    #[cfg_attr(not(feature = "faces"), allow(dead_code))]
+    face_reader: Option<digup_core::db::Database>,
 }
 
 /// Events and replies alike go through the engine's `output` lock: one line at
@@ -460,6 +476,74 @@ fn keeps_extension(extension: &str, ext: &std::collections::HashSet<String>) -> 
     ext.is_empty() || ext.contains(extension)
 }
 
+/// The person's photo paths (round twelve, 2026-11-27, the user's pool law): the face
+/// store read through its READ-ONLY window (`db::open_read_only` — the search daemon
+/// never writes the store, the faces writer never blocks, and the two daemons coexist
+/// as SQLite WAL readers/writer alike). The consent record is checked on EVERY
+/// People-scoped request, engine-side — the faces daemon's own gate quoted at the
+/// store's edge (FACES.md Phase 1 §5): what the UI walls gate, the engine gates too,
+/// and a consent granted after this daemon started takes effect on the next request,
+/// not at the next daemon restart. The store's home is the path-keyed #195 home,
+/// computed by the faces daemon's own law — the daemon keeps no private copy of it.
+#[cfg(feature = "faces")]
+fn faces_pool_paths(
+    state: &mut State,
+    person: i64,
+) -> Result<std::collections::HashSet<String>, String> {
+    let consent = state
+        .faces_consent
+        .as_ref()
+        .ok_or("search: person scope needs --faces-consent (face recognition is user-consented)")?;
+    let record: Value = std::fs::read_to_string(consent)
+        .map_err(|e| format!("search: no consent record at {}: {e}", consent.display()))
+        .and_then(|text| {
+            serde_json::from_str(&text).map_err(|e| {
+                format!(
+                    "search: unreadable consent record {}: {e}",
+                    consent.display()
+                )
+            })
+        })?;
+    if record.get("consented").and_then(Value::as_bool) != Some(true) {
+        return Err("search: consent record does not consent".to_string());
+    }
+    let faces_root = state
+        .faces_dir
+        .as_ref()
+        .ok_or("search: person scope needs --faces-dir (the faces home)")?;
+    if state.face_reader.is_none() {
+        let store = crate::face_service::faces_store_dir(&state.directory, faces_root)
+            .join(digup_core::face_store::FACE_FILE);
+        state.face_reader = Some(
+            digup_core::db::Database::open_read_only(&store)
+                .map_err(|e| format!("search: the faces store is not there to read: {e}"))?,
+        );
+    }
+    let reader = state.face_reader.as_ref().expect("the open above ran");
+    let mut paths = std::collections::HashSet::new();
+    reader
+        .query(
+            "SELECT DISTINCT path FROM faces WHERE person = ?1",
+            [digup_core::db::Sql::Int(person)],
+            |row| {
+                if let Some(path) = row.text(0) {
+                    paths.insert(path);
+                }
+                Ok(())
+            },
+        )
+        .map_err(|e| format!("search: the faces store refused: {e}"))?;
+    Ok(paths)
+}
+
+#[cfg(not(feature = "faces"))]
+fn faces_pool_paths(
+    _state: &mut State,
+    _person: i64,
+) -> Result<std::collections::HashSet<String>, String> {
+    Err("search: person scope needs a build with the faces feature".to_string())
+}
+
 /// `handle(_:…)` under the state lock: every op's reply fields (the `id` is
 /// added by the loop).
 fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<Value, String> {
@@ -525,6 +609,31 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                         .collect()
                 })
                 .unwrap_or_default();
+            // `person:` (round twelve, 2026-11-27, the user's pool law): the People-scoped
+            // search. The face store answers the person's photo paths and the searcher
+            // POOLS the search into them — candidates are the pool's files and the z-gate
+            // is computed within the pool, the engine's honest numbers for the query among
+            // THAT person's photos (round six's post-filter shape kept only the global
+            // field's winners through the intersection — the crowd crowding the user named).
+            // The consent gate runs engine-side in `faces_pool_paths`; the GUI walls stay.
+            let person_pool: Option<std::collections::HashSet<String>> =
+                match request.get("person").and_then(Value::as_i64) {
+                    Some(person) if person > 0 => {
+                        if code {
+                            return Err(
+                                "search: person scope is a People search, never a code one"
+                                    .to_string(),
+                            );
+                        }
+                        Some(faces_pool_paths(state, person)?)
+                    }
+                    Some(person) => {
+                        return Err(format!(
+                            "search: person must be a number greater than 0, got {person}"
+                        ))
+                    }
+                    None => None,
+                };
             let started = Instant::now();
             let mut vector: Option<Vec<f32>> = None;
             let mut warning: Option<String> = None;
@@ -564,6 +673,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 word_weight: None,
                 prefix_last,
                 under: (!under.is_empty()).then_some(under.as_slice()),
+                person_files: person_pool.as_ref(),
             };
             let hits: Vec<SearchHit> = if code {
                 let Some(code_searcher) = state.code_searcher.as_mut() else {
@@ -871,6 +981,9 @@ fn run(config: SearchConfig) -> Result<i32, String> {
         last_query: Instant::now(),
         warned_about_source: false,
         log: config.index.join(digup_core::paths::WORKER_QUERY_LOG),
+        faces_dir: config.faces_dir,
+        faces_consent: config.faces_consent,
+        face_reader: None,
     };
     // `init` (SearchService.swift:61-73) in order: store, searcher, the
     // fields, then the previews folder is REBUILT — `try? removeItem` (the
@@ -1032,6 +1145,8 @@ mod tests {
             code_roots: vec![],
             code_skipped: vec![],
             idle_seconds: 300.0,
+            faces_dir: None,
+            faces_consent: None,
         }
     }
 
@@ -1115,5 +1230,217 @@ mod tests {
             "the audit-base: the marker is already gone"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The daemon's `person:` field (round twelve, 2026-11-27, the user's pool law),
+    /// pinned at the seam the GUIs hit: the face store answers the person's photo
+    /// paths, the searcher POOLS the verb into them (the core pool math is pinned in
+    /// `searcher::tests` — here the join and the walls), and every People-scoped
+    /// request re-reads the consent record engine-side: the faces daemon's gate
+    /// quoted at the store's edge, the daemon reading the store READ-ONLY.
+    #[cfg(feature = "faces")]
+    #[test]
+    fn person_scope_pools_the_verb_into_the_faces_store_and_gates_on_consent() {
+        use super::{handle, Searcher, State};
+        use digup_core::face_store::{FaceRecord, FaceStore, ScanOf};
+        use digup_core::{Candidate, FileKind, Modality, SegmentKind};
+        use serde_json::{json, Map};
+        use std::collections::{HashMap, HashSet};
+        use std::time::Instant;
+
+        let tmp = tempfile::tempdir().expect("a temp folder");
+        let index = tmp.path().join("index");
+        let media = tmp.path().join("media");
+        std::fs::create_dir_all(&index).expect("the index folder");
+        std::fs::create_dir_all(&media).expect("the media folder");
+        let laura = ["laura1.jpg", "laura2.jpg"];
+        let paths: Vec<String> = laura
+            .iter()
+            .chain(std::iter::once(&"crowd.jpg"))
+            .map(|name| media.join(name).to_string_lossy().into_owned())
+            .collect();
+        for path in &paths {
+            std::fs::write(path, b"a photo").expect("the photo is on disk");
+        }
+
+        let store: &'static IndexStore = Box::leak(Box::new(
+            IndexStore::open(&index, digup_core::MAIN_FILE).expect("an index"),
+        ));
+        for path in &paths {
+            let file = store
+                .insert(&Candidate {
+                    path: path.clone(),
+                    kind: FileKind::Image,
+                    size: 7,
+                    mtime: 1.0,
+                    inode: 7,
+                    device: 3,
+                })
+                .expect("a photo row");
+            store
+                .finish(file, "done", None, HashMap::new())
+                .expect("the row is done");
+            store
+                .add_segment(
+                    file,
+                    SegmentKind::Ocr,
+                    Modality::Text,
+                    None,
+                    None,
+                    Some("wakeboarding on the lake"),
+                    Some("wakeboarding on the lake"),
+                    None,
+                )
+                .expect("the words ride the FTS row");
+        }
+
+        // The face store: Laura's two photos carry one identity each (identical
+        // face vectors), clustered into person 1 by the store's own pass.
+        let faces_root = tmp.path().join("faces");
+        let home = crate::face_service::faces_store_dir(&index, &faces_root);
+        let face_store = FaceStore::open(&home).expect("the store opens");
+        for name in laura {
+            let path = media.join(name).to_string_lossy().into_owned();
+            face_store
+                .record_scan(
+                    ScanOf {
+                        path: &path,
+                        size: 7,
+                        mtime: 1.0,
+                        width: 100,
+                        height: 100,
+                        det_model: "scrfd_10g_bnkps.onnx",
+                        emb_model: "adaface_ir_101.onnx",
+                    },
+                    &[FaceRecord {
+                        box_: [10.0, 10.0, 40.0, 40.0],
+                        kps: [
+                            [20.0, 20.0],
+                            [30.0, 20.0],
+                            [25.0, 28.0],
+                            [21.0, 34.0],
+                            [29.0, 34.0],
+                        ],
+                        score: 0.9,
+                        vector: vec![0.5f32; 512],
+                    }],
+                    1.0,
+                )
+                .expect("the scan records Laura's face");
+        }
+        face_store
+            .run_clustering(0.3, 0.1, 2, usize::MAX)
+            .expect("the pass clusters");
+        let persons = face_store.list_persons().expect("the people");
+        assert_eq!(persons.len(), 1, "one unnamed cluster from the two photos");
+        drop(face_store);
+
+        let consent = tmp.path().join("faces-consent.json");
+        std::fs::write(
+            &consent,
+            serde_json::to_vec(&json!({"consented": true, "accepted_at": 1.0,
+                "det_model": "scrfd_10g_bnkps.onnx", "emb_model": "adaface_ir_101.onnx"}))
+            .expect("the record is written"),
+        )
+        .expect("the consent file");
+
+        let mut state = State {
+            directory: index.clone(),
+            store,
+            searcher: Searcher::new(store, false).expect("the searcher opens"),
+            code_store: None,
+            code_searcher: None,
+            roots: vec![media.to_string_lossy().into_owned()],
+            skipped: vec![],
+            types: HashSet::new(),
+            code_roots: vec![],
+            code_skipped: vec![],
+            encoder: None,
+            encoder_state: "stopped".to_string(),
+            vector_cache: HashMap::new(),
+            last_query: Instant::now(),
+            warned_about_source: false,
+            log: index.join("worker.log"),
+            faces_dir: Some(faces_root),
+            faces_consent: Some(consent.clone()),
+            face_reader: None,
+        };
+        let request = |extra: Vec<(&str, serde_json::Value)>| -> Map<String, serde_json::Value> {
+            let mut fields = Map::new();
+            fields.insert("q".into(), json!("wakeboarding"));
+            for (key, value) in extra {
+                fields.insert(key.into(), value);
+            }
+            fields
+        };
+        let paths_of = |reply: &serde_json::Value| -> Vec<String> {
+            reply["hits"]
+                .as_array()
+                .expect("hits")
+                .iter()
+                .map(|hit| hit["path"].as_str().expect("a path").to_string())
+                .collect()
+        };
+
+        // The field-less verb: every photo carrying the words answers (byte-parity).
+        let plain = handle(&mut state, "search", &request(vec![])).expect("the plain answer");
+        assert_eq!(paths_of(&plain).len(), 3, "the whole field answers");
+
+        // `person: 1` — the pool: Laura's photos only.
+        let pooled = handle(&mut state, "search", &request(vec![("person", json!(1))]))
+            .expect("the pooled answer");
+        let mut hits = paths_of(&pooled);
+        hits.sort();
+        assert_eq!(
+            hits,
+            vec![
+                media.join("laura1.jpg").to_string_lossy().into_owned(),
+                media.join("laura2.jpg").to_string_lossy().into_owned(),
+            ],
+            "the pool is the face store's rows — the crowd never enters it"
+        );
+
+        // A person with no faces pools to nothing — the empty-pool law (like an
+        // empty scope), an honest empty answer, not an unscoped pass.
+        let none = handle(&mut state, "search", &request(vec![("person", json!(999))]))
+            .expect("the empty pool answers");
+        assert!(paths_of(&none).is_empty(), "{none}");
+
+        // The walls, in the daemon's own words.
+        let bad = handle(&mut state, "search", &request(vec![("person", json!(0))]))
+            .expect_err("id 0 is no person");
+        assert!(bad.contains("greater than 0"), "{bad}");
+        let code = handle(
+            &mut state,
+            "search",
+            &request(vec![("person", json!(1)), ("code", json!(true))]),
+        )
+        .expect_err("the code index has no People");
+        assert!(code.contains("never a code one"), "{code}");
+
+        std::fs::write(
+            &consent,
+            serde_json::to_vec(&json!({"consented": false})).expect("the record"),
+        )
+        .expect("the record is revoked");
+        let wall = handle(&mut state, "search", &request(vec![("person", json!(1))]))
+            .expect_err("the engine gates on the record too");
+        assert!(wall.contains("does not consent"), "{wall}");
+
+        state.faces_consent = None;
+        let wall = handle(&mut state, "search", &request(vec![("person", json!(1))]))
+            .expect_err("no consent flag, no People scope");
+        assert!(wall.contains("needs --faces-consent"), "{wall}");
+
+        state.faces_consent = Some(consent.clone());
+        std::fs::write(
+            &consent,
+            serde_json::to_vec(&json!({"consented": true})).expect("the record"),
+        )
+        .expect("the record is restored");
+        state.faces_dir = None;
+        let wall = handle(&mut state, "search", &request(vec![("person", json!(1))]))
+            .expect_err("no faces home, no People scope");
+        assert!(wall.contains("needs --faces-dir"), "{wall}");
     }
 }

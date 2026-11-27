@@ -211,9 +211,17 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
     // The store's own model law (FACES.md tiers): a face.sqlite is embedded by
     // exactly ONE embedder pin; a scan under a different pin is a hard refusal.
     stamp_models(&state)?;
+    let faces_home = {
+        let s = state.store.lock().unwrap();
+        s.directory.to_string_lossy().into_owned()
+    };
     write_out(serde_json::json!({
         "event": "ready",
         "index": config.index.to_string_lossy().into_owned(),
+        // The device-side home the store landed on (the path-keyed home, #195):
+        // the thin clients scope their asset readers to it — the cover cards
+        // (round eleven) are files inside it, beside face.sqlite.
+        "faces": faces_home,
         "det_model": config.det_model,
         "emb_model": config.emb_model,
     }));
@@ -359,6 +367,88 @@ fn decode_photo(path: &str) -> Result<RgbImage, String> {
     Ok(img.oriented(orientation))
 }
 
+/// The pre-rendered cover card (the user's law 2026-11-27, round eleven): the
+/// card crops the best-scoring face out of a 512 px preview on EVERY visit —
+/// the panel's render cache is memory-only, so a big store re-decodes its whole
+/// grid at every daemon start. The scan already walks every photo, so the covers
+/// are its free byproduct: the fill at the end of a scan (and of a `cluster`
+/// pass) renders ONLY the missing ones, beside the store in the faces home
+/// (`<person>.jpg`), and `delete`/`unload` remove the files of the people they
+/// dissolve — the cache follows the store. A photo that will not decode keeps
+/// its card on the `render` path (the panel falls back), and the fill retries
+/// at the next scan.
+fn render_cover(store: &std::sync::Arc<Mutex<FaceStore>>, person: i64) -> Result<(), String> {
+    let face = {
+        let s = store.lock().unwrap();
+        s.person_faces(person)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    };
+    let Some(face) = face else {
+        return Ok(());
+    };
+    let out = {
+        let s = store.lock().unwrap();
+        s.cover_file(person)
+    };
+    let dir = out
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let prepared = digup_native::image::prepare(Path::new(&face.path), 512, 0, &dir, false)
+        .map_err(|e| format!("{person}: {e}"))?;
+    std::fs::rename(&prepared.path, &out).map_err(|e| e.to_string())
+}
+
+/// Fill the cover cache for every person missing its file (parallel FILES, the
+/// scan's own pool; the covers of existing cards are never touched).
+fn fill_covers(state: &State) {
+    let persons: Vec<i64> = {
+        let s = state.store.lock().unwrap();
+        match s.list_persons() {
+            Ok(all) => all
+                .into_iter()
+                .filter(|p| p.count > 0 && !s.cover_file(p.id).exists())
+                .map(|p| p.id)
+                .collect(),
+            Err(_) => return,
+        }
+    };
+    if persons.is_empty() {
+        return;
+    }
+    let workers = workers_for(state.config.workers, persons.len());
+    let chunk = persons.len().div_ceil(workers).max(1);
+    std::thread::scope(|scope| {
+        for part in persons.chunks(chunk) {
+            let store = state.store.clone();
+            let part: Vec<i64> = part.to_vec();
+            scope.spawn(move || {
+                for id in part {
+                    let _ = render_cover(&store, id);
+                }
+            });
+        }
+    });
+}
+
+/// The cover files of dissolved people go with them (the same law as the store:
+/// an unload of 8,800 people takes their 8,800 cards with it, the named ones
+/// stand).
+fn drop_cover(store: &std::sync::Arc<Mutex<FaceStore>>, person: i64) {
+    let file = {
+        let s = store.lock().unwrap();
+        s.cover_file(person)
+    };
+    let _ = std::fs::remove_file(file);
+}
+
 fn row_json(r: &FaceRow) -> Value {
     serde_json::json!({
         "id": r.id,
@@ -404,6 +494,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                     break;
                 }
             }
+            fill_covers(state);
             Ok(serde_json::json!({"ok": true, "assigned": assigned}))
         }
         "persons" => {
@@ -455,6 +546,14 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                             .into_iter()
                             .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
                         row["cover_face"] = face.map(|f| row_json(&f)).unwrap_or(Value::Null);
+                        // The pre-rendered card, when the scan has filled it
+                        // (round eleven): the thin client serves THIS file and skips
+                        // the render entirely; the path rides the row, the panel decides.
+                        let cover_file = state.store.lock().unwrap().cover_file(p.id);
+                        row["cover_render"] = match cover_file.to_str() {
+                            Some(p) if cover_file.exists() => Value::String(p.to_string()),
+                            _ => Value::Null,
+                        };
                     }
                     Ok(row)
                 })
@@ -548,6 +647,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .unwrap()
                 .merge_persons(into, from)
                 .map_err(|e| e.to_string())?;
+            // The merged card's best face can change with the merge — both cards
+            // drop and the next scan/cluster fill re-renders the survivor's.
+            drop_cover(&state.store, into);
+            drop_cover(&state.store, from);
             Ok(serde_json::json!({"ok": true}))
         }
         "delete" => {
@@ -558,6 +661,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .unwrap()
                 .delete_person(id)
                 .map_err(|e| e.to_string())?;
+            drop_cover(&state.store, id);
             Ok(serde_json::json!({"ok": true}))
         }
         "unload" => {
@@ -566,12 +670,24 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             // dropped, their faces requeue onto the named centroids' pass;
             // named persons are never touched. The reply relays the engine's
             // own counts — no invented numbers.
+            let unnamed: Vec<i64> = {
+                let s = state.store.lock().unwrap();
+                s.list_persons()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .filter(|p| p.name.as_deref().is_none_or(|n| n.is_empty()))
+                    .map(|p| p.id)
+                    .collect()
+            };
             let (persons, faces) = state
                 .store
                 .lock()
                 .unwrap()
                 .unload_unnamed()
                 .map_err(|e| e.to_string())?;
+            for id in unnamed {
+                drop_cover(&state.store, id);
+            }
             Ok(serde_json::json!({"ok": true, "persons": persons, "faces": faces}))
         }
         "confirm" => {
@@ -584,6 +700,9 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .unwrap()
                 .confirm_face(face, person, now)
                 .map_err(|e| e.to_string())?;
+            // The confirmed face can be the new best-scoring one — the card
+            // drops and the next fill re-renders it.
+            drop_cover(&state.store, person);
             Ok(serde_json::json!({"ok": true}))
         }
         "pending" => {
@@ -907,6 +1026,7 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
     write_out(
         serde_json::json!({"event": "cluster", "assigned": assigned, "persons": c.persons, "pending": c.pending}),
     );
+    fill_covers(state);
     Ok(serde_json::json!({
         "ok": true, "files": scanned, "faces": faces_total, "skipped": skipped,
         "fresh": fresh, "assigned": assigned,

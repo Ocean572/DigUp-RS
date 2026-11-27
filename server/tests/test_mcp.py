@@ -323,10 +323,13 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     # Preview handles are minted per answer (the media contract: a fresh id per
     # reply), so they cannot compare equal across two calls — strip them row by
     # row, on both sides, exactly as the search relay test does (every cover row
-    # carries one on both sides — asserted on the way through the strip).
+    # carries one on both sides — asserted on the way through the strip). The
+    # pre-rendered card handle (round eleven) is minted per answer by the same law.
     for row in relayed["structuredContent"]["persons"] + rest["persons"]:
         assert "media_id" in row["cover_face"], row
         row["cover_face"].pop("media_id")
+        assert "cover_media" in row, row
+        row.pop("cover_media")
     assert relayed["structuredContent"] == rest, "the tool answers what REST answers"
     # The paintable window rides the tool too: the `limit` arg becomes the route's
     # `?limit=` (the tool relays the route, including its 422 for a bad limit).
@@ -335,6 +338,7 @@ def test_the_people_tool_scans_the_corpus_and_relays_the_person_rows(mcp_open):
     rest1 = mcp_open.get("/api/v1/faces/persons", params={"limit": 1}).json()
     for row in windowed["structuredContent"]["persons"] + rest1["persons"]:
         row["cover_face"].pop("media_id")
+        row.pop("cover_media")
     assert windowed["structuredContent"] == rest1, "the tool answers what REST answers, window included"
     assert len(rest1["persons"]) == 1, rest1
     bad = call(mcp_open, None, "people", {"action": "persons", "limit": 0})

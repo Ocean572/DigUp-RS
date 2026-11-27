@@ -256,6 +256,15 @@ impl FaceStore {
 
     // MARK: meta (model stamps, consent stamps)
 
+    /// The pre-rendered cover cards live INSIDE the faces home, beside
+    /// `face.sqlite` (the consent-scoped device-side folder — the covers are
+    /// faces too, they follow every privacy law the store follows). Names are
+    /// the person id: the fill at the end of a scan creates what is missing,
+    /// `delete`/`unload` remove what they dissolve.
+    pub fn cover_file(&self, person: i64) -> PathBuf {
+        self.directory.join("covers").join(format!("{person}.jpg"))
+    }
+
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
         let mut out = None;
         self.db.query(

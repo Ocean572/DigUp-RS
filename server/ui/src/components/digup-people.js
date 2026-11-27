@@ -374,7 +374,7 @@ class DigupPeople extends LitElement {
               title=${`Show the ${person.count} photo${person.count === 1 ? "" : "s"} of ${personLabel(person)}`}
               @click=${() => this.#toggle(person.id)}
               @keydown=${(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); this.#toggle(person.id); } }}>
-          ${faceCrop(person.cover_face)}
+          ${faceCrop(person.cover_face, 512, person.cover_media)}
         </span>
         ${this.#nameInput(person, p)}
         <span class="set-facts">

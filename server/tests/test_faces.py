@@ -523,12 +523,14 @@ def test_confirm_answers_a_queued_face(faces):
 
 # ── the search window's People filter (round six, 2026-11-23, the user's design) ─
 
-def test_search_person_filter_relays_the_faces_membership(faces):
-    # The search stays PURE: the engine answers its ranking untouched, and the face
-    # store answers WHICH of those paths carry the person's face. The server drops
-    # whole rows the store does not name — z, kind, score, excerpt ride verbatim,
-    # nothing is re-scored (the rows compare field-for-field with the unfiltered
-    # answer; the per-call minted media_id is the only difference).
+def test_search_person_scope_pools_the_answer_into_the_faces_membership(faces):
+    # The pool law (round twelve, 2026-11-27, the user's People search): `person` rides
+    # the VERB — the face store's rows for the person are the candidate set and the
+    # engine's z-gate is computed INSIDE that pool (the in-pool math is pinned
+    # engine-side in searcher.rs; here the relay and the walls). The server drops
+    # nothing: it asks the engine for the pool and relays the answer — z, kind, score,
+    # excerpt ride verbatim (the keyword rows compare field-for-field with the
+    # unfiltered answer; the per-call minted media_id is the only difference).
     target = faces.persons()[0]["id"]
     gallery = faces.client.get(f"/api/v1/faces/person/{target}").json()["faces"]
     owned = {f["path"] for f in gallery}
@@ -544,12 +546,46 @@ def test_search_person_filter_relays_the_faces_membership(faces):
     filtered = faces.client.post("/api/v1/search", json={"q": q, "person": target}).json()
     kept = {h["path"] for h in filtered["hits"]}
     assert kept == plain_paths & owned, filtered["hits"]  # exactly the face-photo rows
-    plain_rows = {h["path"]: {k: v for k, v in h.items() if k != "media_id"}
+    # The rows ride verbatim (thin-client law), `keyword_rank` aside: the rank is the
+    # row's position in the ANSWER's keyword order (the engine's own per-answer
+    # artifact — the canonicalization law pins it as an order, never as a per-row
+    # value). The pool re-ranks its restricted list; the bm25 order must be preserved.
+    plain_rows = {h["path"]: {k: v for k, v in h.items()
+                              if k not in ("media_id", "keyword_rank")}
                   for h in plain["hits"]}
+    plain_rank = {h["path"]: h["keyword_rank"] for h in plain["hits"]}
     for h in filtered["hits"]:
-        row = {k: v for k, v in h.items() if k != "media_id"}
+        row = {k: v for k, v in h.items() if k not in ("media_id", "keyword_rank")}
         assert row == plain_rows[h["path"]], (row, plain_rows[h["path"]])
-    # `person: null` is the pure search — the same rows, the same numbers.
+    pool_order = sorted(filtered["hits"], key=lambda h: h["keyword_rank"])
+    assert [h["keyword_rank"] for h in pool_order] == list(range(1, len(pool_order) + 1)), pool_order
+    assert [plain_rank[h["path"]] for h in pool_order] == sorted(
+        plain_rank[h["path"]] for h in pool_order), "the pool preserves the bm25 order"
+
+    # The meaning leg rides the pool too: candidates are the person's photos, so a
+    # pooled answer can never carry a crowd file the global field ranks in.
+    meaning = faces.client.post("/api/v1/search", json={"q": "wakeboarding"}).json()
+    crowd_only = {h["path"] for h in meaning["hits"]} - owned
+    pooled = faces.client.post("/api/v1/search",
+                               json={"q": "wakeboarding", "person": target}).json()
+    pooled_paths = {h["path"] for h in pooled["hits"]}
+    assert pooled_paths <= owned, (pooled["hits"], owned)
+    assert pooled_paths.isdisjoint(crowd_only), (pooled["hits"], crowd_only)
+
+    # A person the store has no faces for pools to NOTHING — the empty-pool law (like
+    # an empty scope): an honest empty answer, never an unscoped pass.
+    empty = faces.client.post("/api/v1/search", json={"q": q, "person": 999_999}).json()
+    assert empty["hits"] == [] and empty["strong"] == 0, empty
+
+    # Faces live on photos, never on code rows: the daemon refuses a code search
+    # pooled into a person, and the server relays the refusal (503, the words verbatim).
+    refused = faces.client.post("/api/v1/search",
+                                json={"q": "wakeboarding", "code": True, "person": target})
+    assert refused.status_code == 503, refused.text
+    assert "never a code one" in refused.json()["detail"], refused.json()
+
+    # `person: null` is the field-less verb — the byte-parity search, the same rows,
+    # the same numbers.
     nulled = faces.client.post("/api/v1/search", json={"q": q, "person": None}).json()
     assert {h["path"] for h in nulled["hits"]} == plain_paths
     # The pydantic law of the field (SearchRequest's declarations put person last):
@@ -670,3 +706,44 @@ def test_unload_dissolves_the_unnamed_group_and_keeps_the_named(faces):
     again = faces.client.post("/api/v1/faces/unload", json={})
     assert again.status_code == 200, again.text
     assert (again.json()["persons"], again.json()["faces"]) == (0, 0), again.json()
+
+
+# ── the pre-rendered cover cards (round eleven, 2026-11-27) ───────────────────
+
+def test_persons_rows_carry_the_pre_rendered_cover_cards(faces):
+    # The scan fills the cards as a byproduct (the photos it decodes are the same
+    # decodes it pays for detection). The persons relay carries the engine's
+    # `cover_render`; the server mints it like every media row, and `/file`
+    # serves the card with zero render — the People grid reads plain files.
+    persons = faces.persons()
+    assert persons, persons
+    row = persons[0]
+    assert row.get("cover_render"), row
+    assert row.get("cover_media"), row
+    reply = faces.client.get(f"/api/v1/media/{row['cover_media']}/file")
+    assert reply.status_code == 200, reply.text
+    assert reply.headers["content-type"].startswith("image/"), reply.headers
+    assert reply.content[:2] == b"\xff\xd8", "the card is the engine's JPEG"
+
+
+def test_unload_takes_the_unnamed_covers_with_it(faces):
+    # The cache follows the store: dissolving 8,800 people dissolves their 8,800 cards,
+    # the named survivor keeps its own. The suite store at this point is one named
+    # anchor with the review queue requeued — a scan re-cluster it into fresh unnamed
+    # people (the scan's tail fills THEIR cards too, the crawl is freshness-skipped),
+    # and the unload then dissolves exactly those: the covers folder is left with the
+    # anchor's card and nothing else.
+    persons = faces.persons()
+    assert persons, persons
+    anchor = max(persons, key=lambda p: p["count"])
+    named = faces.client.post("/api/v1/faces/name",
+                              json={"person": anchor["id"], "name": "Anchor Person"})
+    assert named.status_code == 200, named.text
+    scanned = faces.scan()
+    assert scanned.status_code == 200, scanned.text
+    reply = faces.client.post("/api/v1/faces/unload", json={})
+    assert reply.status_code == 200, reply.text
+    after = faces.persons()
+    assert [p["id"] for p in after] == [anchor["id"]], after
+    covers = sorted(p.name for p in (faces.faces_home() / "covers").iterdir())
+    assert covers == [f"{anchor['id']}.jpg"], covers

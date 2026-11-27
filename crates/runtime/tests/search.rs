@@ -300,6 +300,7 @@ fn search_answer(
         z_gate: sc.get("zGate").and_then(Value::as_f64).unwrap_or(2.0),
         word_weight: sc.get("wordWeight").and_then(Value::as_f64),
         under: None,
+        person_files: None,
         prefix_last: sc
             .get("prefixLast")
             .and_then(Value::as_bool)

@@ -59,7 +59,11 @@ const faceRenders = new Map();
 /// The helper's own JPEG for a photo, as an asset URL (`ask op:"render"` → reply.image →
 /// convertFileSrc — the exact chain panel.js/window.js use; the previews folder is scoped by the
 /// search helper's `ready` event, main.rs).
-function renderedFace(path, pixels) {
+function renderedFace(path, pixels, preset) {
+  // The pre-rendered cover card (round eleven): when the scan has filled it, the
+  // card is a plain file read — no decode, no daemon call, no queue. Without it
+  // the render seam answers, as it always did.
+  if (preset) return Promise.resolve(fURL(preset));
   const key = `${path}|${pixels}`;
   if (!faceRenders.has(key)) {
     faceRenders.set(key, fAsk({ op: "render", path, kind: "image", loc: null, pixels }).then((reply) => fURL(reply.image)));
@@ -69,10 +73,10 @@ function renderedFace(path, pixels) {
 
 /// The face crop: a cw/ch window over the enlarged photo (the server's faceCrop law, DOM-built).
 /// 512 pixels (2026-11-23, the user's sharpness brief): the card crop is the face you judge.
-function faceCrop(row, pixels = 512) {
+function faceCrop(row, pixels = 512, preset) {
   const box = element("span", "crop");
   const geometry = cropGeometry(row);
-  renderedFace(row.path, pixels).then((url) => {
+  renderedFace(row.path, pixels, preset).then((url) => {
     const img = element("img");
     img.src = url;
     img.loading = "lazy";
@@ -605,7 +609,7 @@ function peopleConfirm(text, label, go, cancel) {
 function peopleCard(person) {
   const card = element("div", "person-card");
   const expanded = People.facesFor && People.facesFor.person === person.id;
-  const crop = faceCrop(person.cover_face, 512);
+  const crop = faceCrop(person.cover_face, 512, person.cover_render);
   crop.setAttribute("role", "button");
   crop.setAttribute("tabindex", "0");
   crop.setAttribute("aria-expanded", String(Boolean(expanded)));

@@ -88,6 +88,10 @@ pub struct SearchParams<'a> {
     pub under: Vec<String>,
     /// `ext:` — extension allow-list; empty = no filter (post-ranking keep, verbatim rows).
     pub ext: Vec<String>,
+    /// `person:` (round twelve, 2026-11-27): the People-scoped search — the daemon pools
+    /// the search into the person's photos (z computed in the pool, the consent gate
+    /// engine-side). `None` = the field-less verb, every existing pin stays byte-parity.
+    pub person: Option<i64>,
 }
 
 impl SearchService {
@@ -147,6 +151,7 @@ impl SearchService {
             name_only,
             under,
             ext,
+            person,
         } = params;
         let mut fields = op_fields("search");
         fields.insert("q".into(), Value::String(q.to_string()));
@@ -172,6 +177,11 @@ impl SearchService {
                 "ext".into(),
                 Value::Array(ext.iter().map(|e| Value::String(e.clone())).collect()),
             );
+        }
+        // `person:` rides only when named (the kinds law shape): the People-scoped
+        // search pools the verb into the person's photos, engine-side (round twelve).
+        if let Some(person) = *person {
+            fields.insert("person".into(), Value::from(person));
         }
         // `if kinds:` — an empty list means "no kinds filter" in Python; None rides
         // identically, so an empty Vec also drops the field.

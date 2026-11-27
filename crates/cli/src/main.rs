@@ -214,6 +214,13 @@ fn main() {
                     .value("--encoder-idle")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(300.0),
+                // The People-scoped search (round twelve): the faces home + consent
+                // record ride the SAME flag spellings the faces daemon takes. Named =
+                // the `person:` field can pool a search (read-only window, consent
+                // re-checked per request); unnamed = the field refuses, plain searches
+                // never touch the store.
+                faces_dir: args.value("--faces-dir").map(url_path),
+                faces_consent: args.value("--faces-consent").map(PathBuf::from),
             };
             std::process::exit(digup_services::search_service::serve(config));
         }
@@ -2050,6 +2057,7 @@ fn search(args: &Arguments) -> Result<(), String> {
             word_weight: p.word_weight,
             prefix_last: false,
             under: scope_of(p.scope),
+            person_files: None,
         };
         let mut paired: Vec<(usize, SearchHit)> = Vec::new();
         let main_hits = searchers[0]
@@ -2112,6 +2120,7 @@ fn search(args: &Arguments) -> Result<(), String> {
             word_weight: p.word_weight,
             prefix_last: false,
             under: scope_of(p.scope),
+            person_files: None,
         };
         let hits = searchers[0]
             .search(p.query, vector.as_deref(), &opts)
@@ -2571,6 +2580,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
             word_weight,
             prefix_last: false,
             under: None,
+            person_files: None,
         };
         let hits = searcher
             .search(&texts[i], vectors[i].as_deref(), &opts)

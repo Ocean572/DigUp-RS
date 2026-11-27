@@ -24,6 +24,13 @@ pub struct EngineConfig {
     /// The engine's dataset rule (issue #1): `--include-datasets` on the index and
     /// estimate argv; the excludes' sibling knob, carried per target like them.
     pub include_datasets: bool,
+    /// The faces home and the target's consent record (round twelve, 2026-11-27):
+    /// `search_argv` carries `--faces-dir`/`--faces-consent` so the `person:` field of
+    /// the search verb can read the store through its read-only window, consent-gated
+    /// engine-side. A payload built without the faces feature parses the flags
+    /// harmlessly and refuses `person` at the verb.
+    pub faces_dir: Option<PathBuf>,
+    pub faces_consent: Option<PathBuf>,
 }
 
 impl EngineConfig {
@@ -37,6 +44,17 @@ impl EngineConfig {
         argv.push("--encoder-idle".to_string());
         argv.push(format_gf64(self.encoder_idle));
         argv.extend(self.exclude_args());
+        // The People-scoped search (round twelve): the daemon can POOL a search into a
+        // person's photos. The flags ride always; the read-only store window opens only
+        // for a consented `person:` request (search_service.rs, faces_pool_paths).
+        if let Some(dir) = &self.faces_dir {
+            argv.push("--faces-dir".to_string());
+            argv.push(dir.to_string_lossy().into_owned());
+        }
+        if let Some(consent) = &self.faces_consent {
+            argv.push("--faces-consent".to_string());
+            argv.push(consent.to_string_lossy().into_owned());
+        }
         argv
     }
 
@@ -483,6 +501,11 @@ impl ServerConfig {
             models_dir: self.models_dir.clone(),
             encoder_idle: self.encoder_idle,
             include_datasets: self.include_datasets,
+            faces_dir: Some(self.config.join("faces")),
+            faces_consent: Some(crate::faces::consent_path(
+                &self.config,
+                crate::targets::MAIN_TARGET,
+            )),
         }
     }
 }

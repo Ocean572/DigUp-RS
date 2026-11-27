@@ -56,43 +56,24 @@ describe("digup-search", () => {
     expect((await p).detail.limit).toBe(100);
   });
 
-  // The names box: issue #190's surface gap closed — the engine's "name:" prefix is in the row,
-  // on the same event as everything else. Code and names are mutually exclusive because the
-  // engine reads one prefix per query ("code:" leads a text carrying both).
-  it("the names box rides the same event; ticking code clears it", async () => {
-    const names = el.shadowRoot.getElementById("names");
-    const code = el.shadowRoot.getElementById("code");
-    expect(names).not.toBeNull();
+  // The search-bar law (2026-11-27, the user): the names toggle and the scope/extension
+  // selects are OFF the bar — the only extra control right of the kind chips is the
+  // People dropdown. The typed prefixes stay in the field ("code: …", "name: …").
+  it("the bar carries no names box and no scope selects (the 2026-11-27 law)", async () => {
+    expect(el.shadowRoot.getElementById("names")).toBe(null);
+    expect(el.shadowRoot.getElementById("scope")).toBe(null);
+    expect(el.shadowRoot.getElementById("ext")).toBe(null);
     expect(el.shadowRoot.getElementById("q").placeholder).toContain("name: …");
-
-    const p1 = onceEvent(document, "digup:query-change");
-    names.checked = true;
-    names.dispatchEvent(new Event("change"));
-    const d1 = (await p1).detail;
-    expect(d1.names).toBe(true);
-    expect(d1.code).toBe(false);
-
-    const p2 = onceEvent(document, "digup:query-change");
+    const code = el.shadowRoot.getElementById("code");
+    expect(code).not.toBeNull();
+    const p = onceEvent(document, "digup:query-change");
     code.checked = true;
     code.dispatchEvent(new Event("change"));
-    const d2 = (await p2).detail;
-    expect(d2.code).toBe(true);
-    expect(d2.names).toBe(false);
-    await el.updateComplete;
-    expect(el.shadowRoot.getElementById("names").checked).toBe(false);
-  });
-
-  it("the shell's isNames writes the box (prefix and box are one state)", async () => {
-    // The box is the state, the prop is its mirror: `updated()` copies the prop in and the
-    // copy requests the render that shows it — two updates, as the code box's always has.
-    el.isNames = true;
-    await el.updateComplete;
-    await el.updateComplete;
-    expect(el.shadowRoot.getElementById("names").checked).toBe(true);
-    el.isNames = false;
-    await el.updateComplete;
-    await el.updateComplete;
-    expect(el.shadowRoot.getElementById("names").checked).toBe(false);
+    const d = (await p).detail;
+    expect(d.code).toBe(true);
+    expect("names" in d).toBe(false);
+    expect("under" in d).toBe(false);
+    expect("ext" in d).toBe(false);
   });
 
   it("the all button is a toggle: all six on → click clears all → click restores all", async () => {
@@ -118,11 +99,11 @@ describe("digup-search", () => {
     expect(el.shadowRoot.getElementById("q").value).toBe("a campfire");
   });
 
-  // The People dropdown (round six, 2026-11-23, the user's design): right of the kind chips,
-  // listing the store's named people; a pick rides the SAME search event with `person`, and
-  // the server answers which of the search's paths carry that person's face (relay — the
-  // engine's z's ride verbatim). No names (no consent, no names yet) → no dropdown. Code
-  // mode hides it: faces live on photos, not on code rows.
+  // The People dropdown (round twelve, 2026-11-27, the user's pool law): the ONE control
+  // right of the kind chips, listing the store's named people; a pick rides the SAME
+  // search event with `person`, and the ENGINE pools the search into that person's
+  // photos (z computed in the pool). No names (no consent, no names yet) → no dropdown.
+  // Code mode hides it: faces live on photos, not on code rows.
   it("the People dropdown: named people right of the chips, a pick emits person", async () => {
     expect(el.shadowRoot.getElementById("people-filter")).toBe(null);   // no names: hidden
     el.names = [{ id: 3, name: "Angela", count: 12 }, { id: 7, name: "Zora", count: 4 }];
@@ -151,60 +132,8 @@ describe("digup-search", () => {
     expect(el.shadowRoot.getElementById("people-filter")).toBe(null);
   });
 
-  // The scope selects (#206/#132/#188, 2026-11-25): a folder scope + a file-type keep right
-  // of the kind chips — the picks ride the SAME search event with `under`/`ext` lists
-  // (null = the field-less, byte-parity verb). The server relays; the engine narrows the
-  // scope inside its OWN roots and drops rows after the ranking — the UI invents no filter.
-  it("scope selects: roots and file types ride the chips row, picks emit under/ext", async () => {
-    expect(el.shadowRoot.getElementById("scope")).toBe(null);   // no roots published: hidden
-    expect(el.shadowRoot.getElementById("ext")).toBe(null);     // no answer yet: hidden
-    el.roots = ["/photos/vienna", "/data/clips"];
-    el.extensions = ["jpg", "webm"];
-    await el.updateComplete;
-    const scope = el.shadowRoot.getElementById("scope");
-    const ext = el.shadowRoot.getElementById("ext");
-    expect([...scope.querySelectorAll("option")].map((o) => o.textContent))
-      .toEqual(["All folders", "vienna", "clips"]);
-    expect([...ext.querySelectorAll("option")].map((o) => o.textContent))
-      .toEqual(["All types", ".jpg", ".webm"]);
-    const p = onceEvent(document, "digup:query-change");
-    scope.value = "/photos/vienna";
-    scope.dispatchEvent(new Event("change"));
-    expect((await p).detail.under).toEqual(["/photos/vienna"]);
-    const p2 = onceEvent(document, "digup:query-change");
-    ext.value = "webm";
-    ext.dispatchEvent(new Event("change"));
-    const d2 = (await p2).detail;
-    expect(d2.ext).toEqual(["webm"]);
-    expect(d2.under).toEqual(["/photos/vienna"]);   // folder + type compose in one detail
-    const p3 = onceEvent(document, "digup:query-change");
-    ext.value = "";
-    ext.dispatchEvent(new Event("change"));
-    expect((await p3).detail.ext).toBe(null);
-  });
-
-  it("the scope drops a folder the roots no longer carry (the server answers only for its roots)", async () => {
-    el.roots = ["/photos/vienna"];
-    await el.updateComplete;
-    const scope = el.shadowRoot.getElementById("scope");
-    scope.value = "/photos/vienna";
-    scope.dispatchEvent(new Event("change"));
-    el.roots = ["/data/clips"];                     // the root left the deployment
-    await el.updateComplete;
-    const p = onceEvent(document, "digup:query-change");
-    el.shadowRoot.getElementById("q").dispatchEvent(new Event("input"));
-    expect((await p).detail.under).toBe(null);
-  });
-
-  it("the scope selects hide in code mode", async () => {
-    el.roots = ["/photos/vienna"];
-    el.extensions = ["jpg"];
-    el.isCode = true;
-    await el.updateComplete;
-    await el.updateComplete;
-    expect(el.shadowRoot.getElementById("scope")).toBe(null);
-    expect(el.shadowRoot.getElementById("ext")).toBe(null);
-  });
+  // (The scope-select tests retired 2026-11-27 with the controls themselves — the
+  // "no names box and no scope selects" pin above is the bar's law now.)
 
   it("in-field keys: ↑↓ nav, ↩ activate, Space previews only after navigation", async () => {
     const nav = onceEvent(document, "digup:nav");

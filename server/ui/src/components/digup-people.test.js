@@ -36,7 +36,7 @@ const CONSENTED = {
   models: MODELS,
   counts: { faces: 3, assigned: 3, persons: 2, named: 1, pending: 1,
             models: { det: "scrfd_10g_bnkps.onnx", emb: "w600k_mbf.onnx", dim: 512 } },
-  persons: [{ id: 1, name: "Angela", count: 2, cover: 0.1, cover_face: COVER },
+  persons: [{ id: 1, name: "Angela", count: 2, cover: 0.1, cover_face: COVER, cover_media: "cov1" },
             { id: 2, name: null, count: 1, cover: 100, cover_face: PLAIN }],
   pending: [{ face: PENDING_FACE, candidates: [{ person: 1, name: "Angela", cos: 0.42 }] }],
   facesFor: null, scan: { spinning: false, result: null, error: null }, error: null,
@@ -121,7 +121,11 @@ describe("digup-people", () => {
     const cards = [...el.shadowRoot.querySelectorAll("#people-grid .person-card")];
     expect(cards.length).toBe(2);
     const crop = cards[0].querySelector(".crop");
-    expect(crop.querySelector("img").getAttribute("src")).toBe("/api/v1/media/aaa/preview?pixels=512");
+    // The pre-rendered cover card (round eleven): with the minted handle the
+    // panel reads the card FILE (no render); without it the preview seam answers.
+    expect(crop.querySelector("img").getAttribute("src")).toBe("/api/v1/media/cov1/file");
+    const plain = cards[1].querySelector(".crop");
+    expect(plain.querySelector("img").getAttribute("src")).toBe("/api/v1/media/bbb/preview?pixels=512");
     // box [10,10,60,60] in 200×100, padded head-and-shoulders and clamped: the window
     // is cw 82.5 × ch 100 (the shoulders padding hits the photo's bottom edge), the
     // photo enlarged by W/cw, offsets 0 (pure geometry, pinned on the numbers — jsdom's

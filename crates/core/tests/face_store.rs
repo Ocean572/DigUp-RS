@@ -54,6 +54,12 @@ fn schema_lands_at_version_three_with_the_faces_layout() {
         .expect("the scans table is there (schema 2)");
     s.db.query("SELECT width, height FROM faces", [], |_| Ok(()))
         .expect("the crop map is there (schema 3)");
+    // The cover cards (round eleven): the file for a person rides a `covers`
+    // folder INSIDE the faces home, named by the person id — beside
+    // face.sqlite, never beside the index.
+    let cover = s.cover_file(7);
+    assert!(cover.starts_with(s.directory.join("covers")));
+    assert!(cover.to_str().unwrap().ends_with("/7.jpg"));
 }
 
 #[test]
