@@ -5110,3 +5110,50 @@ the named centroid, idempotent). PKG4 RC=0 rebuilt the bundles with the button.
 `{"ok":true,"persons":8800,"faces":87896}` → persons 8,836 → **36** (all named), assigned
 150,196 → 62,300, review queue 45,408 → **133,304**, faces **195,604 unchanged** — every
 count reconciles; full store backup taken first (local, gitignored).
+
+## Round eleven + twelve (2026-11-27 night): cover cards, the person-POOLED search, the bar law
+
+**Cover cards (round eleven).** The People grid's cards are engine files stored INSIDE the
+faces home (`<config>/faces/<home>/covers/<id>.jpg`, beside `face.sqlite`): the scan fills
+them as a byproduct at the cluster tail (the photos it decodes are the decodes it pays for
+detection), and `unload`/`delete`/`merge`/`confirm` sweep the card files with the rows they
+dissolve — the cache follows the store, no reset is ever needed, the first Scan press fills
+a store that has no cards. The persons relay carries `cover_render`; the server mints
+`cover_media` like every media row; `/media/{id}/file` serves a card with **zero render** via
+the narrow faces-cover exception — exactly three path segments under `<config>/faces`, middle
+segment `covers`: faces data rides the consent wall (only the persons relay mints a card
+handle, behind the consent guard), never the roots wall, and the store file beside the cards
+is never servable.
+
+**The person-POOLED search (round twelve, the user's crowding fix).** The verb gains `person`
+(int ≥ 1): the face store's photo paths POOL the search inside the engine — the pool's files
+are the candidates AND the z-statistics (modality means, pool mean, deviation) compute over
+the pool's rows only. Measured on the pinned fixture (her 6 photos + a 4-photo crowd scoring
+higher than her best): the global answer is EMPTY (she is crowded out), `under:`-scope is
+EMPTY (the pinned #178 shape keeps whole-field z — a keep-filter, not a pool; the two fields
+are proven different on one store), the pool answers her standout at z = 2.225 ≥ 2.0σ. The
+keyword leg rides the same join (`AND s.file IN (...)`), coverage restricted; the empty pool
+answers no hits, like an empty scope. `search-service` takes `--faces-dir`/`--faces-consent`
+(the faces daemon's spellings), re-reads the consent record on EVERY People-scoped request
+(grants take effect without a daemon restart), and opens the store through the engine's new
+READ-ONLY window (`db::open_read_only` — a WAL reader, the faces writer never blocks); all
+walls gate engine-side, and the GUI wall rides unchanged (no consent → the 400 faces body
+before any daemon call; `code` + `person` → the daemon's refusal relayed). Round six's
+post-filter is retired: the engine's pool IS the filter.
+`keyword_rank` rides as the engine's per-answer position (the pool re-ranks its restricted
+list; the bm25 order is proven preserved).
+
+**The bar law (the user, 2026-11-27).** The names toggle and the Anywhere scope dropdown are
+OFF both search bars — the only extra control right of the kind chips is the **People**
+dropdown, which sends `person`. Typed `name:`/`code:` prefixes stay in the field; the verb
+fields the retired controls rode (`name_only`, `under`, `ext`) stay published for CLI/API
+clients (pinned server-side). The bundle pins now REJECT the retired ids.
+
+**Gates.** Workspace suite RC=0, 46 suites, 697 s (core pool pin + the vector laws green);
+services faces lib 23/23 (the daemon `person_scope` pin: pool join, empty pool, all four
+walls, consent revoke/restore); face-store gate 13/13 (covers fill + sweeps); contract suite
+**180 passed / 0 failed / 0 skipped** (252.54 s — the pool-law pin, covers pins, MCP parity
+strip of the per-answer `cover_media`, bar-law bundle pins); vitest 84/84; vite build;
+clippy plain + faces 0; fmt clean; shell cargo check + argv pins 2/2 (the faces flags ride
+the saved argv into every restart). API.md: the `person`/`under`/`ext` rows with the pool
+semantics, the cover-card law, the unload sweep, the bar law.
