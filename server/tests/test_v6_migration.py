@@ -58,7 +58,14 @@ def test_the_first_write_verb_lands_the_shared_v6_store_on_v7(index, corpus):
         assert anchors == [str(corpus)], "the corpus root's anchor row (the cluster validated)"
         rows = [r[0] for r in con.execute("SELECT path FROM files ORDER BY path")]
         assert len(rows) >= 15, "every stored row migrated — the root validates every cluster"
-        assert all(str(corpus).rstrip("/") + "/" in path for path in rows), \
+        assert all(not p.startswith("/") and ".." not in p.split("/") for p in rows), \
+            "the STORED row is RELATIVE (the v7 law: no leading slash, no `..`)"
+        assembled = [
+            r[0] for r in con.execute(
+                "SELECT a.abs || '/' || f.path FROM files f JOIN anchors a ON a.id = f.anchor"
+            )
+        ]
+        assert all(str(corpus).rstrip("/") + "/" in path for path in assembled), \
             "answers assemble the absolute spelling at the row edge, byte-for-byte"
         buckets = {r[0] for r in con.execute("SELECT DISTINCT bucket FROM counters")}
         assert buckets and all(b.startswith("1/") for b in buckets), \
