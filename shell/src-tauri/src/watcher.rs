@@ -274,14 +274,13 @@ mod tests {
         // Two sibling folders' files: the dirs that saw events stay SEPARATE scopes —
         // scoping is the neighborhood the events touched, never a wider walk (folding
         // siblings to their shared parent would scope MORE folders than the events name).
-        let (dirs, full) = collapse_to_dirs(&[p("/home/me/a/x.png"), p("/home/me/b/y.png")], &roots);
+        let (dirs, full) =
+            collapse_to_dirs(&[p("/home/me/a/x.png"), p("/home/me/b/y.png")], &roots);
         assert!(!full);
         assert_eq!(dirs, vec![p("/home/me/a"), p("/home/me/b")]);
         // Distant folders stay separate — each is its own scope.
-        let (dirs, full) = collapse_to_dirs(
-            &[p("/home/me/a/x.png"), p("/mnt/nas/photos/z.jpg")],
-            &roots,
-        );
+        let (dirs, full) =
+            collapse_to_dirs(&[p("/home/me/a/x.png"), p("/mnt/nas/photos/z.jpg")], &roots);
         assert!(!full);
         assert_eq!(dirs, vec![p("/home/me/a"), p("/mnt/nas/photos")]);
         // A folder and a deeper folder inside it: the outer walk covers the inner.
@@ -313,18 +312,26 @@ mod tests {
         assert!(!full);
         assert_eq!(dirs, vec![p("/home/me/Pictures")], "never /home/me");
         // The same for a folder chosen at the filesystem's top (the bench shape): the scope
-        // is the chosen folder, never `/`.
+        // is the chosen folder, never `/`. The inner folder's event folds INTO the root
+        // scope (the outermost-fold rule: one walk of `/data` covers `/data/photos`), so the
+        // burst keeps the clamp's floor, not the child.
         let (dirs, full) = collapse_to_dirs(&[p("/data"), p("/data/photos/x.jpg")], &[p("/data")]);
         assert!(!full);
-        assert_eq!(dirs, vec![p("/data"), p("/data/photos")]);
+        assert_eq!(
+            dirs,
+            vec![p("/data")],
+            "never `/`, and the child folds into it"
+        );
+        // A child folder ALONE (no event on the root) keeps the child as its scope.
+        let (dirs, full) = collapse_to_dirs(&[p("/data/photos/x.jpg")], &[p("/data")]);
+        assert!(!full);
+        assert_eq!(dirs, vec![p("/data/photos")]);
         // A folder chosen INSIDE another chosen folder: the deepest instruction owns its
         // events (the crawler's own rule, issue #3) — the shared folder's event does not
         // scope the whole home tree.
         let roots = vec![p("/home/me"), p("/home/me/Pictures/.private/shared")];
-        let (dirs, full) = collapse_to_dirs(
-            &[p("/home/me/Pictures/.private/shared/photo.jpg")],
-            &roots,
-        );
+        let (dirs, full) =
+            collapse_to_dirs(&[p("/home/me/Pictures/.private/shared/photo.jpg")], &roots);
         assert!(!full);
         assert_eq!(dirs, vec![p("/home/me/Pictures/.private/shared")]);
         // The component boundary, at the shell edge too: a path that is not inside any chosen
@@ -345,7 +352,11 @@ mod tests {
         // UTF-8, and serde serializes a path by its UTF-8 `str`: the scoped verb cannot be
         // built, and the tree would never sync again — every burst in it answering the same
         // error. The collapse gives up on the scope, and the plain `sync` line needs no paths.
-        let raw = OsString::from_vec(vec![b'/a/', 0xff, 0xfe, b'/x.jpg']);
+        let mut raw_bytes: Vec<u8> = Vec::new();
+        raw_bytes.extend_from_slice(b"/a/");
+        raw_bytes.extend_from_slice(&[0xff, 0xfe]);
+        raw_bytes.extend_from_slice(b"/x.jpg");
+        let raw = OsString::from_vec(raw_bytes);
         let (dirs, full) = collapse_to_dirs(&[PathBuf::from(raw)], &[PathBuf::from("/a")]);
         assert!(full, "a non-UTF-8 scope is the whole set's job");
         assert!(dirs.is_empty());
