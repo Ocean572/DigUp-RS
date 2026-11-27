@@ -20,16 +20,18 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value};
 
 use digup_core::crawler;
-use digup_core::face_store::{FaceRecord, FaceRow, FaceStore, ScanOf};
+use digup_core::face_store::{FaceRecord, FaceRow, FaceStore, ScanOf, FACE_FILE};
 use digup_core::options::IndexOptions;
 use digup_core::paths;
 use digup_native::rgb::RgbImage;
 use digup_runtime::face::{Embedder, Scrfd};
+use sha2::{Digest, Sha256};
 
 use crate::emit::emit;
 
-/// The daemon's start shape. `index` is the index folder (face.sqlite rides
-/// beside index.sqlite, its own file — FACES.md §2); `models` carries the ONNX
+/// The daemon's start shape. `index` is the index folder (its anchors hash the
+/// device-side faces home — the #195 privacy move; the legacy beside-index.sqlite
+/// shape moves on first open); `models` carries the ONNX
 /// pins; the thresholds are the clustering knobs from the config.
 #[derive(Clone)]
 pub struct FaceServiceConfig {
@@ -64,6 +66,13 @@ pub struct FaceServiceConfig {
     /// skip background faces from low-confidence detections.
     /// `--faces-min-score` moves it; default 0.5 changes nothing.
     pub min_score: f32,
+    /// The device-side faces root (#195, the privacy boundary): the faces' file
+    /// rides `<faces_dir>/<anchor-hash>/face.sqlite`, NOT the index folder — an
+    /// in-tree `.digup` carries index + previews only, so a folder carried away
+    /// carries its index, never its faces. The store's anchors hash the folder
+    /// (a v6 store's faces hash by index path); a legacy `face.sqlite` beside
+    /// index.sqlite moves to the new home on first open.
+    pub faces_dir: PathBuf,
 }
 
 struct State {
@@ -101,6 +110,60 @@ pub fn face_service(config: FaceServiceConfig) -> i32 {
     }
 }
 
+/// The faces' home on the device (#195, the privacy boundary): the store's anchors
+/// hash the folder — `abs` spellings in id order, 16 hex of sha256; a v6 store (no
+/// anchors table, rows absolute) and an anchorless store hash the index path. The
+/// join law rides untouched: faces key on `(path, size, mtime)` of the store they
+/// belong to, so the folder key IS the store's identity, spelled device-locally.
+/// `pub` for the seam's pins (`tests/faces_move.rs`).
+pub fn faces_store_dir(index: &Path, faces_root: &Path) -> PathBuf {
+    let key = match digup_core::IndexStore::open(index, digup_core::MAIN_FILE) {
+        Ok(store) => match store.anchors() {
+            Ok(anchors) if !anchors.is_empty() => anchors
+                .iter()
+                .map(|a| a.abs.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => index.to_string_lossy().into_owned(),
+        },
+        Err(_) => index.to_string_lossy().into_owned(),
+    };
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    faces_root.join(hex)
+}
+
+/// The legacy move: a `face.sqlite` beside index.sqlite (the FACES.md §2 shape)
+/// rides to the device-side home on first open — sidecars (`-wal`/`-shm`) with
+/// it. Never destructive: a file already at the new home wins (the old copy
+/// stands untouched for the operator), and the move is a rename on the same
+/// volume when possible, a copy+delete across volumes. `pub` for the pins.
+pub fn move_legacy_faces(index: &Path, dir: &Path) {
+    let old = index.join(FACE_FILE);
+    let new = dir.join(FACE_FILE);
+    if !old.exists() || new.exists() {
+        return;
+    }
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let from = index.join(format!("{FACE_FILE}{suffix}"));
+        if !from.exists() {
+            continue;
+        }
+        let to = dir.join(format!("{FACE_FILE}{suffix}"));
+        if std::fs::rename(&from, &to).is_ok() {
+            continue;
+        }
+        // Cross-volume fallback: copy, delete the source on success — the WAL
+        // rides with the main file, so the trio moves whole.
+        if std::fs::copy(&from, &to).is_ok() {
+            let _ = std::fs::remove_file(&from);
+        }
+    }
+}
+
 fn run(config: FaceServiceConfig) -> Result<i32, String> {
     // The consent gate is the engine's own law (FACES.md Phase 1 §5 — the
     // license posture is "user-supplied-only, consented"): the daemon refuses
@@ -123,8 +186,13 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             }
         }
     }
+    // The privacy law (#195): faces ride the device, not the folder. The store's
+    // anchors hash the device-side home; a legacy face.sqlite beside index.sqlite
+    // moves there on first open (the daemon is the only opener).
+    let faces_home = faces_store_dir(&config.index, &config.faces_dir);
+    move_legacy_faces(&config.index, &faces_home);
     let store = Arc::new(Mutex::new(
-        FaceStore::open(&config.index).map_err(|e| e.to_string())?,
+        FaceStore::open(&faces_home).map_err(|e| e.to_string())?,
     ));
     let state = State {
         store,
@@ -141,6 +209,7 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             excluded_folders: config.excluded_folders.clone(),
             min_faces: config.min_faces,
             min_score: config.min_score,
+            faces_dir: config.faces_dir.clone(),
         },
         scrfd: None,
         embedder: None,

@@ -223,8 +223,9 @@ fn main() {
         }
         #[cfg(feature = "faces")]
         Some("faces-service") => {
-            // The faces verbs daemon (FACES.md Phase 2 §2): face.sqlite rides in the
-            // index folder, the ONNX pins are user-supplied in the models folder
+            // The faces verbs daemon (FACES.md Phase 2 §2): the faces' file rides
+            // the device-side home `--faces-dir/<anchor-hash>/face.sqlite` (#195
+            // privacy move), the ONNX pins are user-supplied in the models folder
             // (the license gate's posture), thresholds are the clustering knobs,
             // and the models unload after their idle window (Phase 2 §4).
             let models = args
@@ -244,6 +245,7 @@ fn main() {
             }
             let config = digup_services::face_service::FaceServiceConfig {
                 index: args.index_folder(),
+                faces_dir: faces_root(&args),
                 models,
                 det_model: args
                     .value("--det-model")
@@ -509,6 +511,30 @@ impl Arguments {
         };
         url_path(&base.join("digup").join("index").to_string_lossy())
     }
+}
+
+/// The device-side faces root (#195, the privacy boundary): `--faces-dir`, the
+/// `DIGUP_FACES_DIR` env, or the default index's sibling
+/// (`$XDG_DATA_HOME/digup/faces`). Faces never ride in-tree — `.digup` carries
+/// index + previews only, so carrying a folder carries its index, never its faces.
+#[cfg(feature = "faces")]
+fn faces_root(args: &Arguments) -> PathBuf {
+    if let Some(chosen) = args.value("--faces-dir") {
+        return url_path(chosen);
+    }
+    if let Ok(value) = std::env::var("DIGUP_FACES_DIR") {
+        if !value.is_empty() {
+            return url_path(&value);
+        }
+    }
+    let base = match std::env::var("XDG_DATA_HOME") {
+        Ok(value) if !value.is_empty() => PathBuf::from(value),
+        _ => std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".local/share"),
+    };
+    base.join("digup").join("faces")
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
