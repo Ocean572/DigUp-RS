@@ -45,6 +45,6 @@ pub mod zipfile;
 
 pub use db::{Database, Error, Result, Sql};
 pub use index_store::{
-    Anchor, Counts, IndexStore, StoreMode, CODE_FILE, MAIN_FILE, SCHEMA_VERSION,
+    Anchor, Counts, IndexStore, MigrationReport, StoreMode, CODE_FILE, MAIN_FILE, SCHEMA_VERSION,
 };
 pub use model::{Candidate, FileKind, FileRecord, Modality, SegmentKind};

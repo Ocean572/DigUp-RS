@@ -126,33 +126,42 @@ impl IndexStore {
         Ok(())
     }
 
-    /// The migration verb for a store WITH rows (#195, S2): a v6 store (absolute paths)
-    /// becomes v7 (anchors + relative rows + prefixed counter keys), keeping ids, rows,
-    /// counters, and every answer byte-identical to what v6 answered. The writer entry
-    /// (`write_guard`) runs it on the first write verb; reads never migrate.
+    /// The migration verb for a store WITH rows (#195, S2, spec law (a)): a v6 store
+    /// (absolute paths) becomes v7 (anchors + relative rows + prefixed counter keys), keeping
+    /// ids, rows, counters, and every answer byte-identical to what v6 answered. The writer
+    /// entry (`write_guard`) runs it on the first write verb; reads never migrate.
     ///
-    /// The split is the writer's law: a row under a REGISTERED root (the scope folders — the
-    /// argv roots, matched over both spellings, longest bound wins, ties the lower anchor id)
-    /// anchors AT the root carrying its full relative path; a row under no root anchors at its
-    /// PARENT folder with the bare name — the same law an unregistered writer follows, so a
-    /// ghost row keeps its data, its out-of-scope status, and its assembled answer (the ghost
-    /// cure stays `prune`).
+    /// Anchors come from the STORED rows (bucket clusters), the argv roots VALIDATE them: a
+    /// cluster exact-in or containing a root anchors its rows AT the root (the argv-roots-to-
+    /// anchors law; rows the root does not cover are ghosts); a REMOUNTED cluster (the tree
+    /// moved, `photos` under the old prefix, the argv root is the new mount — a tail-component
+    /// match, one candidate) REBASES onto the root, anchor.abs the current spelling (the
+    /// portability promise; name rows re-tokenize from the new root spelling via `move_file`);
+    /// a cluster no root validates — ambiguous tail included — is PRUNED per the ghost law,
+    /// the pruned rows counted and reported (`MigrationReport`, relayed verbatim, the engine
+    /// invents nothing). A store with NO roots parent-anchors everything (the
+    /// unregistered-writer law; rootless stores, no pruning).
+    ///
+    /// The UNIQUE pre-check runs before ANY write: a collision quotes the offending pair and
+    /// refuses (v6's global UNIQUE(path) makes containment collisions impossible; a remount
+    /// CAN land two clusters on one anchor — that refusal is honest and permanent).
     ///
     /// The resume law: the meta marker `portable_migration` says the verb is under way, and
     /// every phase is idempotent — CREATE IF NOT EXISTS, INSERT OR IGNORE keyed on the row id,
-    /// the map re-inserted with OR REPLACE, the counters UPDATE keyed on the old bucket — so a
-    /// run interrupted by a crash resumes with a plain re-run from the marker. A store is
-    /// v6-with-marker or v7, never in between: the swap, the counters re-key, the consistency
-    /// gate, and the stamp ride ONE transaction, so a reader sees v6 bytes before it and v7
-    /// bytes after, never a mix; a gate failure after the self-heal rolls the transaction
-    /// back — the store stays a verbatim v6, the marker stands, the next write verb resumes.
-    pub fn migrate_portable(&self) -> Result<()> {
+    /// the prune DELETEs keyed on ids that are then gone, the map re-inserted with OR REPLACE,
+    /// the counters UPDATE keyed on the old bucket — so a run interrupted by a crash resumes
+    /// with a plain re-run from the marker. A store is v6-with-marker or v7, never in between:
+    /// the swap, the counters re-key, the consistency gate, and the stamp ride ONE transaction,
+    /// so a reader sees v6 bytes before it and v7 bytes after, never a mix; a gate failure
+    /// after the self-heal rolls the transaction back — the store stays a verbatim v6, the
+    /// marker stands, the next write verb resumes.
+    pub fn migrate_portable(&self) -> Result<MigrationReport> {
         if self.mode.get() == StoreMode::V7 {
-            return Ok(());
+            return Ok(MigrationReport::default());
         }
         let roots: Vec<String> = self.scope.borrow().clone().unwrap_or_default();
-        // Phase 1 (carries its own idempotent phase 0): copy every row through the split.
-        self.migrate_copy_rows(&roots)?;
+        // Phase 1 (carries its own idempotent phase 0): plan, prune the ghosts, copy.
+        let plan = self.migrate_phase1(&roots)?;
         // Phase 2: swap + counters re-key + gate + stamp — one transaction.
         self.migrate_swap()?;
         self.mode.set(StoreMode::V7);
@@ -172,13 +181,23 @@ impl IndexStore {
             self.db.execute("DROP TABLE IF EXISTS scopeb")?;
             self.set_scope(Some(folders))?;
         }
-        Ok(())
+        // The remount rewrites re-tokenize their name rows from the NEW root spelling
+        // (the s343 law: folder tokens quote the root): `move_file` to the assembled path —
+        // the counters ride the trigger's WHEN-same no-op, the fts name row rewrites.
+        for (id, to) in &plan.rewritten {
+            self.move_file(*id, to)?;
+        }
+        Ok(plan.report())
     }
 
     /// Phase 1 of `migrate_portable`, spelled out for the harness (the resume pin runs it
-    /// alone to build an interrupted store). The window walks `id > last ORDER BY id` —
-    /// keyset paging, so the copy costs one pass over the rows whatever the page size.
+    /// alone to build an interrupted store): phase 0, the plan, the prune, the copy.
     pub fn migrate_copy_rows(&self, roots: &[String]) -> Result<()> {
+        self.migrate_phase1(roots)?;
+        Ok(())
+    }
+
+    fn migrate_phase1(&self, roots: &[String]) -> Result<MigrationPlan> {
         // Phase 0 (idempotent — it runs on every entry, resume included): the anchors
         // table, the new files table, the old→new bucket map, the marker.
         self.db.transaction(|| {
@@ -195,19 +214,216 @@ impl IndexStore {
             )?;
             Ok(())
         })?;
+        let plan = self.migrate_plan(roots)?;
+        self.migrate_prune(&plan.ghosts)?;
+        self.migrate_copy(&plan)?;
+        Ok(plan)
+    }
+
+    /// Phase 1 of `migrate_portable`, spelled out for the harness (the resume pin runs it
+    /// The migration's row plan (spec law (a)): clusters from the STORED rows (bucket
+    /// prefixes with no stored ancestor), validated against the argv roots. Modes:
+    /// ROOT (the cluster is exact-in/contained-by/contains a root — rows anchor AT the
+    /// root, matched over both spellings, longest bound; a row the root does not cover is
+    /// a GHOST); REWRITE (the remount law — the cluster's path shares a tail-component run
+    /// with EXACTLY one root: the tree moved, the rows REBASE onto the root's current
+    /// spelling, `anchor.abs` = argv root, `anchor.real` = realpath — the portability
+    /// promise); GHOST (no root validates the cluster — an ambiguous tail counts as no
+    /// validation: the cluster's rows are PRUNED, counted in the report — the prune cure,
+    /// reused). A store with NO roots parent-anchors every row (the unregistered-writer
+    /// law). The UNIQUE pre-check rides every row HERE — before any write (spec law (c)):
+    /// a collision quotes the offending pair and refuses.
+    fn migrate_plan(&self, roots: &[String]) -> Result<MigrationPlan> {
         let mut cache: HashMap<String, i64> = HashMap::new();
-        let mut bounds: Vec<(String, i64)> = Vec::new();
+        let mut plan = MigrationPlan::default();
+        if roots.is_empty() {
+            // Rootless store: parent-anchor every row. No clusters, no validation, no
+            // pruning — the shape a bare-CLI store takes from birth.
+            let mut last_id = 0i64;
+            loop {
+                let mut batch: Vec<(i64, String)> = Vec::new();
+                self.db.query(
+                    "SELECT id, path FROM files WHERE id > ? ORDER BY id LIMIT 25000",
+                    vec![Sql::Int(last_id)],
+                    |row| {
+                        batch.push((row.int(0), row.text(1).unwrap_or_default()));
+                        Ok(())
+                    },
+                )?;
+                if batch.is_empty() {
+                    plan.anchors = cache.len() as i64;
+                    return Ok(plan);
+                }
+                for (id, path) in &batch {
+                    let parent = bucket_of(path);
+                    let anchor_abs = if parent.is_empty() {
+                        "/".to_string()
+                    } else {
+                        parent
+                    };
+                    let (anchor, _) = self.ensure_anchor_raw(&anchor_abs, &mut cache)?;
+                    let rel = crate::paths::last_component(path).to_string();
+                    plan.put(*id, anchor, rel, path, None)?;
+                }
+                last_id = batch.last().expect("a non-empty batch").0;
+            }
+        }
+        // Root bounds over BOTH spellings (the dual-spelling law the S1 writer rides).
+        let mut root_ids: HashMap<String, i64> = HashMap::new();
+        let mut root_bounds: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+        let mut root_specs: Vec<(String, Option<String>)> = Vec::new();
         for root in roots {
             let root = crate::paths::standardize(&crate::paths::to_slashes(root));
             let (id, real) = self.ensure_anchor_raw(&root, &mut cache)?;
-            bounds.push((crate::paths::bound(&root), id));
-            if let Some(real) = real {
+            let mut bounds = vec![(crate::paths::bound(&root), id)];
+            if let Some(real) = real.clone() {
                 bounds.push((crate::paths::bound(&real), id));
             }
+            root_ids.insert(root.clone(), id);
+            root_bounds.insert(root.clone(), bounds);
+            root_specs.push((root, real));
         }
-        // Ties on equal bound length take the LOWER anchor id (the split_anchor law): the
-        // bounds ride insertion order, which is anchor-id order, and only a strict win
-        // replaces the pick.
+        // Clusters: stored buckets with no stored ancestor (bucket "" is the root folder
+        // — the root-level files — and an ancestor of everything, so it alone is a cluster).
+        let mut buckets: Vec<String> = Vec::new();
+        self.db.query(
+            "SELECT DISTINCT bucket FROM files ORDER BY bucket",
+            [],
+            |row| {
+                buckets.push(row.text(0).unwrap_or_default());
+                Ok(())
+            },
+        )?;
+        let set: std::collections::HashSet<&str> = buckets.iter().map(|s| s.as_str()).collect();
+        let clusters: Vec<String> = buckets
+            .iter()
+            .filter(|b| {
+                // No stored strict ancestor: walk the path's prefixes.
+                if b.is_empty() {
+                    return true; // the root cluster — always the single top cluster
+                }
+                let mut cut = b.rfind('/');
+                loop {
+                    match cut {
+                        Some(i) => {
+                            if set.contains(&b[..i]) {
+                                return false;
+                            }
+                            cut = b[..i].rfind('/');
+                        }
+                        None => {
+                            return !set.contains("");
+                        }
+                    }
+                }
+            })
+            .cloned()
+            .collect();
+        let clusters = if clusters.contains(&String::new()) {
+            vec![String::new()] // the root cluster covers every bucket
+        } else {
+            clusters
+        };
+        // Cluster → mode.
+        let modes: HashMap<String, ClusterMode> = clusters
+            .iter()
+            .map(|c| {
+                let cpath = if c.is_empty() {
+                    "/".to_string()
+                } else {
+                    c.clone()
+                };
+                (c.clone(), cluster_mode(&cpath, &root_specs))
+            })
+            .collect();
+        // Rows, windowed: cluster lookup (few clusters, the deepest ancestor), split.
+        let mut last_id = 0i64;
+        loop {
+            let mut batch: Vec<(i64, String, String)> = Vec::new();
+            self.db.query(
+                "SELECT id, path, bucket FROM files WHERE id > ? ORDER BY id LIMIT 25000",
+                vec![Sql::Int(last_id)],
+                |row| {
+                    batch.push((
+                        row.int(0),
+                        row.text(1).unwrap_or_default(),
+                        row.text(2).unwrap_or_default(),
+                    ));
+                    Ok(())
+                },
+            )?;
+            if batch.is_empty() {
+                plan.anchors = cache.len() as i64;
+                return Ok(plan);
+            }
+            for (id, path, bucket) in &batch {
+                let cluster = clusters
+                    .iter()
+                    .filter(|c| bucket_ancestor(c, bucket))
+                    .max_by_key(|c| c.len())
+                    .map(|c| c.as_str())
+                    .unwrap_or("");
+                match modes.get(cluster).unwrap_or(&ClusterMode::Ghost).clone() {
+                    ClusterMode::Root(root) => {
+                        let bounds = root_bounds
+                            .get(&root)
+                            .expect("the root's bounds were built above");
+                        let mut best: Option<(usize, i64)> = None;
+                        for (bound, anchor) in bounds {
+                            if path.starts_with(bound)
+                                && best.is_none_or(|(len, _)| bound.len() > len)
+                            {
+                                best = Some((bound.len(), *anchor));
+                            }
+                        }
+                        match best {
+                            Some((len, anchor)) => {
+                                let rel = path[len..].trim_start_matches('/').to_string();
+                                plan.put(*id, anchor, rel, path, None)?;
+                            }
+                            None => plan.ghosts.push(*id),
+                        }
+                    }
+                    ClusterMode::Rewrite(root, cluster) => {
+                        let bound =
+                            crate::paths::bound(if cluster.is_empty() { "/" } else { &cluster });
+                        if !path.starts_with(&bound) {
+                            plan.ghosts.push(*id);
+                            continue;
+                        }
+                        let rel = path[bound.len()..].trim_start_matches('/').to_string();
+                        let anchor = *root_ids.get(&root).expect("rewrite root ensured");
+                        let assembled = assemble_abs(&root, &rel);
+                        let rewritten = (assembled.as_str() != path.as_str()).then_some(assembled);
+                        plan.put(*id, anchor, rel, path, rewritten)?;
+                    }
+                    ClusterMode::Ghost => plan.ghosts.push(*id),
+                }
+            }
+            last_id = batch.last().expect("a non-empty batch").0;
+        }
+    }
+
+    /// Phase 1.5 of `migrate_portable` (spec law (a)): the ghost rows are PRUNED — the
+    /// DELETE rides FK ON (segments cascade with their rows), and the files_ad/file
+    /// triggers move the counters down as they always do. Chunked transactions (the WAL
+    /// law). The pruned count lands in the report, verbatim.
+    fn migrate_prune(&self, ghosts: &[i64]) -> Result<()> {
+        for chunk in ghosts.chunks(2000) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            self.db.run(
+                &format!("DELETE FROM files WHERE id IN ({placeholders})"),
+                chunk.iter().map(|id| Sql::Int(*id)).collect::<Vec<Sql>>(),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Phase 1 copy: every planned row, id-windowed transactions, keyed on the row id
+    /// (`INSERT OR IGNORE` — the resume re-runs cost a scan, no double rows), carrying the
+    /// old→new bucket map the counters ride (the WALK spelling v6 wrote — an
+    /// assembled-string map would miss the symlinked-root rows).
+    fn migrate_copy(&self, plan: &MigrationPlan) -> Result<()> {
         let mut last_id = 0i64;
         loop {
             let mut batch: Vec<V6Row> = Vec::new();
@@ -218,7 +434,6 @@ impl IndexStore {
                 |row| {
                     batch.push(V6Row {
                         id: row.int(0),
-                        path: row.text(1).unwrap_or_default(),
                         kind: row.text(2).unwrap_or_default(),
                         size: row.int(3),
                         mtime: row.double(4),
@@ -242,16 +457,17 @@ impl IndexStore {
             }
             self.db.transaction(|| {
                 for row in &batch {
-                    let (anchor, rel) = self.migrate_split(&row.path, &bounds, &mut cache)?;
-                    let bucket = format!("{}/{}", anchor, bucket_of(&rel));
+                    let Some(planned) = plan.rows.get(&row.id) else {
+                        continue; // ghost rows are pruned before the copy; safety: skip
+                    };
                     self.db.run(
                         "INSERT OR IGNORE INTO files_new(id, anchor, path, kind, size, mtime, inode, \
                          device, state, detail, info, indexed_at, bucket) \
                          VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         vec![
                             Sql::Int(row.id),
-                            Sql::Int(anchor),
-                            Sql::Text(rel.clone()),
+                            Sql::Int(planned.anchor),
+                            Sql::Text(planned.rel.clone()),
                             Sql::Text(row.kind.clone()),
                             Sql::Int(row.size),
                             Sql::Double(row.mtime),
@@ -261,50 +477,19 @@ impl IndexStore {
                             Sql::opt_text(row.detail.as_deref()),
                             Sql::opt_text(row.info.as_deref()),
                             Sql::opt_double(row.indexed_at),
-                            Sql::Text(bucket.clone()),
+                            Sql::Text(planned.bucket.clone()),
                         ],
                     )?;
-                    // The counters ride the map: the v6 bucket key (as the rows spell it —
-                    // the walk spelling included) re-keys to the anchor-prefixed one.
                     self.db.run(
                         "INSERT INTO migration_map(old, new) VALUES(?, ?) \
                          ON CONFLICT(old) DO UPDATE SET new = excluded.new",
-                        vec![Sql::Text(row.bucket.clone()), Sql::Text(bucket)],
+                        vec![Sql::Text(row.bucket.clone()), Sql::Text(planned.bucket.clone())],
                     )?;
                 }
                 Ok(())
             })?;
             last_id = batch.last().expect("a non-empty batch").id;
         }
-    }
-
-    /// The split of a v6 row path: the registered-root bound match (longest wins, ties the
-    /// lower id) gives the root anchor + the FULL relative path; no match anchors at the
-    /// parent folder with the bare name (the unregistered-writer law, parent-less paths
-    /// anchoring at `/`).
-    fn migrate_split(
-        &self,
-        path: &str,
-        bounds: &[(String, i64)],
-        cache: &mut HashMap<String, i64>,
-    ) -> Result<(i64, String)> {
-        let mut best: Option<(usize, i64)> = None;
-        for (bound, id) in bounds {
-            if path.starts_with(bound) && best.is_none_or(|(len, _)| bound.len() > len) {
-                best = Some((bound.len(), *id));
-            }
-        }
-        if let Some((len, id)) = best {
-            return Ok((id, path[len..].trim_start_matches('/').to_string()));
-        }
-        let parent = bucket_of(path);
-        let anchor = if parent.is_empty() {
-            "/".to_string()
-        } else {
-            parent
-        };
-        let (id, _) = self.ensure_anchor_raw(&anchor, cache)?;
-        Ok((id, crate::paths::last_component(path).to_string()))
     }
 
     /// The migration-internal anchor insert: `ensure_anchor`'s contract (the realpath
@@ -372,6 +557,14 @@ impl IndexStore {
                      WHERE bucket IN (SELECT old FROM migration_map)"
                 ))?;
             }
+            // The prune's zero law: the DELETEs fired `files_ad`, which decrements counter
+            // keys WITHOUT deleting them (the trigger SQL above — a zero key is v6's normal
+            // residue). The engine already owns the cleanup verb (`prune_zero_counter_rows`,
+            // PRUNE_ZERO_SQL); the migration runs it here so a pruned cluster's v6-shaped
+            // key never survives into the prefix space. A NON-zero orphan key (its rows died
+            // before the map was built) is deliberately NOT touched — the consistency gate
+            // below catches it and the self-heal recomputes it clean.
+            self.db.execute(PRUNE_ZERO_SQL)?;
             self.db.execute(&drop_triggers)?;
             self.db.execute("DROP TABLE files")?;
             self.db.execute("ALTER TABLE files_new RENAME TO files")?;
@@ -1975,7 +2168,6 @@ fn create_scope_anchor(db: &Database, table: &str, ranges: &[(i64, String, Strin
 /// A v6 row as the migration reads it (#195, S2): every column the v7 `files` row keeps.
 struct V6Row {
     id: i64,
-    path: String,
     kind: String,
     size: i64,
     mtime: f64,
@@ -1986,4 +2178,157 @@ struct V6Row {
     info: Option<String>,
     indexed_at: Option<f64>,
     bucket: String,
+}
+
+/// A v7 answer assembly at the string edge: `anchor + rel` with exactly one slash
+/// (the POSIX root anchor carries its own; a drive root gets the slash inserted).
+fn assemble_abs(anchor: &str, rel: &str) -> String {
+    if anchor.ends_with('/') {
+        format!("{anchor}{rel}")
+    } else {
+        format!("{anchor}/{rel}")
+    }
+}
+
+/// The bucket-ancestor law in the v6 key space: bucket `""` is the root folder (an
+/// ancestor of every bucket); `a` is an ancestor of `b` when `b` sits under `a/`.
+fn bucket_ancestor(a: &str, b: &str) -> bool {
+    a == b || a.is_empty() || b.starts_with(&format!("{a}/"))
+}
+
+/// The remount tail match: the number of trailing path components shared by the cluster
+/// path and a root (`photos` under `/mnt/old/photos` and `/mnt/new/photos` → 1). Drive
+/// spellings (`C:`) count as a component like any other.
+fn common_tail(a: &str, b: &str) -> usize {
+    let ac: Vec<&str> = a.split('/').filter(|s| !s.is_empty()).collect();
+    let bc: Vec<&str> = b.split('/').filter(|s| !s.is_empty()).collect();
+    let mut n = 0;
+    while n < ac.len() && n < bc.len() && ac[ac.len() - 1 - n] == bc[bc.len() - 1 - n] {
+        n += 1;
+    }
+    n
+}
+
+/// Where a cluster's rows go (the spec law (a) validation result).
+#[derive(Debug, Clone)]
+enum ClusterMode {
+    /// Anchor AT this root (the argv-roots-to-anchors law; the root covers the cluster).
+    Root(String),
+    /// The remount law: rebase onto this root — the cluster's tail run matched exactly
+    /// one root. Rows carry their names under the cluster's bound.
+    Rewrite(String, String),
+    /// No root validates the cluster (an ambiguous tail counts as none): its rows are
+    /// pruned, counted in the report.
+    Ghost,
+}
+
+fn cluster_mode(cpath: &str, roots: &[(String, Option<String>)]) -> ClusterMode {
+    // Validation rides BOTH spellings (the dual-spelling law): a cluster spelled in the
+    // WALK form (`/private/var/…`, the realpath the crawler reports) is covered by the
+    // root's REAL spelling even though the argv form (`/var`) does not contain it.
+    let covers = |r: &str| crate::paths::is_inside(cpath, r);
+    let contained = |r: &str| crate::paths::is_inside(r, cpath);
+    for (r, real) in roots {
+        if *r == cpath || real.as_deref() == Some(cpath) {
+            return ClusterMode::Root(r.clone());
+        }
+    }
+    for (r, real) in roots {
+        if covers(r) || real.as_deref().is_some_and(covers) {
+            return ClusterMode::Root(r.clone());
+        }
+    }
+    for (r, real) in roots {
+        if contained(r) || real.as_deref().is_some_and(contained) {
+            return ClusterMode::Root(r.clone());
+        }
+    }
+    let candidates: Vec<&String> = roots
+        .iter()
+        .filter(|(r, real)| {
+            common_tail(cpath, r) >= 1
+                || real.as_deref().is_some_and(|x| common_tail(cpath, x) >= 1)
+        })
+        .map(|(r, _)| r)
+        .collect();
+    if candidates.len() == 1 {
+        return ClusterMode::Rewrite(candidates[0].clone(), cpath.to_string());
+    }
+    ClusterMode::Ghost
+}
+
+/// One migrated row's home in the v7 layout.
+#[derive(Clone)]
+struct PlannedRow {
+    anchor: i64,
+    rel: String,
+    bucket: String,
+}
+
+/// The plan behind one portable migration (read before any write, so the UNIQUE refusal
+/// is a refusal-before-any-write, spec law (c)).
+#[derive(Default)]
+struct MigrationPlan {
+    rows: HashMap<i64, PlannedRow>,
+    ghosts: Vec<i64>,
+    rewritten: Vec<(i64, String)>,
+    anchors: i64,
+    collisions: HashMap<(i64, String), String>,
+}
+
+impl MigrationPlan {
+    /// Register one row: the prefix bucket key, the UNIQUE(anchor, path) pre-check
+    /// (collision = refuse quoting the pair), and the rewrite target when the assembled
+    /// answer differs from the stored path (remount — the name row re-tokenizes post-swap).
+    fn put(
+        &mut self,
+        id: i64,
+        anchor: i64,
+        rel: String,
+        path: &str,
+        rewritten: Option<String>,
+    ) -> Result<()> {
+        if let Some(first) = self
+            .collisions
+            .insert((anchor, rel.clone()), path.to_string())
+        {
+            return Err(crate::db::Error::Failure(format!(
+                "the portable migration refuses: {first} and {path} collide as {rel} under anchor {anchor} (UNIQUE(anchor, path))"
+            )));
+        }
+        let bucket = format!("{}/{}", anchor, bucket_of(&rel));
+        self.rows.insert(
+            id,
+            PlannedRow {
+                anchor,
+                rel,
+                bucket,
+            },
+        );
+        if let Some(to) = rewritten {
+            self.rewritten.push((id, to));
+        }
+        Ok(())
+    }
+
+    fn report(&self) -> MigrationReport {
+        MigrationReport {
+            rows: self.rows.len() as i64 + self.ghosts.len() as i64,
+            migrated: self.rows.len() as i64,
+            pruned: self.ghosts.len() as i64,
+            anchors: self.anchors,
+            rewritten: self.rewritten.len() as i64,
+        }
+    }
+}
+
+/// What a portable migration did (#195 S2, spec law (a): the pruned rows are COUNTED and
+/// REPORTED verbatim — the thin-client law: the engine counts, the verb relays).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MigrationReport {
+    pub rows: i64,
+    pub migrated: i64,
+    pub pruned: i64,
+    pub anchors: i64,
+    pub rewritten: i64,
 }

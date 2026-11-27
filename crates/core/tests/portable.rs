@@ -487,11 +487,13 @@ fn row_count(store: &IndexStore) -> i64 {
         .unwrap()
 }
 
-/// The migration of a store WITH rows (S2): registered roots split rows at the root with
-/// the FULL relative path; a row under no root parent-anchors (the unregistered-writer law
-/// — the ghost keeps its data, its out-of-scope status, and its assembled answer; `prune`
-/// stays the ghost cure). Counters re-key from the absolute buckets to the anchor-prefixed
-/// ones, every answer assembles byte-identically, and the scope re-applies in the v7 shape.
+/// The migration of a store WITH rows (S2, spec law (a)): anchors come from the STORED-row
+/// clusters and the argv roots VALIDATE them — a cluster a root covers anchors its rows AT
+/// the root with the FULL relative path; a cluster no root validates is PRUNED, its rows
+/// COUNTED in the report (the ghost cure, reused: a ghost is a row no current root answers
+/// under — the cure is the count, not a kept row). Counters re-key from the absolute buckets
+/// to the anchor-prefixed ones, every answer assembles byte-identically, and the scope
+/// re-applies in the v7 shape.
 #[test]
 fn migration_splits_rows_rekeys_counters_and_answers_identically() {
     let tmp = tempfile::tempdir().unwrap();
@@ -505,7 +507,21 @@ fn migration_splits_rows_rekeys_counters_and_answers_identically() {
     );
     let store = open(tmp.path(), digup_core::MAIN_FILE);
     store.set_scope(Some(vec!["/data".to_string()])).unwrap();
-    // The first write verb carries the whole store over.
+    // The verb relays its counts verbatim (the thin-client law: the engine counts, the
+    // report carries the counts — nothing invented).
+    let report = store.migrate_portable().unwrap();
+    assert_eq!(
+        (
+            report.rows,
+            report.migrated,
+            report.pruned,
+            report.anchors,
+            report.rewritten
+        ),
+        (3, 2, 1, 1, 0),
+        "3 rows read, 2 migrated under the /data anchor, the /else cluster pruned with its count"
+    );
+    // The first write verb rides on the migrated store.
     store
         .insert(&cand("/data/new.png", FileKind::Image))
         .unwrap();
@@ -524,21 +540,19 @@ fn migration_splits_rows_rekeys_counters_and_answers_identically() {
                 "1/photos".to_string()
             ),
             ("/data".to_string(), "x.jpg".to_string(), "1/".to_string()),
-            ("/else".to_string(), "z.txt".to_string(), "2/".to_string()),
         ],
-        "the registered root anchors at the root with the FULL rel; the ghost parent-anchors"
+        "the registered root anchors at the root with the FULL rel; the ghost row is pruned"
     );
     assert_eq!(
         counter_buckets(&store),
-        vec!["1/".to_string(), "1/photos".to_string(), "2/".to_string()],
-        "counters re-keyed from the absolute buckets to the anchor-prefixed prefix space"
+        vec!["1/".to_string(), "1/photos".to_string()],
+        "counters re-keyed to the anchor-prefixed prefix space; the pruned cluster's key is gone"
     );
     assert!(store.counters_are_consistent().unwrap());
     assert_eq!(marker(&store), "", "the marker cleared");
 
-    // Answers assemble byte-identically, per root; the ghost answers under its own root.
-    // Order is the UNIQUE(anchor, path) index order (rel-sorted per anchor) — the v6
-    // per-root range scan answered the same way, path order.
+    // Answers assemble byte-identically, per root. Order is the UNIQUE(anchor, path) index
+    // order (rel-sorted per anchor) — the v6 per-root range scan answered the same way.
     assert_eq!(
         store
             .files_under(&["/data".to_string()])
@@ -552,28 +566,25 @@ fn migration_splits_rows_rekeys_counters_and_answers_identically() {
             "/data/x.jpg".to_string()
         ],
     );
-    assert_eq!(
+    assert!(
         store
             .files_under(&["/else".to_string()])
             .unwrap()
-            .into_iter()
-            .map(|r| r.path)
-            .collect::<Vec<_>>(),
-        vec!["/else/z.txt".to_string()],
-        "the ghost round-trips its absolute path through the parent anchor"
+            .is_empty(),
+        "the pruned cluster answers nothing — the prune is the cure the report counts"
     );
-    // Scope re-applied in the v7 shape: the ghost stays out of the /data scope (v6 law).
-    assert_eq!(store.pending_count().unwrap(), 3, "in-scope rows only");
+    // Scope re-applied in the v7 shape; the ghost is gone store-wide (the prune).
+    assert_eq!(store.pending_count().unwrap(), 3, "in-scope rows");
     assert_eq!(
         store.full_pending_count().unwrap(),
         3,
-        "the scan oracle equals the counters under the scope"
+        "the scan oracle equals the counters — no ghost count survives"
     );
     let counts = store.counts().unwrap();
     assert_eq!(
         counts.by_kind_and_state.get("doc"),
         None,
-        "the ghost doc is out of the /data scope counts"
+        "the pruned doc is out of the counts"
     );
     assert_eq!(
         counts
@@ -584,14 +595,14 @@ fn migration_splits_rows_rekeys_counters_and_answers_identically() {
         Some(2),
         "the two in-scope images counted"
     );
-    // Dropped scope: the ghost row counts store-wide (it migrated, it stayed honest).
     store.set_scope(None).unwrap();
     assert_eq!(
         store.pending_count().unwrap(),
-        4,
-        "the whole store includes the ghost"
+        3,
+        "the whole store: the ghost row was pruned, the count is honest"
     );
-    assert_eq!(store.full_pending_count().unwrap(), 4);
+    assert_eq!(store.full_pending_count().unwrap(), 3);
+    assert_eq!(row_count(&store), 3, "2 migrated + 1 inserted");
 }
 
 /// The resume law (S2): a run interrupted after the row copy (phase 1 alone) leaves the
@@ -874,4 +885,247 @@ fn migration_preserves_segments_vectors_and_name_rows() {
         fk, 1,
         "the swap's FK window closed — the connection is back on the contract"
     );
+}
+
+// ---- S2c: spec law (a) clusters + remount + prune, law (c) refusal-before-write ----
+
+/// The portability promise (spec law (a), the remount): the folder MOVED — the rows spell
+/// the old mount, the argv root is the new mount. The cluster's tail-component run matches
+/// exactly one root, so the rows REBASE onto it: `anchor.abs` carries the CURRENT spelling,
+/// rels ride the cluster tail, and the name rows re-tokenize from the new root spelling
+/// (the s343 law: folder tokens quote the root).
+#[test]
+fn migration_rebases_a_remounted_tree_onto_the_new_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(
+        tmp.path(),
+        &[
+            ("/mnt/old/photos/a.jpg", "image"),
+            ("/mnt/old/photos/deep/b.png", "image"),
+        ],
+    );
+    {
+        let conn = Connection::open(tmp.path().join(digup_core::MAIN_FILE)).unwrap();
+        // A name row + its fts row, tokenized from the OLD root spelling.
+        conn.execute(
+            "INSERT INTO segments(id, file, kind, modality, excerpt) VALUES(1, 1, 'name', 'text', 'a jpg')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO fts(rowid, name, body) VALUES(1, 'a.jpg', 'mnt old photos')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(&digup_core::schema::fill_counters_sql())
+            .unwrap();
+    }
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store
+        .set_scope(Some(vec!["/mnt/new/photos".to_string()]))
+        .unwrap();
+    let report = store.migrate_portable().unwrap();
+    assert_eq!(
+        (
+            report.rows,
+            report.migrated,
+            report.pruned,
+            report.anchors,
+            report.rewritten
+        ),
+        (2, 2, 0, 1, 2),
+        "both rows rebase onto the one new root — the tail match names exactly one candidate"
+    );
+    let mut raw = raw_rows(&store);
+    raw.sort();
+    assert_eq!(
+        raw,
+        vec![
+            (
+                "/mnt/new/photos".to_string(),
+                "a.jpg".to_string(),
+                "1/".to_string()
+            ),
+            (
+                "/mnt/new/photos".to_string(),
+                "deep/b.png".to_string(),
+                "1/deep".to_string()
+            ),
+        ],
+        "the anchor rebases to the CURRENT spelling; rels carry the cluster tail"
+    );
+    assert_eq!(
+        store
+            .files_under(&["/mnt/new/photos".to_string()])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect::<Vec<_>>(),
+        vec![
+            "/mnt/new/photos/a.jpg".to_string(),
+            "/mnt/new/photos/deep/b.png".to_string()
+        ],
+        "answers assemble the new mount"
+    );
+    // The name row re-tokenizes from the new root spelling (the verb's move_file pass).
+    let conn = open_conn(&store);
+    let (name, body): (String, String) = conn
+        .query_row(
+            "SELECT f.name, f.body FROM fts f JOIN segments s ON s.id = f.rowid \
+             WHERE s.file = 1 AND s.kind = 'name'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(name, digup_core::search_text::normalized("a.jpg"));
+    assert_eq!(
+        body, "mnt new photos",
+        "the folder tokens quote the NEW root — the moved tree searches under its new name"
+    );
+    assert_eq!(
+        counter_buckets(&store),
+        vec!["1/".to_string(), "1/deep".to_string()],
+        "counters ride the new prefix keys"
+    );
+    assert!(store.counters_are_consistent().unwrap());
+    assert_eq!(marker(&store), "", "the marker cleared");
+}
+
+/// Validation failure is the prune (spec law (a)): a cluster whose tail matches TWO roots
+/// is ambiguous — no single new home exists — and an ambiguous tail counts as no validation.
+/// Its rows are PRUNED, counted in the report; the store lands v7 with nothing anchored
+/// under an invented home.
+#[test]
+fn migration_prunes_a_cluster_with_an_ambiguous_tail() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(tmp.path(), &[("/old/photos/a.jpg", "image")]);
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store
+        .set_scope(Some(vec!["/x/photos".to_string(), "/y/photos".to_string()]))
+        .unwrap();
+    let report = store.migrate_portable().unwrap();
+    assert_eq!(
+        (report.rows, report.migrated, report.pruned, report.anchors),
+        (1, 0, 1, 2),
+        "the tail `photos` matches both roots — ambiguous, pruned with its count"
+    );
+    assert_eq!(row_count(&store), 0, "the cluster's rows are gone");
+    assert_eq!(store.db.user_version().unwrap(), 7);
+    assert_eq!(
+        counter_buckets(&store),
+        Vec::<String>::new(),
+        "no counter key survives the prune + the gate's heal"
+    );
+    assert!(store.counters_are_consistent().unwrap());
+    assert!(store
+        .files_under(&["/x/photos".to_string(), "/y/photos".to_string()])
+        .unwrap()
+        .is_empty());
+    assert_eq!(marker(&store), "");
+}
+
+/// Law (c): the UNIQUE(anchor, path) pre-check runs BEFORE any write — the plan is built
+/// read-only and the refusal fires there. v6's global UNIQUE(path) makes a containment
+/// collision impossible, but a remount CAN land two clusters on one root: the refusal is
+/// honest and permanent — the store stays verbatim v6 with its rows, and every re-run
+/// refuses identically.
+#[test]
+fn migration_refuses_a_unique_collision_before_any_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(
+        tmp.path(),
+        &[("/x/photos/a.jpg", "image"), ("/y/photos/a.jpg", "image")],
+    );
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store
+        .set_scope(Some(vec!["/x/photos".to_string()]))
+        .unwrap();
+    let err = store.migrate_portable().unwrap_err().to_string();
+    assert!(
+        err.contains("collide") && err.contains("a.jpg") && err.contains("/y/photos/a.jpg"),
+        "the refusal quotes the colliding pair: {err}"
+    );
+    assert_eq!(
+        store.db.user_version().unwrap(),
+        6,
+        "the refusal never stamps"
+    );
+    assert_eq!(store.mode(), StoreMode::V6, "reads stay verbatim");
+    assert_eq!(row_count(&store), 2, "every v6 row stands");
+    assert_eq!(
+        marker(&store),
+        "rows",
+        "phase 0 ran (the resume marker) — the plan refused before any row write"
+    );
+    // Re-running refuses identically: the refusal is permanent, not a torn state.
+    let again = store.migrate_portable().unwrap_err().to_string();
+    assert!(
+        again.contains("collide"),
+        "the second call re-refuses: {again}"
+    );
+    assert_eq!(row_count(&store), 2);
+}
+
+/// Multiple argv roots = multiple anchors: each root registers its own anchor row, each
+/// cluster validates against its root, and the bucket keys carry the anchor ids.
+#[test]
+fn migration_anchors_one_anchor_per_registered_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(tmp.path(), &[("/a/x.png", "image"), ("/b/y.png", "image")]);
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store
+        .set_scope(Some(vec!["/a".to_string(), "/b".to_string()]))
+        .unwrap();
+    let report = store.migrate_portable().unwrap();
+    assert_eq!(
+        (report.rows, report.migrated, report.pruned, report.anchors),
+        (2, 2, 0, 2),
+        "two roots, two anchors, nothing pruned"
+    );
+    let mut raw = raw_rows(&store);
+    raw.sort();
+    assert_eq!(
+        raw,
+        vec![
+            ("/a".to_string(), "x.png".to_string(), "1/".to_string()),
+            ("/b".to_string(), "y.png".to_string(), "2/".to_string()),
+        ],
+        "anchors are the roots, buckets carry the anchor ids"
+    );
+    assert_eq!(
+        store
+            .files_under(&["/a".to_string(), "/b".to_string()])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect::<Vec<_>>(),
+        vec!["/a/x.png".to_string(), "/b/y.png".to_string()],
+        "per-anchor index order: anchor 1's rows, then anchor 2's"
+    );
+    assert_eq!(
+        counter_buckets(&store),
+        vec!["1/".to_string(), "2/".to_string()]
+    );
+    assert!(store.counters_are_consistent().unwrap());
+}
+
+/// A root-level file (`/x.png`, bucket `""`): the root cluster validates against the
+/// registered root (the cluster CONTAINS it), but the ROW sits under no root bound — it
+/// is a ghost, pruned with its count (the same ghost law as a row under no root).
+#[test]
+fn migration_prunes_a_root_level_file_outside_the_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(tmp.path(), &[("/x.png", "image")]);
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store.set_scope(Some(vec!["/data".to_string()])).unwrap();
+    let report = store.migrate_portable().unwrap();
+    assert_eq!(
+        (report.rows, report.migrated, report.pruned),
+        (1, 0, 1),
+        "the cluster validates, the row under no bound prunes with its count"
+    );
+    assert_eq!(row_count(&store), 0);
+    assert_eq!(store.db.user_version().unwrap(), 7);
+    assert!(store.counters_are_consistent().unwrap());
+    assert_eq!(marker(&store), "");
 }
