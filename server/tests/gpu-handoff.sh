@@ -18,9 +18,18 @@ ROOT="$PWD"
 
 MODE=all
 [ "${1:-}" = "--cpu-only" ] && MODE=cpu-only
+[ "${1:-}" = "--gpu-only" ] && MODE=gpu-only   # Gate A already measured; re-run the card legs
 OUT="server/data/gpu-handoff-$(date +%Y%m%d-%H%M).log"
 mkdir -p server/data
 exec > >(tee -a "$OUT") 2>&1
+
+# Project identity (measured 2026-11-27, the cost of not knowing it): deploy/docker-compose.yml
+# declares `name: digup-server`, so a gate run from deploy/ shares the LIVE stack's compose
+# project — its `up -d --build` RECREATES the running pilot container (gate env: a different
+# index/media/port) and the leg's `down -v` REMOVES it. The gate's compose legs therefore run
+# under their own project name (`docker compose config` proves COMPOSE_PROJECT_NAME outranks
+# the file's `name:`), so a live stack on the box is never touched.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-digup-gate}"
 
 fails=0
 gpus_used=0
@@ -131,7 +140,12 @@ gate_a_compose() {
   ( cd deploy && docker compose down -v ) > /dev/null 2>&1
 }
 
-gate_a_toolchain; gate_a_corpus; gate_a_models; gate_a_bind_dirs; gate_a_suite; gate_a_compose
+gate_a_toolchain; gate_a_corpus; gate_a_models; gate_a_bind_dirs
+if [ "$MODE" = gpu-only ]; then
+  note "Gate A's contract-suite and compose legs SKIPPED (--gpu-only): measured in an earlier run"
+else
+  gate_a_suite; gate_a_compose
+fi
 
 if [ "$MODE" = cpu-only ]; then
   echo
