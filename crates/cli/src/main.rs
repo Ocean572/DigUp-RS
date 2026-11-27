@@ -33,7 +33,7 @@ struct Arguments {
 }
 
 /// `Arguments.valued`: flags that need a value.
-const VALUED: [&str; 27] = [
+const VALUED: [&str; 28] = [
     "--index",
     "--limit",
     "--kind",
@@ -49,6 +49,7 @@ const VALUED: [&str; 27] = [
     "--to",
     "--memory-limit",
     "--faces-models",
+    "--faces-dir",
     "--det-model",
     "--emb-model",
     "--faces-consent",
