@@ -17,8 +17,9 @@ use crate::vectors;
 
 /// The layout version this build writes (IndexStore.swift:25 was 6; v7 is the portable layout,
 /// #195). A v6 store opens and READS verbatim — `mode()` says `V6` and every reader answers the
-/// stored absolute paths. The v7 conversion is an explicit WRITE verb (`migrate_portable_store`,
-/// S2): reads never migrate, and a v6 store's write verbs refuse with the migration sentence.
+/// stored absolute paths. The v7 conversion is the WRITE-time migration (`migrate_portable`,
+/// S2): reads never migrate, and the first WRITE verb on a v6 store runs it (the writer entry
+/// `write_guard`), so a store serving an index verb lands on v7 with its rows re-keyed.
 pub const SCHEMA_VERSION: i64 = 7;
 const MAX_PAGES: i64 = 5_000; // IndexOptions.maxPages
 const MAX_CHUNKS: i64 = 5_000; // IndexOptions.maxChunks
@@ -112,15 +113,272 @@ impl IndexStore {
         self.mode.get() == StoreMode::V7
     }
 
-    /// The write guard (#195): a v6 store reads verbatim; its write verbs refuse with the
-    /// migration sentence. The index verb answers it until S2 wires the auto-migration.
+    /// The write guard (#195): a v6 store reads verbatim; its first WRITE verb runs the
+    /// migration (`migrate_portable`) and lands v7. All writers enter here.
     fn write_guard(&self) -> Result<()> {
         if self.mode.get() == StoreMode::V6 {
-            return Err(crate::db::Error::Failure(
-                "this index is schema 6 (absolute paths); the portable migration runs on the first write verb".to_string(),
-            ));
+            // S2 (#195): the first write verb migrates the store — "the portable migration
+            // runs on the first write verb" is the fact, not a refusal. Reads never come
+            // here (the v6 read-compat law is untouched); the migration itself writes
+            // through unguarded phases, so this is one entry, one migration, then v7.
+            self.migrate_portable()?;
         }
         Ok(())
+    }
+
+    /// The migration verb for a store WITH rows (#195, S2): a v6 store (absolute paths)
+    /// becomes v7 (anchors + relative rows + prefixed counter keys), keeping ids, rows,
+    /// counters, and every answer byte-identical to what v6 answered. The writer entry
+    /// (`write_guard`) runs it on the first write verb; reads never migrate.
+    ///
+    /// The split is the writer's law: a row under a REGISTERED root (the scope folders — the
+    /// argv roots, matched over both spellings, longest bound wins, ties the lower anchor id)
+    /// anchors AT the root carrying its full relative path; a row under no root anchors at its
+    /// PARENT folder with the bare name — the same law an unregistered writer follows, so a
+    /// ghost row keeps its data, its out-of-scope status, and its assembled answer (the ghost
+    /// cure stays `prune`).
+    ///
+    /// The resume law: the meta marker `portable_migration` says the verb is under way, and
+    /// every phase is idempotent — CREATE IF NOT EXISTS, INSERT OR IGNORE keyed on the row id,
+    /// the map re-inserted with OR REPLACE, the counters UPDATE keyed on the old bucket — so a
+    /// run interrupted by a crash resumes with a plain re-run from the marker. A store is
+    /// v6-with-marker or v7, never in between: the swap, the counters re-key, the consistency
+    /// gate, and the stamp ride ONE transaction, so a reader sees v6 bytes before it and v7
+    /// bytes after, never a mix; a gate failure after the self-heal rolls the transaction
+    /// back — the store stays a verbatim v6, the marker stands, the next write verb resumes.
+    pub fn migrate_portable(&self) -> Result<()> {
+        if self.mode.get() == StoreMode::V7 {
+            return Ok(());
+        }
+        let roots: Vec<String> = self.scope.borrow().clone().unwrap_or_default();
+        // Phase 1 (carries its own idempotent phase 0): copy every row through the split.
+        self.migrate_copy_rows(&roots)?;
+        // Phase 2: swap + counters re-key + gate + stamp — one transaction.
+        self.migrate_swap()?;
+        self.mode.set(StoreMode::V7);
+        // The scope machinery set BEFORE the migration is v6-shaped (absolute ranges, the
+        // `files.path` SQL) — it must be re-applied in the v7 shape (per-anchor rel ranges,
+        // the anchored scope SQL), or scoped reads would silently mis-filter: `files.path`
+        // remains a valid reference on the aliased v7 FROM (SQLite keeps the original name),
+        // and absolute lo/hi against relative paths is a filter that answers, wrongly.
+        // The v6-shape TEMP tables drop first: `CREATE ... IF NOT EXISTS` keeps an existing
+        // table of the OTHER shape (measured: `table scope has no column named anchor`).
+        // The scope clones out BEFORE the borrow — `if let` with a temporary Ref keeps the
+        // borrow alive through the whole block, and `set_scope` borrow_mutss the same cell
+        // (measured: `RefCell already borrowed`).
+        let scoped = self.scope.borrow().clone();
+        if let Some(folders) = scoped {
+            self.db.execute("DROP TABLE IF EXISTS scope")?;
+            self.db.execute("DROP TABLE IF EXISTS scopeb")?;
+            self.set_scope(Some(folders))?;
+        }
+        Ok(())
+    }
+
+    /// Phase 1 of `migrate_portable`, spelled out for the harness (the resume pin runs it
+    /// alone to build an interrupted store). The window walks `id > last ORDER BY id` —
+    /// keyset paging, so the copy costs one pass over the rows whatever the page size.
+    pub fn migrate_copy_rows(&self, roots: &[String]) -> Result<()> {
+        // Phase 0 (idempotent — it runs on every entry, resume included): the anchors
+        // table, the new files table, the old→new bucket map, the marker.
+        self.db.transaction(|| {
+            self.db.execute(ANCHORS_TABLE_SQL)?;
+            self.db.execute(&files_v7_sql())?;
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS migration_map(old TEXT PRIMARY KEY, new TEXT NOT NULL) \
+                 WITHOUT ROWID",
+            )?;
+            self.db.run(
+                "INSERT INTO meta(key, value) VALUES('portable_migration', 'rows') \
+                 ON CONFLICT(key) DO NOTHING",
+                [],
+            )?;
+            Ok(())
+        })?;
+        let mut cache: HashMap<String, i64> = HashMap::new();
+        let mut bounds: Vec<(String, i64)> = Vec::new();
+        for root in roots {
+            let root = crate::paths::standardize(&crate::paths::to_slashes(root));
+            let (id, real) = self.ensure_anchor_raw(&root, &mut cache)?;
+            bounds.push((crate::paths::bound(&root), id));
+            if let Some(real) = real {
+                bounds.push((crate::paths::bound(&real), id));
+            }
+        }
+        // Ties on equal bound length take the LOWER anchor id (the split_anchor law): the
+        // bounds ride insertion order, which is anchor-id order, and only a strict win
+        // replaces the pick.
+        let mut last_id = 0i64;
+        loop {
+            let mut batch: Vec<V6Row> = Vec::new();
+            self.db.query(
+                "SELECT id, path, kind, size, mtime, inode, device, state, detail, info, indexed_at, bucket \
+                 FROM files WHERE id > ? ORDER BY id LIMIT 25000",
+                vec![Sql::Int(last_id)],
+                |row| {
+                    batch.push(V6Row {
+                        id: row.int(0),
+                        path: row.text(1).unwrap_or_default(),
+                        kind: row.text(2).unwrap_or_default(),
+                        size: row.int(3),
+                        mtime: row.double(4),
+                        inode: row.int(5),
+                        device: row.int(6),
+                        state: row.text(7).unwrap_or_default(),
+                        detail: row.text(8),
+                        info: row.text(9),
+                        indexed_at: if row.is_null(10) {
+                            None
+                        } else {
+                            Some(row.double(10))
+                        },
+                        bucket: row.text(11).unwrap_or_default(),
+                    });
+                    Ok(())
+                },
+            )?;
+            if batch.is_empty() {
+                return Ok(());
+            }
+            self.db.transaction(|| {
+                for row in &batch {
+                    let (anchor, rel) = self.migrate_split(&row.path, &bounds, &mut cache)?;
+                    let bucket = format!("{}/{}", anchor, bucket_of(&rel));
+                    self.db.run(
+                        "INSERT OR IGNORE INTO files_new(id, anchor, path, kind, size, mtime, inode, \
+                         device, state, detail, info, indexed_at, bucket) \
+                         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        vec![
+                            Sql::Int(row.id),
+                            Sql::Int(anchor),
+                            Sql::Text(rel.clone()),
+                            Sql::Text(row.kind.clone()),
+                            Sql::Int(row.size),
+                            Sql::Double(row.mtime),
+                            Sql::Int(row.inode),
+                            Sql::Int(row.device),
+                            Sql::Text(row.state.clone()),
+                            Sql::opt_text(row.detail.as_deref()),
+                            Sql::opt_text(row.info.as_deref()),
+                            Sql::opt_double(row.indexed_at),
+                            Sql::Text(bucket.clone()),
+                        ],
+                    )?;
+                    // The counters ride the map: the v6 bucket key (as the rows spell it —
+                    // the walk spelling included) re-keys to the anchor-prefixed one.
+                    self.db.run(
+                        "INSERT INTO migration_map(old, new) VALUES(?, ?) \
+                         ON CONFLICT(old) DO UPDATE SET new = excluded.new",
+                        vec![Sql::Text(row.bucket.clone()), Sql::Text(bucket)],
+                    )?;
+                }
+                Ok(())
+            })?;
+            last_id = batch.last().expect("a non-empty batch").id;
+        }
+    }
+
+    /// The split of a v6 row path: the registered-root bound match (longest wins, ties the
+    /// lower id) gives the root anchor + the FULL relative path; no match anchors at the
+    /// parent folder with the bare name (the unregistered-writer law, parent-less paths
+    /// anchoring at `/`).
+    fn migrate_split(
+        &self,
+        path: &str,
+        bounds: &[(String, i64)],
+        cache: &mut HashMap<String, i64>,
+    ) -> Result<(i64, String)> {
+        let mut best: Option<(usize, i64)> = None;
+        for (bound, id) in bounds {
+            if path.starts_with(bound) && best.is_none_or(|(len, _)| bound.len() > len) {
+                best = Some((bound.len(), *id));
+            }
+        }
+        if let Some((len, id)) = best {
+            return Ok((id, path[len..].trim_start_matches('/').to_string()));
+        }
+        let parent = bucket_of(path);
+        let anchor = if parent.is_empty() {
+            "/".to_string()
+        } else {
+            parent
+        };
+        let (id, _) = self.ensure_anchor_raw(&anchor, cache)?;
+        Ok((id, crate::paths::last_component(path).to_string()))
+    }
+
+    /// The migration-internal anchor insert: `ensure_anchor`'s contract (the realpath
+    /// spelling rides when it differs) WITHOUT the writer guard — the migration chain
+    /// writes through its own phases (the `requeue_raw` precedent of the keyword migration).
+    fn ensure_anchor_raw(
+        &self,
+        abs: &str,
+        cache: &mut HashMap<String, i64>,
+    ) -> Result<(i64, Option<String>)> {
+        let real = crate::paths::real_path(abs);
+        let real = (real.as_bytes() != abs.as_bytes()).then_some(real);
+        self.db.run(
+            "INSERT INTO anchors(abs, real) VALUES(?, ?) ON CONFLICT(abs) DO NOTHING",
+            vec![Sql::Text(abs.to_string()), Sql::opt_text(real.as_deref())],
+        )?;
+        let mut id = 0i64;
+        self.db.query(
+            "SELECT id FROM anchors WHERE abs = ?",
+            vec![Sql::Text(abs.to_string())],
+            |row| {
+                id = row.int(0);
+                Ok(())
+            },
+        )?;
+        cache.insert(abs.to_string(), id);
+        Ok((id, real))
+    }
+
+    /// Phase 2 of `migrate_portable`: re-key the counters onto the anchor-prefixed buckets
+    /// (no triggers ride the counters tables; the files triggers come down with the swap
+    /// for the measured segment-trigger law), swap the tables, re-create the eight triggers,
+    /// pass the consistency gate (the same self-heal the v6 chain runs), clear the map and
+    /// the marker, and stamp 7 — all in ONE transaction.
+    fn migrate_swap(&self) -> Result<()> {
+        let drop_triggers = [
+            "files_ai",
+            "files_ad",
+            "files_au_state",
+            "files_au_path",
+            "files_bd",
+            "seg_ai",
+            "seg_ad",
+            "seg_au_vec",
+        ]
+        .iter()
+        .map(|t| format!("DROP TRIGGER IF EXISTS {t};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        self.db.transaction(|| {
+            for table in ["counters", "segcounters"] {
+                self.db.execute(&format!(
+                    "UPDATE {table} SET bucket = (SELECT m.new FROM migration_map m WHERE m.old = {table}.bucket) \
+                     WHERE bucket IN (SELECT old FROM migration_map)"
+                ))?;
+            }
+            self.db.execute(&drop_triggers)?;
+            self.db.execute("DROP TABLE files")?;
+            self.db.execute("ALTER TABLE files_new RENAME TO files")?;
+            self.db.execute("CREATE INDEX IF NOT EXISTS files_inode ON files(device, inode)")?;
+            self.db.execute("CREATE INDEX IF NOT EXISTS files_state ON files(state, kind)")?;
+            self.db.execute(&counter_triggers_sql())?;
+            // The gate is the chain's law: it passes before the stamp; the self-heal is the
+            // same rebuild. A ghost counter key (its rows died before the map was built)
+            // fails the gate and the rebuild heals it — the counters recompute from the new
+            // files table, on the new keys.
+            if !self.counters_are_consistent()? {
+                self.rebuild_counters()?;
+            }
+            self.db.execute("DROP TABLE migration_map")?;
+            self.db.run("DELETE FROM meta WHERE key = 'portable_migration'", [])?;
+            self.db.execute("PRAGMA user_version = 7")?;
+            Ok(())
+        })
     }
 
     fn migrate(&self) -> Result<()> {
@@ -167,8 +425,9 @@ impl IndexStore {
             if version == 0 {
                 // A fresh store is born portable (#195): the v7 conversion runs on the empty
                 // tables — no rows to relativize, the counters check already passed in
-                // `migrate_counters`. A store with rows converts through the migration verb.
-                self.migrate_portable()?;
+                // `migrate_counters`. A store with rows converts through the migration verb
+                // (`migrate_portable`, S2), which the writer entry runs.
+                self.migrate_portable_shape()?;
             }
             Ok(())
         });
@@ -184,8 +443,9 @@ impl IndexStore {
     /// the copy carries `id` explicitly, the v6 UNIQUE law is replaced), and all eight triggers
     /// re-created on the new table (the three segment triggers reference `files` and go
     /// schema-invalid mid-swap — they come down with the files triggers). The counters tables
-    /// and their fill stand untouched.
-    fn migrate_portable(&self) -> Result<()> {
+    /// and their fill stand untouched. The store-with-rows conversion is the verb
+    /// (`migrate_portable`), not this schema shape.
+    fn migrate_portable_shape(&self) -> Result<()> {
         self.db.execute(&portable_sql())
     }
 
@@ -1697,4 +1957,20 @@ fn create_scope_anchor(db: &Database, table: &str, ranges: &[(i64, String, Strin
         start = end;
     }
     Ok(())
+}
+
+/// A v6 row as the migration reads it (#195, S2): every column the v7 `files` row keeps.
+struct V6Row {
+    id: i64,
+    path: String,
+    kind: String,
+    size: i64,
+    mtime: f64,
+    inode: i64,
+    device: i64,
+    state: String,
+    detail: Option<String>,
+    info: Option<String>,
+    indexed_at: Option<f64>,
+    bucket: String,
 }

@@ -312,12 +312,14 @@ fn a_symlinked_root_stores_rows_for_the_walk_spelling_and_answers_the_registered
     }
 }
 
-/// The v6 read-compat gate: a byte-built v6 store (v5 stamp + counters + the eight
-/// triggers + stamp 6 + raw rows) opens as `StoreMode::V6` at version 6, answers its
-/// stored absolute paths verbatim through every reader, and REFUSES writes with the
-/// migration sentence. The v6 → v7 conversion is the migration verb (S2), never a read.
+/// The v6 read-compat gate + the S2 migration law: a byte-built v6 store (v5 stamp +
+/// counters + the eight triggers + stamp 6 + raw rows) opens as `StoreMode::V6` at version
+/// 6, answers its stored absolute paths VERBATIM through every reader, and the FIRST WRITE
+/// verb migrates the store to v7 — rows re-relativized, counters re-keyed, answers
+/// byte-identical. Reads never migrate; the conversion rides the writer entry
+/// (`write_guard`). The migration marker clears on completion.
 #[test]
-fn a_v6_store_opens_reads_verbatim_and_refuses_writes() {
+fn a_v6_store_opens_reads_verbatim_and_the_first_write_migrates() {
     let tmp = tempfile::tempdir().unwrap();
     {
         let conn = Connection::open(tmp.path().join(digup_core::MAIN_FILE)).unwrap();
@@ -353,25 +355,50 @@ fn a_v6_store_opens_reads_verbatim_and_refuses_writes() {
     assert!(store.set_scope(Some(vec!["/data".to_string()])).is_ok());
     assert_eq!(store.pending_count().unwrap(), 1);
 
-    let refusal = store
-        .insert(&cand("/data/b.jpg", FileKind::Image))
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refusal.contains("schema 6"),
-        "the writer on a v6 store refuses with the migration sentence: {refusal}"
+    // The first write verb migrates: the insert lands, the store is v7, the old row rides.
+    let b = store.insert(&cand("/data/b.jpg", FileKind::Image)).unwrap();
+    assert_eq!(store.mode(), StoreMode::V7, "the first write lands v7");
+    assert_eq!(store.db.user_version().unwrap(), 7);
+    let anchors = store.anchors().unwrap();
+    assert_eq!(
+        anchors.iter().map(|a| a.abs.as_str()).collect::<Vec<_>>(),
+        vec!["/data"],
+        "the scope root registered as the anchor (the argv-roots-to-anchors law)"
     );
-    let refusal = store
-        .move_file(1, "/data/moved.jpg")
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refusal.contains("schema 6"),
-        "moves refuse alike: {refusal}"
+    let raw = raw_rows(&store);
+    assert_eq!(
+        raw,
+        vec![
+            ("/data".to_string(), "a.jpg".to_string(), "1/".to_string()),
+            ("/data".to_string(), "b.jpg".to_string(), "1/".to_string()),
+        ],
+        "rows RELATIVE with prefix bucket keys, ids kept — the v6 row migrated (root-level file)"
     );
-    // The refusal changed nothing: the row and counters stand.
-    assert_eq!(store.pending_count().unwrap(), 1);
+    let answers = store.files_under(&["/data".to_string()]).unwrap();
+    assert_eq!(
+        answers.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+        vec!["/data/a.jpg", "/data/b.jpg"],
+        "the answers assemble byte-identically to the v6 contract"
+    );
+    assert!(
+        store.counters_are_consistent().unwrap(),
+        "counters re-keyed from /data to 1/ and consistent"
+    );
+    assert_eq!(store.pending_count().unwrap(), 2);
+    // The marker clears on completion (the resume law runs only from a marker).
+    let marker: String = open_conn(&store)
+        .query_row(
+            "SELECT coalesce((SELECT value FROM meta WHERE key = 'portable_migration'), '')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(marker, "", "the migration marker is cleared on completion");
+    // The eight triggers stand on the swapped table and keep the counters exact: a move
+    // re-keys the counters between bucket keys (the files_au_path law, post-migration).
+    store.move_file(b, "/data/nested/b.jpg").unwrap();
     assert!(store.counters_are_consistent().unwrap());
+    assert_eq!(store.pending_count().unwrap(), 2);
 }
 
 /// The honest out-of-anchor answer: a stopped-file note naming a path under no root marks
@@ -407,4 +434,358 @@ fn file_by_inode_answers_the_assembled_path() {
         found.path, "/data/photos/x.png",
         "the inode lookup answers ASSEMBLED absolute, like every other reader"
     );
+}
+
+/// The v6 era's exact chain, byte-built: v5 stamp + the bucket column + counters tables +
+/// the eight triggers + raw rows (`(path, kind)`, bucket = `bucket_of(path)` — the v6 law) +
+/// the counters fill + stamp 6.
+fn v6_fixture(dir: &std::path::Path, rows: &[(&str, &str)]) {
+    let conn = Connection::open(dir.join(digup_core::MAIN_FILE)).unwrap();
+    conn.execute_batch(&digup_core::schema::create_sql())
+        .unwrap(); // stamps 5
+    conn.execute_batch("ALTER TABLE files ADD COLUMN bucket TEXT NOT NULL DEFAULT ''")
+        .unwrap();
+    conn.execute_batch(digup_core::schema::COUNTERS_TABLES_SQL)
+        .unwrap();
+    conn.execute_batch(&digup_core::schema::counter_triggers_sql())
+        .unwrap();
+    for (path, kind) in rows {
+        conn.execute(
+            "INSERT INTO files(path, kind, size, mtime, inode, device, bucket) VALUES(?, ?, 100, 1.0, 7, 3, ?)",
+            rusqlite::params![path, kind, digup_core::model::bucket_of(path)],
+        )
+        .unwrap();
+    }
+    conn.execute_batch(&digup_core::schema::fill_counters_sql())
+        .unwrap();
+    conn.execute_batch("PRAGMA user_version = 6;").unwrap();
+}
+
+fn counter_buckets(store: &IndexStore) -> Vec<String> {
+    open_conn(store)
+        .prepare("SELECT DISTINCT bucket FROM counters ORDER BY bucket")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+fn marker(store: &IndexStore) -> String {
+    open_conn(store)
+        .query_row(
+            "SELECT coalesce((SELECT value FROM meta WHERE key = 'portable_migration'), '')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+fn row_count(store: &IndexStore) -> i64 {
+    open_conn(store)
+        .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// The migration of a store WITH rows (S2): registered roots split rows at the root with
+/// the FULL relative path; a row under no root parent-anchors (the unregistered-writer law
+/// — the ghost keeps its data, its out-of-scope status, and its assembled answer; `prune`
+/// stays the ghost cure). Counters re-key from the absolute buckets to the anchor-prefixed
+/// ones, every answer assembles byte-identically, and the scope re-applies in the v7 shape.
+#[test]
+fn migration_splits_rows_rekeys_counters_and_answers_identically() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(
+        tmp.path(),
+        &[
+            ("/data/x.jpg", "image"),
+            ("/data/photos/y.png", "screenshot"),
+            ("/else/z.txt", "doc"),
+        ],
+    );
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store.set_scope(Some(vec!["/data".to_string()])).unwrap();
+    // The first write verb carries the whole store over.
+    store
+        .insert(&cand("/data/new.png", FileKind::Image))
+        .unwrap();
+    assert_eq!(store.mode(), StoreMode::V7);
+    assert_eq!(store.db.user_version().unwrap(), 7);
+
+    let mut raw = raw_rows(&store);
+    raw.sort();
+    assert_eq!(
+        raw,
+        vec![
+            ("/data".to_string(), "new.png".to_string(), "1/".to_string()),
+            (
+                "/data".to_string(),
+                "photos/y.png".to_string(),
+                "1/photos".to_string()
+            ),
+            ("/data".to_string(), "x.jpg".to_string(), "1/".to_string()),
+            ("/else".to_string(), "z.txt".to_string(), "2/".to_string()),
+        ],
+        "the registered root anchors at the root with the FULL rel; the ghost parent-anchors"
+    );
+    assert_eq!(
+        counter_buckets(&store),
+        vec!["1/".to_string(), "1/photos".to_string(), "2/".to_string()],
+        "counters re-keyed from the absolute buckets to the anchor-prefixed prefix space"
+    );
+    assert!(store.counters_are_consistent().unwrap());
+    assert_eq!(marker(&store), "", "the marker cleared");
+
+    // Answers assemble byte-identically, per root; the ghost answers under its own root.
+    // Order is the UNIQUE(anchor, path) index order (rel-sorted per anchor) — the v6
+    // per-root range scan answered the same way, path order.
+    assert_eq!(
+        store
+            .files_under(&["/data".to_string()])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect::<Vec<_>>(),
+        vec![
+            "/data/new.png".to_string(),
+            "/data/photos/y.png".to_string(),
+            "/data/x.jpg".to_string()
+        ],
+    );
+    assert_eq!(
+        store
+            .files_under(&["/else".to_string()])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect::<Vec<_>>(),
+        vec!["/else/z.txt".to_string()],
+        "the ghost round-trips its absolute path through the parent anchor"
+    );
+    // Scope re-applied in the v7 shape: the ghost stays out of the /data scope (v6 law).
+    assert_eq!(store.pending_count().unwrap(), 3, "in-scope rows only");
+    assert_eq!(
+        store.full_pending_count().unwrap(),
+        3,
+        "the scan oracle equals the counters under the scope"
+    );
+    let counts = store.counts().unwrap();
+    assert_eq!(
+        counts.by_kind_and_state.get("doc"),
+        None,
+        "the ghost doc is out of the /data scope counts"
+    );
+    assert_eq!(
+        counts
+            .by_kind_and_state
+            .get("image")
+            .and_then(|m| m.get("pending"))
+            .copied(),
+        Some(2),
+        "the two in-scope images counted"
+    );
+    // Dropped scope: the ghost row counts store-wide (it migrated, it stayed honest).
+    store.set_scope(None).unwrap();
+    assert_eq!(
+        store.pending_count().unwrap(),
+        4,
+        "the whole store includes the ghost"
+    );
+    assert_eq!(store.full_pending_count().unwrap(), 4);
+}
+
+/// The resume law (S2): a run interrupted after the row copy (phase 1 alone) leaves the
+/// store VERBATIM v6 — original table, original stamp, the marker set — and the next write
+/// verb re-runs every phase idempotently: the copy adds nothing it already inserted, the
+/// swap lands, the counters key once, and the store finishes v7 with exactly its rows.
+#[test]
+fn an_interrupted_migration_resumes_from_the_marker() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(tmp.path(), &[("/data/x.jpg", "image")]);
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store.set_scope(Some(vec!["/data".to_string()])).unwrap();
+    // Phase 1 only — the crash shape: rows copied, swap never ran.
+    store.migrate_copy_rows(&["/data".to_string()]).unwrap();
+    assert_eq!(store.db.user_version().unwrap(), 6, "the store is still v6");
+    assert_eq!(
+        store.mode(),
+        StoreMode::V6,
+        "reads stay verbatim mid-flight"
+    );
+    assert_eq!(
+        marker(&store),
+        "rows",
+        "the marker says the verb is under way"
+    );
+    let new_exists: i64 = open_conn(&store)
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'files_new'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(new_exists, 1, "the copy table stands beside the original");
+    assert_eq!(row_count(&store), 1, "the original rows stand");
+    assert_eq!(
+        store
+            .files_under(&["/data".to_string()])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect::<Vec<_>>(),
+        vec!["/data/x.jpg".to_string()],
+        "a reader mid-flight answers the v6 bytes"
+    );
+
+    // The next write verb resumes: re-runs every phase, completes.
+    store
+        .insert(&cand("/data/n/y.png", FileKind::Image))
+        .unwrap();
+    assert_eq!(store.db.user_version().unwrap(), 7);
+    assert_eq!(store.mode(), StoreMode::V7);
+    assert_eq!(
+        row_count(&store),
+        2,
+        "no row inserted twice (INSERT OR IGNORE keyed on the id)"
+    );
+    assert!(store.counters_are_consistent().unwrap());
+    assert_eq!(marker(&store), "", "the marker cleared on completion");
+    assert_eq!(
+        store
+            .files_under(&["/data".to_string()])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect::<Vec<_>>(),
+        vec!["/data/n/y.png".to_string(), "/data/x.jpg".to_string()],
+        "the resumed answers assemble identically (index order: rel-sorted)"
+    );
+}
+
+/// The gate is the chain's law: it passes before the stamp, and the self-heal is the same
+/// rebuild the v6 migration runs — tampered counters do NOT ship as v7 counters.
+#[test]
+fn migration_heals_tampered_counters_before_stamping() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(
+        tmp.path(),
+        &[("/data/x.jpg", "image"), ("/data/y.png", "image")],
+    );
+    {
+        // Tamper: the counters lie about the row count (the v6-store counters, pre-migration).
+        let conn = Connection::open(tmp.path().join(digup_core::MAIN_FILE)).unwrap();
+        conn.execute("UPDATE counters SET n = 99", []).unwrap();
+    }
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    assert!(
+        !store.counters_are_consistent().unwrap(),
+        "the tamper is visible on the v6 store"
+    );
+    store.insert(&cand("/data/z.png", FileKind::Image)).unwrap();
+    assert_eq!(
+        store.db.user_version().unwrap(),
+        7,
+        "the self-heal completed"
+    );
+    assert!(
+        store.counters_are_consistent().unwrap(),
+        "the migration rebuilt the counters from the new files table"
+    );
+    assert_eq!(store.full_pending_count().unwrap(), 3);
+    let counts = store.full_counts().unwrap();
+    assert_eq!(
+        counts
+            .by_kind_and_state
+            .get("image")
+            .and_then(|m| m.get("pending"))
+            .copied(),
+        Some(3),
+        "the rebuilt counters count the rows, not the tamper"
+    );
+}
+
+/// The dual spelling in the migration: a v6 store whose rows spell the WALK form (the
+/// `/private/var` shape) under a registered argv root (the `/var` shape — the symlinked
+/// root) splits on the realpath bound, anchors at the REGISTERED spelling, and answers the
+/// registered form.
+#[test]
+fn migration_splits_a_walk_spelling_row_at_the_registered_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(real.join("photos")).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let link = digup_core::paths::to_slashes(&link.to_string_lossy()).to_string();
+    let real = digup_core::paths::to_slashes(&real.to_string_lossy()).to_string();
+
+    v6_fixture(tmp.path(), &[(&format!("{real}/photos/y.png"), "image")]);
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store.set_scope(Some(vec![link.clone()])).unwrap();
+    store
+        .insert(&cand(&format!("{real}/photos/n.png"), FileKind::Image))
+        .unwrap();
+    let anchors = store.anchors().unwrap();
+    assert_eq!(anchors.len(), 1);
+    assert_eq!(
+        anchors[0].abs, link,
+        "the anchor is the registered spelling"
+    );
+    assert_eq!(
+        anchors[0].real.as_deref(),
+        Some(real.as_str()),
+        "the realpath spelling rides the anchor"
+    );
+    let raw = raw_rows(&store);
+    assert!(
+        raw.iter()
+            .all(|(a, rel, _)| a == &link && rel.starts_with("photos/")),
+        "rows split at the realpath bound and anchor at the registered one: {raw:?}"
+    );
+    for root in [link.as_str(), real.as_str()] {
+        let found = store.files_under(&[root.to_string()]).unwrap();
+        assert_eq!(found.len(), 2, "both spellings reach the rows ({root})");
+        assert!(
+            found.into_iter().all(|r| r.path.starts_with(&link)),
+            "the answers assemble the REGISTERED spelling from the {root} lookup"
+        );
+    }
+    assert!(store.counters_are_consistent().unwrap());
+}
+
+/// No registered roots: every row parent-anchors (the unregistered-writer law) — the same
+/// shape a bare-CLI store takes — and the answers round-trip identically.
+#[test]
+fn a_migration_without_roots_parent_anchors_every_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    v6_fixture(
+        tmp.path(),
+        &[("/x/a.png", "image"), ("/y/deep/b.png", "doc")],
+    );
+    let store = open(tmp.path(), digup_core::MAIN_FILE);
+    store.insert(&cand("/x/c.png", FileKind::Image)).unwrap();
+    let raw = raw_rows(&store);
+    assert_eq!(
+        raw,
+        vec![
+            ("/x".to_string(), "a.png".to_string(), "1/".to_string()),
+            ("/y/deep".to_string(), "b.png".to_string(), "2/".to_string()),
+            ("/x".to_string(), "c.png".to_string(), "1/".to_string()),
+        ],
+        "anchors are the parent folders, rels the bare names, rows in id order"
+    );
+    assert_eq!(
+        store
+            .files_under(&["/x".to_string(), "/y".to_string()])
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect::<Vec<_>>(),
+        vec![
+            "/x/a.png".to_string(),
+            "/x/c.png".to_string(),
+            "/y/deep/b.png".to_string()
+        ],
+        "answers assemble byte-identically, rootless store"
+    );
+    assert!(store.counters_are_consistent().unwrap());
 }

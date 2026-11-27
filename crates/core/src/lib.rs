@@ -8,7 +8,7 @@
 //!
 //! v7 (#195, round ten): the portable layout — `anchors` + anchor-relative `files.path` +
 //! `UNIQUE(anchor, path)`, answers assembled at the row edge. A v6 store opens and reads
-//! verbatim (`StoreMode::V6`); its write verbs refuse with the migration sentence.
+//! verbatim (`StoreMode::V6`); its first WRITE verb runs the migration (`migrate_portable`).
 
 pub mod code;
 pub mod code_lookup;

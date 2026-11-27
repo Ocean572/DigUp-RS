@@ -209,7 +209,9 @@ pub const ANCHORS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS anchors(
 /// (anchor, folder), so the counters, the segcounters, and all eight triggers ride v7
 /// UNCHANGED (schema law: their SQL is shared with v6 verbatim).
 pub fn files_v7_sql() -> String {
-    "CREATE TABLE files_new(
+    // IF NOT EXISTS: the migration re-runs this CREATE on every resume (the phases are
+    // idempotent by design — measured: a resume died `table files_new already exists`).
+    "CREATE TABLE IF NOT EXISTS files_new(
     id INTEGER PRIMARY KEY,
     anchor INTEGER NOT NULL REFERENCES anchors(id),
     path TEXT NOT NULL,
@@ -237,7 +239,7 @@ pub fn files_v7_sql() -> String {
 /// precedent, `migrate_counters`). The counters tables and their fill stand untouched. The gate
 /// is the same law as v6: the counters check passed before the stamp (the fill ran in
 /// `migrate_counters`, an empty store is consistent).
-/// A store with rows converts through the migration verb (`migrate_portable_store`, S2), not
+/// A store with rows converts through the migration verb (`migrate_portable`, S2), not
 /// here — reads never migrate, and opening a v6 store stays a verbatim v6 read.
 pub fn portable_sql() -> String {
     let drop_triggers = [
