@@ -87,17 +87,25 @@ struct Serve {
     pass: HashMap<bool, (i64, i64)>,
 }
 
-/// The four command flags + the yield deadline, as atomics (see the header).
-/// `yield_at` is epoch milliseconds; `i64::MIN` is `Date.distantPast`.
-pub struct Flags {
-    sync_requested: AtomicBool,
+/// The four command flags + the yield deadline. `yield_at` is epoch milliseconds;
+/// `i64::MIN` is `Date.distantPast`. The flags are the daemon's own switch panel —
+/// crate-internal (issue #7a review: widening them to the crate's public API for a test
+/// advertised a seam no client is meant to call; the verb suite rides it from inside).
+pub(crate) struct Flags {
     code_sync_requested: AtomicBool,
     stop_requested: AtomicBool,
     backfill_allowed: AtomicBool,
     yield_at: AtomicI64,
-    /// Issue #7a: the folders a scoped `sync [...]` asked to reconcile; empty means the
-    /// whole set. A plain `sync` clears it — a full sync outranks a pending scope.
-    sync_dirs: Mutex<Vec<String>>,
+    /// Issue #7a: the sync request as ONE claim under one lock — `(full, dirs)`. It was an
+    /// atomic flag beside a dirs list, and the pair is not atomic across two fields: swapping
+    /// the flag before draining the list let a scoped verb arriving in between leave the flag
+    /// set with an empty list, which the next take read as a FULL crawl the shell never asked
+    /// for; and a plain `sync` absorbed by a pending scope silently lost the user's request.
+    /// `full` is the whole set of folders; `dirs` are the folders a scoped `sync [...]` named
+    /// (merged, deduplicated). A plain `sync` sets `full` and clears the dirs — a full sync
+    /// outranks a pending scope, and a scope arriving while `full` waits adds nothing (the
+    /// full crawl covers it).
+    sync: Mutex<(bool, Vec<String>)>,
 }
 
 fn epoch_ms() -> i64 {
@@ -109,47 +117,53 @@ fn epoch_ms() -> i64 {
 
 impl Flags {
     /// The flags' start shape: a fresh helper asks for the whole set of folders first
-    /// (`syncRequested = true` — the first thing it does) with backfill as configured.
-    /// The flags are public (issue #7a): the verb suite (`services/tests/verbs.rs`) pins
-    /// the stdin seam.
-    pub fn new(backfill: bool) -> Self {
+    /// (`full = true` — the first thing it does) with backfill as configured.
+    pub(crate) fn new(backfill: bool) -> Self {
         Self {
-            sync_requested: AtomicBool::new(true), // the first thing it does
             code_sync_requested: AtomicBool::new(true),
             stop_requested: AtomicBool::new(false),
             backfill_allowed: AtomicBool::new(backfill),
             yield_at: AtomicI64::new(i64::MIN),
-            sync_dirs: Mutex::new(Vec::new()),
+            sync: Mutex::new((true, Vec::new())), // the first thing it does
         }
     }
 
     /// The engine's `{ defer { syncRequested = false }; return syncRequested }`.
-    /// Issue #7a: a taken request answers its scope — the folders named by `sync [...]`
-    /// lines that arrived since the last sync (merged, deduplicated), or an empty list for
-    /// the whole set of folders.
-    pub fn take_sync(&self) -> Option<Vec<PathBuf>> {
-        if !self.sync_requested.swap(false, Ordering::SeqCst) {
-            return None;
+    /// Issue #7a: a taken request answers its scope — the whole set of folders, or the
+    /// folders named by `sync [...]` lines that arrived since the last sync. Taking is ONE
+    /// atomic act (flag and dirs under the same lock), so a verb arriving mid-take lands in
+    /// the NEXT request, never in the one being taken.
+    pub(crate) fn take_sync(&self) -> Option<Vec<PathBuf>> {
+        let (full, dirs) = {
+            let mut pending = self.sync.lock().unwrap();
+            if !pending.0 && pending.1.is_empty() {
+                return None;
+            }
+            let took = (pending.0, std::mem::take(&mut pending.1));
+            pending.0 = false;
+            took
+        };
+        if full {
+            return Some(Vec::new());
         }
-        Some(
-            self.sync_dirs
-                .lock()
-                .unwrap()
-                .drain(..)
-                .map(PathBuf::from)
-                .collect(),
-        )
+        Some(dirs.into_iter().map(PathBuf::from).collect())
     }
 
-    pub fn take_code_sync(&self) -> bool {
+    /// Is any sync request waiting — a full one, or a scope? (`shouldStop` reads this.)
+    fn sync_pending(&self) -> bool {
+        let pending = self.sync.lock().unwrap();
+        pending.0 || !pending.1.is_empty()
+    }
+
+    pub(crate) fn take_code_sync(&self) -> bool {
         self.code_sync_requested.swap(false, Ordering::SeqCst)
     }
 
-    pub fn stop(&self) -> bool {
+    pub(crate) fn stop(&self) -> bool {
         self.stop_requested.load(Ordering::SeqCst)
     }
 
-    pub fn backfill(&self) -> bool {
+    pub(crate) fn backfill(&self) -> bool {
         self.backfill_allowed.load(Ordering::SeqCst)
     }
 
@@ -171,8 +185,7 @@ impl Flags {
     fn should_stop(&self, is_new: bool, code: bool) -> bool {
         let base = self.stop() || (!is_new && !self.backfill());
         let yield_to_sync = self.yielded()
-            && (self.sync_requested.load(Ordering::SeqCst)
-                || (code && self.code_sync_requested.load(Ordering::SeqCst)));
+            && (self.sync_pending() || (code && self.code_sync_requested.load(Ordering::SeqCst)));
         base || yield_to_sync
     }
 
@@ -180,7 +193,7 @@ impl Flags {
     /// joins the yield condition for the code sync only when a code index exists.
     fn should_stop_rest(&self, has_code: bool) -> bool {
         let yield_to_sync = self.yielded()
-            && (self.sync_requested.load(Ordering::SeqCst)
+            && (self.sync_pending()
                 || (self.code_sync_requested.load(Ordering::SeqCst) && has_code));
         self.stop() || !self.backfill() || yield_to_sync
     }
@@ -322,14 +335,16 @@ fn read_commands(shared: &Arc<Shared>) {
 /// Issue #7a: one stdin line, applied to the flags. The verbs are the engine's pinned set;
 /// the scoped `sync ["<dir>", …]` is the shell watcher's addition (dirs merged,
 /// deduplicated, for the next sync — a line that is not a JSON array of strings is passed
-/// over, as every unknown verb is). Public: the verb suite (`services/tests/verbs.rs`)
-/// pins this exact seam.
-pub fn apply_verb(flags: &Flags, line: &str) {
+/// over, as every unknown verb is). Crate-internal: the verb suite (`verb_tests` below)
+/// pins this exact seam from inside the crate.
+pub(crate) fn apply_verb(flags: &Flags, line: &str) {
     match line {
         "sync" => {
-            // Issue #7a: the whole set of folders outranks a pending scope.
-            flags.sync_dirs.lock().unwrap().clear();
-            flags.sync_requested.store(true, Ordering::SeqCst);
+            // Issue #7a: the whole set of folders outranks a pending scope, in the same
+            // claim — set full and drop the dirs under one lock.
+            let mut pending = flags.sync.lock().unwrap();
+            pending.0 = true;
+            pending.1.clear();
         }
         "sync code" => flags.code_sync_requested.store(true, Ordering::SeqCst),
         "stop" => flags.stop_requested.store(true, Ordering::SeqCst),
@@ -343,13 +358,17 @@ pub fn apply_verb(flags: &Flags, line: &str) {
                         .filter_map(|item| item.as_str().map(str::to_string))
                         .collect();
                     if !dirs.is_empty() {
-                        let mut pending = flags.sync_dirs.lock().unwrap();
-                        for dir in dirs {
-                            if !pending.contains(&dir) {
-                                pending.push(dir);
+                        let mut pending = flags.sync.lock().unwrap();
+                        // A full request already waiting covers every folder: a scope
+                        // arriving under it adds nothing (and must not un-set the full
+                        // request — that is the lost update the review measured).
+                        if !pending.0 {
+                            for dir in dirs {
+                                if !pending.1.contains(&dir) {
+                                    pending.1.push(dir);
+                                }
                             }
                         }
-                        flags.sync_requested.store(true, Ordering::SeqCst);
                     }
                 }
             }
@@ -442,7 +461,7 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
             if !run_part(&mut state, flags, false, None) {
                 break;
             }
-            if flags.sync_requested.load(Ordering::SeqCst) {
+            if flags.sync_pending() {
                 continue;
             }
         }
@@ -463,9 +482,7 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
                 if !run_part(&mut state, flags, true, None) {
                     break;
                 }
-                if flags.sync_requested.load(Ordering::SeqCst)
-                    || flags.code_sync_requested.load(Ordering::SeqCst)
-                {
+                if flags.sync_pending() || flags.code_sync_requested.load(Ordering::SeqCst) {
                     continue;
                 }
             }
@@ -479,9 +496,7 @@ fn serve_loop(shared: &Arc<Shared>, new_files_limit: i64, linger: f64) -> Result
             if !finish_long_files(&mut state, flags) {
                 break;
             }
-            if flags.sync_requested.load(Ordering::SeqCst)
-                || flags.code_sync_requested.load(Ordering::SeqCst)
-            {
+            if flags.sync_pending() || flags.code_sync_requested.load(Ordering::SeqCst) {
                 continue;
             }
         }
@@ -903,7 +918,7 @@ fn finish_long_files(state: &mut Serve, flags: &Flags) -> bool {
 /// `left(_:of:)`: new files a run stopped before (a sync or stop came first),
 /// kept for the next round. Done: anything still pending joins the backfill.
 fn left(state: &Serve, flags: &Flags, code: bool, files: &HashSet<i64>) -> HashSet<i64> {
-    let yielded = flags.sync_requested.load(Ordering::SeqCst)
+    let yielded = flags.sync_pending()
         || flags.stop()
         || (code && flags.code_sync_requested.load(Ordering::SeqCst));
     if !yielded {
@@ -935,7 +950,7 @@ fn wait_for_work(shared: &Shared, state: &Serve, flags: &Flags, linger: f64) -> 
             return false;
         }
         let (sync, code_sync, stop, backfill) = (
-            flags.sync_requested.load(Ordering::SeqCst),
+            flags.sync_pending(),
             flags.code_sync_requested.load(Ordering::SeqCst),
             flags.stop(),
             flags.backfill(),
@@ -1057,5 +1072,87 @@ pub(crate) fn is_gone(pid: i32) -> bool {
             CloseHandle(handle);
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod verb_tests {
+    //! Issue #7a — the stdin verb seam (`apply_verb` + `Flags::take_sync`), pinned from
+    //! INSIDE the crate: the flags are the daemon's private switch panel, so the seam is
+    //! crate-internal and the suite rides it here (the review's cleanliness finding — a test
+    //! must not widen a daemon's internals into the crate's public API).
+    use super::{apply_verb, Flags};
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_scoped_sync_verb_carries_its_dirs_and_a_plain_sync_outranks_them() {
+        let flags = Flags::new(true);
+        // A fresh helper asks for the whole set the moment it starts.
+        assert_eq!(flags.take_sync().unwrap(), Vec::<PathBuf>::new());
+        // Scoped verb: dirs merged, deduplicated, kept for the next sync.
+        apply_verb(&flags, r#"sync ["/a/b", "/c"]"#);
+        apply_verb(&flags, r#"sync ["/c", "/d/e"]"#);
+        assert_eq!(
+            flags.take_sync().unwrap(),
+            vec![
+                PathBuf::from("/a/b"),
+                PathBuf::from("/c"),
+                PathBuf::from("/d/e")
+            ]
+        );
+        // A scoped request not taken yet, then a plain sync: the whole set wins.
+        apply_verb(&flags, r#"sync ["/only"]"#);
+        apply_verb(&flags, "sync");
+        assert_eq!(flags.take_sync().unwrap(), Vec::<PathBuf>::new());
+        // No request: nothing to take.
+        assert!(flags.take_sync().is_none());
+        // Unknown and malformed verbs are passed over.
+        apply_verb(&flags, "sync not-json");
+        apply_verb(&flags, "sync [1, 2]");
+        apply_verb(&flags, "nonsense");
+        assert!(flags.take_sync().is_none());
+        // The old verbs keep answering as pinned.
+        apply_verb(&flags, "backfill off");
+        assert!(!flags.backfill());
+        apply_verb(&flags, "backfill on");
+        assert!(flags.backfill());
+        apply_verb(&flags, "sync code");
+        assert!(flags.take_code_sync());
+        apply_verb(&flags, "stop");
+        assert!(flags.stop());
+    }
+
+    #[test]
+    fn a_plain_sync_arriving_first_survives_the_scope_that_follows_it() {
+        // The review's lost update: "Index now" (a plain `sync`) while files are being
+        // written. The scope used to be absorbed into the same request — the full crawl the
+        // user asked for was answered as a scoped one, and the `sync` event cleared the
+        // shell's owed flag, so nothing ever re-asked.
+        let flags = Flags::new(true);
+        flags.take_sync(); // the startup pass
+        apply_verb(&flags, "sync");
+        apply_verb(&flags, r#"sync ["/burst/one", "/burst/two"]"#);
+        // The full request is what lands, with its dirs EMPTY (the whole set of folders).
+        assert_eq!(flags.take_sync().unwrap(), Vec::<PathBuf>::new());
+        // The absorbed scope added nothing: no second request behind the full one.
+        assert!(flags.take_sync().is_none());
+    }
+
+    #[test]
+    fn a_taken_scope_leaves_no_request_behind_it() {
+        // The review's spurious full crawl: the flag used to swap before the dirs drained,
+        // so a scope arriving in between left the flag set with empty dirs — the next take
+        // answered the WHOLE set, a crawl the shell never asked for (minutes to hours on a
+        // big tree).
+        let flags = Flags::new(true);
+        flags.take_sync(); // the startup pass
+        apply_verb(&flags, r#"sync ["/burst/one"]"#);
+        assert_eq!(
+            flags.take_sync().unwrap(),
+            vec![PathBuf::from("/burst/one")]
+        );
+        // Taking the scope is ONE atomic act: nothing is left to take.
+        assert!(flags.take_sync().is_none());
+        assert!(!flags.sync_pending());
     }
 }

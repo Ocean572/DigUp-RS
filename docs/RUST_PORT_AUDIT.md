@@ -356,3 +356,22 @@ watcher overflow, and bursts wider than 200 dirs — the repair path by construc
   server are untouched.
 - Pinned: `crates/runtime/tests/sync_scoped.rs` (eight measured transitions, model-free),
   the services `verb_tests`, the shell watcher's collapse test.
+
+## Issue #7a review round (2026-11-26, on `feature/issue-7a-incremental-sync`)
+
+An independent senior-engineer review of the stacked chain. Branch 1 (`fix/issues-7b-8`)
+came back clean — ship, nothing actionable. The #7a branch's keep/prune table, the
+trailing-slash range scan and the plain verb's byte-identity were confirmed sound; the
+findings below are fixed as they prescribed them.
+
+**The sync request is one claim, not two fields.** The flags carried an atomic
+`sync_requested` beside a `sync_dirs` list; the pair is not atomic across two fields. A
+plain `sync` (the app's "Index now") followed by a scoped verb arriving before the loop
+took the request answered a SCOPED crawl for a full one, and the `sync` event cleared the
+shell's owed flag — the user's request was lost. Swapping the flag before draining the
+list left the flag set with empty dirs: the next take answered the WHOLE set, a crawl the
+shell never asked for. Both are one fix: `Flags::sync` is `Mutex<(full, dirs)>`, the take
+swaps and drains under that lock, and a scope arriving while a full request waits adds
+nothing. The seam is crate-internal again (`pub(crate)`, the verb suite rides it from
+inside the crate — a test must not widen a daemon's internals into the public API).
+Pinned: `verb_tests`' plain-then-scope order, and "a taken scope leaves no request behind".
