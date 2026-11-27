@@ -214,6 +214,11 @@ pub fn faces_call(
         format_gf64(server.faces_min_score),
         "--model-idle".to_string(),
         format_gf64(server.faces_model_idle),
+        // The #195 privacy move: the faces ride the device-side faces home, never
+        // the index folder (an in-tree `.digup` carries index + previews only).
+        // The store's anchors hash the subfolder, so named targets stay separated.
+        "--faces-dir".to_string(),
+        server.config.join("faces").to_string_lossy().into_owned(),
     ];
     if server.faces_workers > 0 {
         // The pool is the daemon's own law (face_service::workers_for); the server

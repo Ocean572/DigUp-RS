@@ -244,12 +244,20 @@ pub fn faces_arguments(
     consent: &Path,
     record: &ConsentRecord,
     models: Option<&Path>,
+    faces_dir: &Path,
     skipped: &[String],
 ) -> Vec<String> {
     let mut args = vec!["faces-service".to_string()];
     if let Some(index) = index {
         args.extend(["--index".to_string(), index.display().to_string()]);
     }
+    // The #195 privacy move: the faces ride the device-side faces home (the app's
+    // config folder), never the index folder — a portable `.digup` in a carried
+    // folder carries its index, never its faces.
+    args.extend([
+        "--faces-dir".to_string(),
+        faces_dir.join("faces").display().to_string(),
+    ]);
     args.extend([
         "--faces-consent".to_string(),
         consent.display().to_string(),
@@ -389,6 +397,10 @@ pub fn faces_launch(shell: &Shell, record: &ConsentRecord, op: &str) -> Result<L
         &consent,
         record,
         models_folder(shell).as_deref(),
+        shell
+            .settings_path
+            .parent()
+            .ok_or("faces: no config folder")?,
         &skipped,
     );
     let mut launch = shell.launch(args, "faces.log");
@@ -512,11 +524,16 @@ mod faces_port_tests {
             Path::new("/home/me/.config/DigUp/faces-consent.json"),
             &record(),
             Some(Path::new("/home/me/digup-models")),
+            Path::new("/home/me/.config/DigUp"),
             &["/home/me/photos/appdata_secret".to_string()],
         );
         let joined = args.join("|");
         assert_eq!(args.first().unwrap(), "faces-service");
         assert!(joined.contains("--index|/home/me/digup-index"), "{joined}");
+        assert!(
+            joined.contains("--faces-dir|/home/me/.config/DigUp/faces"),
+            "the #195 privacy move: faces ride the device config folder: {joined}"
+        );
         assert!(
             joined.contains("--faces-consent|/home/me/.config/DigUp/faces-consent.json"),
             "{joined}"
@@ -543,6 +560,7 @@ mod faces_port_tests {
             Path::new("/cfg/faces-consent.json"),
             &record(),
             None,
+            Path::new("/cfg"),
             &[],
         );
         assert_eq!(args.first().unwrap(), "faces-service");
@@ -550,6 +568,7 @@ mod faces_port_tests {
             .iter()
             .any(|a| a == "--index" || a == "--faces-models" || a == "--exclude"));
         assert!(args.iter().any(|a| a == "--faces-consent"));
+        assert!(args.iter().any(|a| a == "--faces-dir"));
     }
 
     /// A record that parses but is not the server's shape reads as absent — a malformed record is
