@@ -938,7 +938,10 @@ fn index(args: &Arguments) -> Result<(), String> {
     indexer.store.read_again_once().map_err(|e| e.to_string())?;
     indexer.check_model().map_err(|e| e.to_string())?;
     let sync = indexer
-        .sync(&folders, &mut |_| {})
+        // #110: the index verb rides the gated sync — full crawl (and snapshot fill)
+        // on a fresh store, the prefilter + gated walk + row-check once the snapshot
+        // speaks. The sync laws are shared verbatim.
+        .sync_gated(&folders, &mut |_| {})
         .map_err(|e| e.to_string())?;
     let home = std::env::var("HOME").unwrap_or_default();
     println!(

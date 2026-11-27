@@ -203,6 +203,7 @@ impl IndexStore {
         self.db.transaction(|| {
             self.db.execute(ANCHORS_TABLE_SQL)?;
             self.db.execute(&files_v7_sql())?;
+            self.db.execute(DIRS_TABLE_SQL)?;
             self.db.execute(
                 "CREATE TABLE IF NOT EXISTS migration_map(old TEXT PRIMARY KEY, new TEXT NOT NULL) \
                  WITHOUT ROWID",
@@ -890,6 +891,98 @@ PRAGMA user_version = 5;"
             cache.push(Anchor { id, abs, real });
         }
         Ok(id)
+    }
+
+    // MARK: Dir snapshot (#110 — the gate of the gated sync)
+
+    /// The snapshot as the gate reads it: absolute spelling → (mtime, entries). Spellings
+    /// fold onto the (anchor, rel) rows through `split_anchor`, so a snapshot recorded
+    /// under the realpath spelling of a symlinked root answers the registered spelling too.
+    pub fn dir_snapshots(&self) -> Result<HashMap<String, (f64, i64)>> {
+        if !self.is_v7() {
+            return Ok(HashMap::new());
+        }
+        let mut out = HashMap::new();
+        self.db.query(
+            "SELECT a.abs, d.path, d.mtime, d.entries FROM dirs d JOIN anchors a ON a.id = d.anchor",
+            [],
+            |row| {
+                let abs = row.text(0).unwrap_or_default();
+                let rel = row.text(1).unwrap_or_default();
+                let mtime = row.double(2);
+                let entries = row.int(3);
+                let key = if rel.is_empty() {
+                    abs
+                } else if abs.ends_with('/') {
+                    format!("{abs}{rel}")
+                } else {
+                    format!("{abs}/{rel}")
+                };
+                out.insert(key, (mtime, entries));
+                Ok(())
+            },
+        )?;
+        Ok(out)
+    }
+
+    /// The snapshot is REBUILT per sync from the folders the walk enumerated (the truth
+    /// the gate must be honest to). Folders a gated sync did NOT re-enumerate keep their
+    /// stored rows — the pair (mtime, entries) is the folder's own fact, and an unchanged
+    /// folder's row stays true.
+    pub fn record_dirs(&self, snaps: &[DirSnap]) -> Result<()> {
+        self.write_guard()?;
+        if !self.is_v7() {
+            return Ok(());
+        }
+        self.db.transaction(|| {
+            for snap in snaps {
+                let path = crate::paths::standardize(&crate::paths::to_slashes(&snap.path));
+                let (anchor, rel) = match self.split_anchor(&path) {
+                    Ok(found) => found,
+                    Err(_) => {
+                        // The root folder IS an anchor row (`split_anchor` refuses the anchor
+                        // folder: rel would be empty) — the snapshot's root entry rides the
+                        // anchor's own spelling with rel "". A folder under no root parent-
+                        // anchors, the same law the writer's `split_for_write` runs.
+                        let id = self.ensure_anchor(&path)?;
+                        (id, String::new())
+                    }
+                };
+                self.db.run(
+                    "INSERT INTO dirs(anchor, path, mtime, entries) VALUES(?, ?, ?, ?) \
+                     ON CONFLICT(anchor, path) DO UPDATE SET mtime = excluded.mtime, entries = excluded.entries",
+                    vec![
+                        Sql::Int(anchor),
+                        Sql::Text(rel),
+                        Sql::Double(snap.mtime),
+                        Sql::Int(snap.entries),
+                    ],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    /// The rules fingerprint the snapshot is valid for (#110): excludes, code mode, kinds —
+    /// a folder skipped by the OLD rules has no row, so the gate descends it once the rules
+    /// change, and a folder whose count changed shape is re-walked. Fingerprint mismatch =
+    /// the sync runs FULL and refills (the snapshot is only as honest as the rules that
+    /// filled it).
+    pub fn dirs_rules(&self) -> Result<Option<String>> {
+        self.meta("dirs_rules")
+    }
+
+    pub fn set_dirs_rules(&self, value: Option<&str>) -> Result<()> {
+        self.set_meta("dirs_rules", value)
+    }
+
+    /// Drop the whole snapshot (rules change → the next sync is full and refills).
+    pub fn clear_dirs(&self) -> Result<()> {
+        self.write_guard()?;
+        if !self.is_v7() {
+            return Ok(());
+        }
+        self.db.execute("DELETE FROM dirs")
     }
 
     /// The (anchor, rel) split of an absolute path: the anchor with the LONGEST bound prefix
@@ -2166,6 +2259,16 @@ fn create_scope_anchor(db: &Database, table: &str, ranges: &[(i64, String, Strin
 }
 
 /// A v6 row as the migration reads it (#195, S2): every column the v7 `files` row keeps.
+/// One dir-snapshot row (#110): the walk's absolute spelling, the folder's mtime, and
+/// the entry count the crawl law saw (hidden entries are skipped by the law, so they
+/// are not counted — the count the gate compares is the count the walk uses).
+#[derive(Debug, Clone)]
+pub struct DirSnap {
+    pub path: String,
+    pub mtime: f64,
+    pub entries: i64,
+}
+
 struct V6Row {
     id: i64,
     kind: String,

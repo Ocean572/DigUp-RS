@@ -20,7 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Instant, SystemTime};
 
 use digup_core::costs::MeasuredCosts;
-use digup_core::crawler::{CrawlProgress, CrawlReport};
+use digup_core::crawler::{CrawlProgress, CrawlReport, DirFacts};
 use digup_core::doc;
 use digup_core::extract::ExtractError;
 use digup_core::index_store::IndexStore;
@@ -29,6 +29,7 @@ use digup_core::options::IndexOptions;
 use digup_core::paths;
 use digup_core::search_text::{has_prose, has_words};
 use digup_core::uuid::uuid_string;
+use digup_core::DirSnap;
 use digup_native::{image, media, pdf};
 
 use crate::prompts;
@@ -269,7 +270,6 @@ impl Indexer {
 
     /// Crawls `roots` and reconciles the index: new files are queued, changed ones re-queued,
     /// moved ones re-pathed (no re-embedding), and files that are gone or newly excluded are
-    /// removed.
     pub fn sync(
         &self,
         roots: &[PathBuf],
@@ -332,7 +332,284 @@ impl Indexer {
         // embeds what the full crawl excludes, and the next full crawl deletes it — add,
         // embed, prune, repeat, paying the model every burst.
         let crawl = digup_core::crawler::crawl_scoped(&walk, roots, &self.options, progress);
-        let existing = self.store.files_under(&walk_paths)?;
+        let mut summary = SyncSummary::default();
+        self.reconcile(
+            &crawl,
+            &root_paths,
+            &walk_paths,
+            full,
+            &HashSet::new(),
+            &mut summary,
+        )?;
+        summary.crawl = crawl;
+        Ok(summary)
+    }
+
+    /// #110: the gated sync. When the store carries a dir snapshot recorded by the same
+    /// rules, a steady-state sync pays: the prefilter (one readdir + one stat per folder —
+    /// seconds-cheap), the rule walk entering ONLY the folders whose `(mtime, entries)` pair
+    /// moved, the folders the snapshot never saw, and their ancestors, and the row-check (the
+    /// file-level law) that stats the stored paths of rows in folders NOT entered — the
+    /// content-edit-in-place edge (the parent folder's mtime is untouched by its files'
+    /// content; the dir pair cannot see it) is caught there, never missed. The reconcile law
+    /// — add/move/requeue/prune, the issue #7a/#2 keeps — is the byte-identical body both
+    /// syncs share. Without a snapshot (fresh store, migrated store, rules change) the sync
+    /// runs FULL first and records the snapshot: the gate only speaks after one honest full
+    /// crawl. Measured (Phase-M, bench HDD, 1.7 M files): full walk 1262.53 s vs the row-stat
+    /// proxy 57 µs/row warm — the gate is what makes sync a sync and not a re-crawl; the
+    /// full crawl stays the honest base the snapshot is refreshed from.
+    pub fn sync_gated(
+        &self,
+        roots: &[PathBuf],
+        progress: &mut dyn FnMut(&CrawlProgress),
+    ) -> digup_core::db::Result<SyncSummary> {
+        let root_paths: Vec<String> = roots
+            .iter()
+            .map(|root| paths::standardize(&root.to_string_lossy()))
+            .collect();
+        // Dir rows are anchored rows: register the roots first (both paths — the fill's
+        // `split_anchor` needs the root anchor to exist, and the empty-root case too).
+        for root in &root_paths {
+            self.store.ensure_anchor(root)?;
+        }
+        let fingerprint = self.rules_fingerprint();
+        let snapshot = self.store.dir_snapshots()?;
+        if snapshot.is_empty() || self.store.dirs_rules()?.as_deref() != Some(fingerprint.as_str())
+        {
+            // The honest base: full crawl, then fill the snapshot from the prefilter —
+            // the same law, so the pairs the gate compares are pairs the walk produced.
+            let mut summary = self.sync_scoped(roots, roots, progress)?;
+            let facts = digup_core::crawler::dir_facts(roots, &self.options);
+            self.record_snapshot(&facts)?;
+            self.store.set_dirs_rules(Some(&fingerprint))?;
+            summary.unchanged += 0; // the fill is plumbing; the summary stays the crawl's
+            return Ok(summary);
+        }
+        let facts = digup_core::crawler::dir_facts(roots, &self.options);
+        let mut active: HashSet<String> = root_paths.iter().cloned().collect();
+        for (dir, fact) in &facts {
+            let unchanged = snapshot
+                .get(dir)
+                .is_some_and(|(m, e)| (m - fact.mtime).abs() < 1e-6 && *e == fact.entries);
+            if !unchanged {
+                active.insert(dir.clone());
+            }
+        }
+        // Ancestors of every active folder up to its root: the gate must let the walk
+        // REACH a changed folder through its unchanged ancestors (the ancestors' own file
+        // work is skipped by their own verdict — only the path down opens).
+        let started: Vec<String> = active.iter().cloned().collect();
+        for dir in started {
+            let mut folder = dir;
+            loop {
+                if root_paths.contains(&folder) {
+                    break;
+                }
+                let parent = paths::parent(&folder);
+                if parent == folder {
+                    break;
+                }
+                active.insert(parent.clone());
+                folder = parent;
+            }
+        }
+        let crawl =
+            digup_core::crawler::crawl_gated(roots, roots, &self.options, &active, progress);
+        let keep_under = Self::keep_prefixes(&root_paths, &crawl.scan_failures, true);
+        // The move law's pairing, seen from the row side: an inode the gated walk DID
+        // enumerate at a new path is a RENAME, not a delete — the row stands for
+        // reconcile's by_inode pass (a folder rename mutates the parent's pair, so the
+        // parent IS enumerated; the old spelling's ENOENT must not eat the row before
+        // the pairing runs — measured while drafting the rename pin).
+        let moved_inodes: HashSet<String> = crawl
+            .candidates
+            .iter()
+            .map(|c| format!("{}:{}", c.device, c.inode))
+            .collect();
+        let mut summary = SyncSummary::default();
+        let keep_rows = self.row_check(
+            &root_paths,
+            &active,
+            &keep_under,
+            &moved_inodes,
+            &mut summary,
+        )?;
+        self.reconcile(
+            &crawl,
+            &root_paths,
+            &root_paths,
+            true,
+            &keep_rows,
+            &mut summary,
+        )?;
+        summary.crawl = crawl;
+        // The snapshot refresh: every folder the prefilter visited rides its fresh pair.
+        self.record_snapshot(&facts)?;
+        self.store.set_dirs_rules(Some(&fingerprint))?;
+        Ok(summary)
+    }
+
+    /// #110 row-check (the file-level law): stat the stored paths of rows in folders the
+    /// gated walk did NOT enumerate. Content-edit-in-place (the Gemini inverse: a file's
+    /// content moves, its parent folder's mtime does not) is caught HERE — the dir pair
+    /// cannot see it. The answers ride the sync's own laws: size/mtime moved → requeue
+    /// (the kind rides the row — the path is the same, the classification is the same);
+    /// ENOENT under a live folder → delete (the folder WAS checked, the file is not
+    /// there), EXCEPT when the row's `(device, inode)` rides a path the gated walk
+    /// enumerated — a rename whose old spelling sits in an un-entered folder stands for
+    /// reconcile's by_inode pass (the move law runs before this delete can eat it);
+    /// the gone-root/scan-failure keeps (issue #2) apply; a file that is
+    /// unreadable, dataless, or not a regular file → keep (the full crawl's classification
+    /// owns those verdicts at the next full sync — the gate does not invent them).
+    fn row_check(
+        &self,
+        root_paths: &[String],
+        active: &HashSet<String>,
+        keep_under: &[String],
+        moved_inodes: &HashSet<String>,
+        summary: &mut SyncSummary,
+    ) -> digup_core::db::Result<HashSet<String>> {
+        let rows = self.store.files_under(root_paths)?;
+        let mut keep_rows = HashSet::new();
+        for row in &rows {
+            let dir = paths::parent(&row.path);
+            if active.contains(&dir) {
+                continue; // the gated walk enumerated this folder: the candidates answer
+            }
+            match std::fs::symlink_metadata(&row.path) {
+                Ok(_) => {
+                    let Some(info) = digup_core::crawler::file_info(&row.path) else {
+                        keep_rows.insert(row.path.clone());
+                        summary.unchanged += 1;
+                        continue;
+                    };
+                    if !info.is_regular || info.dataless {
+                        // A link/special, or a macOS cloud eviction: the full crawl's
+                        // classification owns these verdicts. Keep.
+                        keep_rows.insert(row.path.clone());
+                        summary.unchanged += 1;
+                        continue;
+                    }
+                    if row.size != info.size || (row.mtime - info.mtime).abs() > 0.001 {
+                        let cand = digup_core::model::Candidate {
+                            path: row.path.clone(),
+                            kind: row.kind,
+                            size: info.size,
+                            mtime: info.mtime,
+                            inode: info.inode,
+                            device: info.device,
+                        };
+                        self.store.requeue_as(row.id, &cand)?;
+                        // Seen-by-law: the folder WAS checked, the file IS there (it was
+                        // requeued). The enumerate-only prune must not eat it.
+                        keep_rows.insert(row.path.clone());
+                        summary.changed += 1;
+                        summary.queued.push(row.id);
+                    } else {
+                        keep_rows.insert(row.path.clone());
+                        summary.unchanged += 1;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if moved_inodes.contains(&format!("{}:{}", row.device, row.inode)) {
+                        // The inode rides a path the gated walk enumerated: this row is
+                        // the OLD spelling of a rename. It stands for reconcile's
+                        // by_inode pass, which re-paths it (the full sync's move law,
+                        // untouched) — counting it here would double the verdict.
+                        keep_rows.insert(row.path.clone());
+                        continue;
+                    }
+                    if keep_under
+                        .iter()
+                        .any(|prefix| row.path.starts_with(prefix.as_str()))
+                    {
+                        keep_rows.insert(row.path.clone());
+                        summary.unchanged += 1;
+                    } else {
+                        self.store.delete(row.id)?;
+                        summary.removed += 1;
+                    }
+                }
+                Err(_) => {
+                    // Unreadable on the path (a sealed folder above): the walk's-blindness
+                    // law of issue #2 — "not seen" is not "deleted". Keep.
+                    keep_rows.insert(row.path.clone());
+                    summary.unchanged += 1;
+                }
+            }
+        }
+        Ok(keep_rows)
+    }
+
+    /// The rules fingerprint the snapshot is valid for: every option that can move what the
+    /// walk enumerates (skips, code mode, datasets, code limits, excluded extensions). A
+    /// mismatch makes the next sync FULL and refills — the snapshot is only as honest as
+    /// the rules that filled it.
+    fn rules_fingerprint(&self) -> String {
+        let mut folders = self.options.excluded_folders.clone();
+        folders.sort();
+        let mut exts: Vec<String> = self.options.excluded_extensions.iter().cloned().collect();
+        exts.sort();
+        format!(
+            "code={} include_code={} include_datasets={} max_code={} max_nb={} stretch={} folders={} exts={}",
+            self.options.code,
+            self.options.include_code,
+            self.options.include_datasets,
+            self.options.max_code_bytes,
+            self.options.max_notebook_bytes,
+            self.options.code_stretch,
+            folders.join(","),
+            exts.join(",")
+        )
+    }
+
+    fn record_snapshot(&self, facts: &HashMap<String, DirFacts>) -> digup_core::db::Result<()> {
+        let snaps: Vec<DirSnap> = facts
+            .iter()
+            .map(|(path, f)| DirSnap {
+                path: path.clone(),
+                mtime: f.mtime,
+                entries: f.entries,
+            })
+            .collect();
+        self.store.record_dirs(&snaps)
+    }
+
+    /// The issue #2/#7a keeps, shared by reconcile and the row-check: vanished chosen roots
+    /// (an ejected drive) and, at a full sync, the scan-failure paths keep their rows.
+    fn keep_prefixes(
+        root_paths: &[String],
+        scan_failures: &HashSet<String>,
+        full: bool,
+    ) -> Vec<String> {
+        root_paths
+            .iter()
+            .filter(|path| folder_is_gone(path))
+            .map(|path| paths::bound(path))
+            .chain(
+                scan_failures
+                    .iter()
+                    .filter(|path| full || !folder_is_gone(path))
+                    .map(|path| paths::bound(path)),
+            )
+            .collect()
+    }
+
+    /// The reconciliation of a crawl against the store — the issue #7a law VERBATIM (the
+    /// body `sync_scoped` ran): match by path, by `(device, inode)` for renames, requeue
+    /// what moved, prune what a successful scan did not see. `keep_rows` (#110) are the
+    /// rows the row-check answered — kept or requeued — the prune law does not touch them:
+    /// their folders WERE checked, file by file, and answered.
+    fn reconcile(
+        &self,
+        crawl: &CrawlReport,
+        root_paths: &[String],
+        walk_paths: &[String],
+        full: bool,
+        keep_rows: &HashSet<String>,
+        summary: &mut SyncSummary,
+    ) -> digup_core::db::Result<()> {
+        let existing = self.store.files_under(walk_paths)?;
         let mut by_path: HashMap<String, FileRecord> = HashMap::new();
         let mut by_inode: HashMap<String, FileRecord> = HashMap::new();
         for file in &existing {
@@ -341,7 +618,6 @@ impl Indexer {
         }
         let seen: HashSet<String> = crawl.candidates.iter().map(|c| c.path.clone()).collect();
         let mut moved_from: HashSet<String> = HashSet::new();
-        let mut summary = SyncSummary::default();
         self.store.db.transaction(|| {
             for file in &crawl.candidates {
                 if let Some(row) = by_path.get(&file.path) {
@@ -371,9 +647,9 @@ impl Indexer {
                 } else {
                     // Issue #7a: a file that ENTERS the scope from outside. Its row lives
                     // above the scope, so the in-scope inode lookup misses and a SECOND row
-                    // is inserted while the old path keeps standing inside the store's scope —
-                    // search answers a path that no longer exists and the open fails, until a
-                    // full sync cleans it up. The watcher fires both sides of a move it can
+                    // is inserted while the old path keeps standing inside the store's scope
+                    // — search answers a path that no longer exists and the open fails, until
+                    // a full sync cleans it up. The watcher fires both sides of a move it can
                     // see (pinned), so the trigger is the moves it cannot see: notify adds
                     // watches lazily for newly created folders, FSEvents coalesces on a Mac,
                     // and a dropped burst is a full sync by construction. The schema indexes
@@ -412,32 +688,24 @@ impl Indexer {
             // sync a failure at a path that is GONE is the deleted folder the events named
             // (the scope is fired by filesystem events, not by a drive walk), so only
             // failures at paths that EXIST keep rows; vanished chosen roots keep theirs at
-            // any sync — an ejected drive's files are elsewhere, not deleted.
-            let keep_under: Vec<String> = root_paths
-                .iter()
-                .filter(|path| folder_is_gone(path))
-                .map(|path| paths::bound(path))
-                .chain(
-                    crawl
-                        .scan_failures
-                        .iter()
-                        .filter(|path| full || !folder_is_gone(path))
-                        .map(|path| paths::bound(path)),
-                )
-                .collect();
+            // any sync — an ejected drive's files are elsewhere, not deleted. Issue #110:
+            // rows the row-check ANSWERED (their folders were checked file-by-file) are
+            // seen-by-law, not by enumeration — the prune law does not touch them.
+            let keep_under = Self::keep_prefixes(root_paths, &crawl.scan_failures, full);
             for row in &existing {
                 if !seen.contains(&row.path)
                     && !moved_from.contains(&row.path)
-                    && !keep_under.iter().any(|prefix| row.path.starts_with(prefix))
+                    && !keep_rows.contains(&row.path)
+                    && !keep_under
+                        .iter()
+                        .any(|prefix| row.path.starts_with(prefix.as_str()))
                 {
                     self.store.delete(row.id)?;
                     summary.removed += 1;
                 }
             }
             Ok(())
-        })?;
-        summary.crawl = crawl;
-        Ok(summary)
+        })
     }
 
     /// Images and screenshots go to the model 8 at a time; other files one by one

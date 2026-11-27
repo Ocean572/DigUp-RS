@@ -33,8 +33,10 @@ freshness for the rest.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -76,6 +78,24 @@ class Faces:
     def consent_path(self) -> Path:
         return self.config_dir / "faces-consent.json"
 
+    def faces_home(self) -> Path:
+        """The device-side faces home (#195, the privacy move): the daemon's file
+        lives at `<config>/faces/<hash>/face.sqlite`, where <hash> is the first 16
+        hex of the sha256 over the store's anchor spellings in id order (a store
+        with no anchors — v6, or an unfilled folder — hashes the index path). The
+        faces belong to the STORE, never to the folder: a carried `.digup` carries
+        its index, never the faces computed from its photos on this device."""
+        con = sqlite3.connect(f"file:{self.index / 'index.sqlite'}?mode=ro", uri=True)
+        try:
+            rows = [r[0] for r in con.execute("SELECT abs FROM anchors ORDER BY id")]
+        except sqlite3.OperationalError:
+            rows = []  # a v6 store: no anchors table — the index path is the identity
+        finally:
+            con.close()
+        key = "\n".join(rows) if rows else str(self.index)
+        digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+        return self.config_dir / "faces" / digest
+
     def scan(self, body: dict | None = None):
         return self.client.post("/api/v1/faces/scan", json=body if body is not None else {})
 
@@ -105,8 +125,10 @@ def faces_corpus(corpus, tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def faces(faces_corpus, tmp_path_factory):
-    """One server, one index, one scan stretch: face.sqlite lives beside a fresh index
-    folder of its own (the store is the scan's, the module's mutations are its story)."""
+    """One server, one index, one scan stretch: the faces' file lives at the
+    DEVICE-side home `<config>/faces/<anchor-hash>/face.sqlite` beside a fresh index
+    folder of the store's own (the #195 privacy move — the store is the scan's, the
+    module's mutations are its story)."""
     index = tmp_path_factory.mktemp("faces-index")
     cfg = _cfg(index, (faces_corpus,))
     # Fill the fixture's own index BEFORE serving (measured 2026-11-25): conftest's
@@ -170,7 +192,10 @@ def test_every_faces_verb_refuses_before_consent(faces, method, path, body):
     detail = reply.json()["detail"]
     assert CONSENT_SENTENCE in detail, detail
     assert "/api/v1/faces/consent" in detail, detail
-    # Nothing was built behind the wall: no store, no counts, and consent itself reads closed.
+    # Nothing was built behind the wall: no store, no counts, and consent itself reads
+    # closed. The store is the DEVICE-side home (#195), and the index folder carries no
+    # faces file on any path — the privacy boundary, pinned on both sides.
+    assert (faces.faces_home() / "face.sqlite").exists() is False
     assert (faces.index / "face.sqlite").exists() is False
     assert faces.client.get("/api/v1/faces/consent").json()["consented"] is False
 
@@ -232,10 +257,11 @@ def test_scan_relays_the_engines_counts(faces, faces_corpus):
     assert scan["skipped"] == 0, scan
     assert scan["fresh"] == 0, scan
     assert scan["assigned"] == FACE_COUNT, scan
-    # The face store is the scan's own file beside the index — separate from index.sqlite
-    # (FACES.md §2: faces never ride the main store's schema).
-    assert (faces.index / "face.sqlite").is_file()
-    assert (faces.index / "face.sqlite") != (faces.index / "index.sqlite")
+    # The face store is the scan's own file at the DEVICE-side home (#195, the privacy
+    # move) — never in the index folder, never riding the main store's schema (FACES.md §2).
+    assert (faces.faces_home() / "face.sqlite").is_file()
+    assert faces.faces_home() != faces.index
+    assert (faces.index / "face.sqlite").exists() is False
     # The scan crawled the SERVER's roots (never a client-supplied path): the rows it
     # recorded live under the deployment's own tree.
     names = {p.name for p in faces_corpus.iterdir()}
@@ -612,8 +638,9 @@ def test_withdrawing_consent_closes_every_verb(faces):
     refused = faces.client.post("/api/v1/search", json={"q": "name: faces", "person": 1})
     assert refused.status_code == 400, refused.text
     assert CONSENT_SENTENCE in refused.json()["detail"], refused.json()
-    # Opting out is not deleting the faces: the store stays on disk, the user's data.
-    assert (faces.index / "face.sqlite").is_file()
+    # Opting out is not deleting the faces: the store stays on disk at the device home,
+    # the user's data.
+    assert (faces.faces_home() / "face.sqlite").is_file()
     # Re-consenting is the same affirmative act, and the store is the same store.
     again = faces.client.post("/api/v1/faces/consent", json={"accept": True})
     assert again.status_code == 200, again.text

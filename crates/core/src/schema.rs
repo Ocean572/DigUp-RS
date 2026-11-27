@@ -202,6 +202,24 @@ pub const ANCHORS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS anchors(
     real TEXT
 );";
 
+/// v7 (#195 tail, #110): the dir snapshot of the gated sync — one row per FOLDER the
+/// last sync enumerated: its mtime and the number of entries the crawl law saw
+/// (hidden entries excluded — the count the gate compares is the count the walk uses).
+/// The gate descends a folder only when its (mtime, entries) pair changed, so steady-state
+/// syncs skip the per-file stat + classify of unchanged folders (measured Phase-M: full
+/// walk 1262.53 s / 1.7 M files on the bench HDD vs row-stat 57 µs/row warm); the
+/// content-edit edge is caught by the ROW-CHECK (the file-level law stats the stored
+/// paths — a content edit changes the FILE mtime, never the parent dir mtime, the
+/// Gemini inverse the design pins). `path` is anchor-relative like `files.path`
+/// (the root folder is `""`), so scope and anchors ride the same law.
+pub const DIRS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS dirs(
+    anchor INTEGER NOT NULL REFERENCES anchors(id),
+    path TEXT NOT NULL,
+    mtime REAL NOT NULL,
+    entries INTEGER NOT NULL,
+    PRIMARY KEY(anchor, path)
+) WITHOUT ROWID;";
+
 /// The v7 `files` table (as `files_new`, swapped in by `portable_sql`): `path` is relative
 /// (`/`-separated, no leading slash, no `./`, no `..`, raw bytes — no Unicode normalization),
 /// `UNIQUE(anchor, path)` lets the same relative name stand under two roots, and `bucket` is
@@ -259,6 +277,7 @@ pub fn portable_sql() -> String {
     format!(
         "{anchors}
 {files}
+{dirs}
 INSERT INTO files_new(id, anchor, path, kind, size, mtime, inode, device, state, detail, info, indexed_at, bucket)
 SELECT id, 0, path, kind, size, mtime, inode, device, state, detail, info, indexed_at, bucket FROM files;
 {drop_triggers}
@@ -270,6 +289,7 @@ CREATE INDEX IF NOT EXISTS files_state ON files(state, kind);
 PRAGMA user_version = 7;",
         anchors = ANCHORS_TABLE_SQL,
         files = files_v7_sql(),
+        dirs = DIRS_TABLE_SQL,
         drop_triggers = drop_triggers,
         triggers = counter_triggers_sql()
     )
