@@ -110,25 +110,18 @@ pub fn face_service(config: FaceServiceConfig) -> i32 {
     }
 }
 
-/// The faces' home on the device (#195, the privacy boundary): the store's anchors
-/// hash the folder — `abs` spellings in id order, 16 hex of sha256; a v6 store (no
-/// anchors table, rows absolute) and an anchorless store hash the index path. The
-/// join law rides untouched: faces key on `(path, size, mtime)` of the store they
-/// belong to, so the folder key IS the store's identity, spelled device-locally.
-/// `pub` for the seam's pins (`tests/faces_move.rs`).
+/// The faces' home on the device (#195, the privacy boundary): 16 hex of the sha256 of the
+/// index folder's path — the store's DEVICE-LOCAL identity. The anchor set is NOT a usable
+/// key (measured 2026-11-27 on the app's live 173k store: the v6→v7 migration creates one
+/// anchor per row cluster — dozens of deep folders — and every folder the user adds to the
+/// roots is a new anchor, so an anchor-keyed home MOVES under the running app: the People
+/// tab empties and 195k faces re-scan). The privacy law needs no anchor: the home lives
+/// under the faces root, OUTSIDE the `.digup`, so a store carried to another device computes
+/// its own home from its own path and the faces never travel. The faces key rows by
+/// `(path, size, mtime)`, which is the same spelling on the same device. `pub` for the
+/// seam's pins (`tests/faces_move.rs`).
 pub fn faces_store_dir(index: &Path, faces_root: &Path) -> PathBuf {
-    let key = match digup_core::IndexStore::open(index, digup_core::MAIN_FILE) {
-        Ok(store) => match store.anchors() {
-            Ok(anchors) if !anchors.is_empty() => anchors
-                .iter()
-                .map(|a| a.abs.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => index.to_string_lossy().into_owned(),
-        },
-        Err(_) => index.to_string_lossy().into_owned(),
-    };
-    let digest = Sha256::digest(key.as_bytes());
+    let digest = Sha256::digest(index.to_string_lossy().as_bytes());
     let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
     faces_root.join(hex)
 }

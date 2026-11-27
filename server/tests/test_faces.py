@@ -36,7 +36,6 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -81,18 +80,13 @@ class Faces:
     def faces_home(self) -> Path:
         """The device-side faces home (#195, the privacy move): the daemon's file
         lives at `<config>/faces/<hash>/face.sqlite`, where <hash> is the first 16
-        hex of the sha256 over the store's anchor spellings in id order (a store
-        with no anchors — v6, or an unfilled folder — hashes the index path). The
-        faces belong to the STORE, never to the folder: a carried `.digup` carries
-        its index, never the faces computed from its photos on this device."""
-        con = sqlite3.connect(f"file:{self.index / 'index.sqlite'}?mode=ro", uri=True)
-        try:
-            rows = [r[0] for r in con.execute("SELECT abs FROM anchors ORDER BY id")]
-        except sqlite3.OperationalError:
-            rows = []  # a v6 store: no anchors table — the index path is the identity
-        finally:
-            con.close()
-        key = "\n".join(rows) if rows else str(self.index)
+        hex of the sha256 over the INDEX FOLDER PATH — the store's device-local
+        identity. The anchors are NOT the key (measured 2026-11-27: a real v6→v7
+        migration creates one anchor per row cluster, and every folder the user adds
+        is a new anchor, so an anchor-keyed home would move under the running app).
+        The faces belong to the DEVICE that computed them, never to the folder: a
+        carried `.digup` carries its index, never the faces of its photos."""
+        key = str(self.index)
         digest = hashlib.sha256(key.encode()).hexdigest()[:16]
         return self.config_dir / "faces" / digest
 
