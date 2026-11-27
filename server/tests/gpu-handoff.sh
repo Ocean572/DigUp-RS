@@ -168,15 +168,19 @@ gate_b_cuda_build() {
   # numbers — "6.1" and "native" both fail configure there (native needs cmake >= 3.24 and a
   # GPU the builder container does not have). Pass the card's plain number: 61 for Pascal
   # sm_61, 89 for Ada sm_89. The default stays native for toolchains that speak it.
+  # The payload stage's Rust-era name (measured 2026-11-27): the stage is `rust-engine-payload`
+  # (Dockerfile:140). The Swift-era name `engine-payload` no longer exists, so a build asking
+  # for it fails in SECONDS with `target stage "engine-payload" could not be found` — which
+  # reads exactly like the disk death it is often mistaken for.
   DOCKER_BUILDKIT=1 docker build --build-arg BASE_IMAGE="$CUDA_BASE" \
-    --build-arg CUDA_ARCHS="${CUDA_ARCHS:-native}" --target engine-payload \
+    --build-arg CUDA_ARCHS="${CUDA_ARCHS:-native}" --target rust-engine-payload \
     -f server/docker/Dockerfile -t digup-payload:cuda . > /dev/null 2>&1 \
-    || { fail "CUDA engine-payload build on $CUDA_BASE (match the base's CUDA to the host driver: nvidia-smi's 'CUDA Version')"; return; }
+    || { fail "CUDA rust-engine-payload build on $CUDA_BASE (match the base's CUDA to the host driver: nvidia-smi's 'CUDA Version')"; return; }
   local listing; listing=$(docker run --rm digup-payload:cuda sh -c 'ls /out | grep -i cuda' || true)
   [ -n "$listing" ] && pass "payload carries the CUDA backend ($listing)" \
     || fail "payload has no CUDA backend: scripts/build-llama.sh did not find nvcc in $CUDA_BASE"
-  # /out, not /opt/digup: the engine-payload stage lands in /out; the runtime stages COPY it
-  # to /opt/digup. A check written against /opt/digup fails on the payload image (measured).
+  # /out, not /opt/digup: the rust-engine-payload stage lands in /out; the runtime stages COPY
+  # it to /opt/digup. A check written against /opt/digup fails on the payload image (measured).
   docker run --rm digup-payload:cuda sh -c 'ldd /out/libggml-cuda.so' | tee "$OUT.ldd"
   if grep -qE 'libcuda\.so\.1.*not found' "$OUT.ldd"; then note "libcuda.so.1 unresolved in the build stage — expected: it comes from the HOST driver through the toolkit at run time"; fi
   if grep -qE 'libcudart|libcublas' "$OUT.ldd"; then pass "CUDA runtime libs resolve in the payload (ship these, from a CUDA runtime base, never the toolkit)"; else fail "ldd shows CUDA runtime libs that do not resolve: add exactly them to the runtime stage"; fi
