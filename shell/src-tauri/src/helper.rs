@@ -39,10 +39,16 @@ impl Launch {
             .envs(self.env.iter().map(|(key, value)| (key, value)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(match self.log.as_ref().and_then(|path| OpenOptions::new().create(true).append(true).open(path).ok()) {
-                Some(file) => Stdio::from(file),
-                None => Stdio::null(),
-            });
+            .stderr(
+                match self
+                    .log
+                    .as_ref()
+                    .and_then(|path| OpenOptions::new().create(true).append(true).open(path).ok())
+                {
+                    Some(file) => Stdio::from(file),
+                    None => Stdio::null(),
+                },
+            );
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -60,7 +66,9 @@ impl Launch {
                 });
             }
         }
-        let mut child = command.spawn().map_err(|error| format!("can't start {}: {error}", self.program.display()))?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("can't start {}: {error}", self.program.display()))?;
         #[cfg(windows)]
         job::add(&child);
         let stdin = child.stdin.take().ok_or("no stdin")?;
@@ -174,9 +182,14 @@ impl SearchService {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         request["id"] = json!(id);
         let reply = self.send(id, &request)?;
-        let reply = reply.await.map_err(|_| "DigUp's helper stopped".to_string())?;
+        let reply = reply
+            .await
+            .map_err(|_| "DigUp's helper stopped".to_string())?;
         match reply.get("ok") {
-            Some(Value::Bool(false)) => Err(reply["error"].as_str().unwrap_or("the helper failed").to_string()),
+            Some(Value::Bool(false)) => Err(reply["error"]
+                .as_str()
+                .unwrap_or("the helper failed")
+                .to_string()),
             _ => Ok(reply),
         }
     }
@@ -194,7 +207,9 @@ impl SearchService {
         let searching = running.as_mut().unwrap();
         let (sender, receiver) = oneshot::channel();
         searching.pending.lock().unwrap().insert(id, sender);
-        if let Err(error) = writeln!(searching.stdin, "{request}").and_then(|_| searching.stdin.flush()) {
+        if let Err(error) =
+            writeln!(searching.stdin, "{request}").and_then(|_| searching.stdin.flush())
+        {
             searching.pending.lock().unwrap().remove(&id);
             *running = None;
             return Err(format!("DigUp's helper isn't answering: {error}"));
@@ -211,11 +226,14 @@ impl SearchService {
         let (child, stdin, stdout) = launch.spawn()?;
         let number = STARTED.fetch_add(1, Ordering::Relaxed);
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> = Arc::default();
-        let (replies, on_event, slot) = (pending.clone(), self.on_event.clone(), self.running.clone());
+        let (replies, on_event, slot) =
+            (pending.clone(), self.on_event.clone(), self.running.clone());
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
-                let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
+                let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
                 match message.get("id").and_then(Value::as_u64) {
                     Some(id) => {
                         if let Some(sender) = replies.lock().unwrap().remove(&id) {
@@ -228,7 +246,10 @@ impl SearchService {
             // Gone: its waiting requests fail (their senders drop here), and the next request starts another.
             replies.lock().unwrap().clear();
             let mut slot = slot.lock().unwrap();
-            if slot.as_ref().is_some_and(|searching| searching.number == number) {
+            if slot
+                .as_ref()
+                .is_some_and(|searching| searching.number == number)
+            {
                 if let Some(mut searching) = slot.take() {
                     reap(&mut searching.child);
                 }
@@ -236,12 +257,21 @@ impl SearchService {
             drop(slot);
             on_event(json!({"event": "exit"}));
         });
-        Ok(Searching { child, stdin, number, pending })
+        Ok(Searching {
+            child,
+            stdin,
+            number,
+            pending,
+        })
     }
 
     pub fn stop(&self) {
         if let Some(searching) = self.running.lock().unwrap().take() {
-            stop(searching.child, searching.stdin, &json!({"op": "quit"}).to_string());
+            stop(
+                searching.child,
+                searching.stdin,
+                &json!({"op": "quit"}).to_string(),
+            );
         }
     }
 }
@@ -266,7 +296,10 @@ struct Indexing {
 
 impl IndexService {
     pub fn new(on_event: impl Fn(Value) + Send + Sync + 'static) -> IndexService {
-        IndexService { running: Arc::default(), on_event: Arc::new(on_event) }
+        IndexService {
+            running: Arc::default(),
+            on_event: Arc::new(on_event),
+        }
     }
 
     pub fn run(&self, launch: &Launch) -> Result<(), String> {
@@ -274,7 +307,9 @@ impl IndexService {
         if let Some(indexing) = running.as_mut() {
             if matches!(indexing.child.try_wait(), Ok(None)) && indexing.args == launch.args {
                 indexing.owed = true;
-                return writeln!(indexing.stdin, "sync").and_then(|_| indexing.stdin.flush()).map_err(|e| e.to_string());
+                return writeln!(indexing.stdin, "sync")
+                    .and_then(|_| indexing.stdin.flush())
+                    .map_err(|e| e.to_string());
             }
         }
         // Gone, or other folders: (stop it and) start anew.
@@ -287,24 +322,42 @@ impl IndexService {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
-                let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+                let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
                 if event["event"] == "sync" {
-                    if let Some(indexing) = slot.lock().unwrap().as_mut().filter(|indexing| indexing.number == number) {
+                    if let Some(indexing) = slot
+                        .lock()
+                        .unwrap()
+                        .as_mut()
+                        .filter(|indexing| indexing.number == number)
+                    {
                         indexing.owed = false;
                     }
                 }
                 on_event(event);
             }
             let mut slot = slot.lock().unwrap();
-            if slot.as_ref().is_some_and(|indexing| indexing.number == number) {
+            if slot
+                .as_ref()
+                .is_some_and(|indexing| indexing.number == number)
+            {
                 if let Some(mut indexing) = slot.take() {
                     drop(slot);
                     let (status, signal) = reap(&mut indexing.child);
-                    on_event(json!({"event": "ended", "status": status, "signal": signal, "owed": indexing.owed}));
+                    on_event(
+                        json!({"event": "ended", "status": status, "signal": signal, "owed": indexing.owed}),
+                    );
                 }
             }
         });
-        *running = Some(Indexing { child, stdin, args: launch.args.clone(), number, owed: false });
+        *running = Some(Indexing {
+            child,
+            stdin,
+            args: launch.args.clone(),
+            number,
+            owed: false,
+        });
         Ok(())
     }
 
@@ -345,7 +398,9 @@ impl IndexService {
             let mut running = self.running.lock().unwrap();
             if let Some(indexing) = running.as_mut() {
                 if matches!(indexing.child.try_wait(), Ok(None)) && indexing.args == launch.args {
-                    return writeln!(indexing.stdin, "sync code").and_then(|_| indexing.stdin.flush()).map_err(|e| e.to_string());
+                    return writeln!(indexing.stdin, "sync code")
+                        .and_then(|_| indexing.stdin.flush())
+                        .map_err(|e| e.to_string());
                 }
             }
         }
@@ -368,7 +423,10 @@ pub struct ModelDownload {
 
 impl ModelDownload {
     pub fn new(on_event: impl Fn(Value) + Send + Sync + 'static) -> ModelDownload {
-        ModelDownload { running: Arc::default(), on_event: Arc::new(on_event) }
+        ModelDownload {
+            running: Arc::default(),
+            on_event: Arc::new(on_event),
+        }
     }
 
     pub fn run(&self, launch: &Launch) -> Result<(), String> {
@@ -425,8 +483,9 @@ mod job {
     use std::sync::OnceLock;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-        QueryInformationJobObject, SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
@@ -444,8 +503,12 @@ mod job {
             }
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            let set = SetInformationJobObject(handle, JobObjectExtendedLimitInformation,
-                                              &limits as *const _ as *const _, std::mem::size_of_val(&limits) as u32);
+            let set = SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of_val(&limits) as u32,
+            );
             (set != 0).then_some(Job(handle))
         })
         .as_ref()
@@ -465,9 +528,13 @@ mod job {
             TerminateJobObject(job.0, 1);
             for _ in 0..100 {
                 let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
-                let asked = QueryInformationJobObject(job.0, JobObjectBasicAccountingInformation,
-                                                      &mut info as *mut _ as *mut _, std::mem::size_of_val(&info) as u32,
-                                                      std::ptr::null_mut());
+                let asked = QueryInformationJobObject(
+                    job.0,
+                    JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut _,
+                    std::mem::size_of_val(&info) as u32,
+                    std::ptr::null_mut(),
+                );
                 if asked == 0 || info.ActiveProcesses == 0 {
                     return;
                 }
@@ -493,7 +560,7 @@ mod reap_tests {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        assert_eq!(reap(&mut child), (None, Some(5)));   // SIGTRAP: Swift's allocation trap
+        assert_eq!(reap(&mut child), (None, Some(5))); // SIGTRAP: Swift's allocation trap
     }
 
     /// The other shape: a deliberate exit (the watchdog's stop is 75, EX_TEMPFAIL), with no signal.

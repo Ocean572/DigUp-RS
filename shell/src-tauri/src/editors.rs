@@ -31,29 +31,117 @@ pub struct Editor {
 }
 
 pub const EDITORS: &[Editor] = &[
-    Editor { id: "vscode", name: "Visual Studio Code", programs: &["code", "com.visualstudio.code"],
-             windows: &["Programs/Microsoft VS Code/bin/code.cmd", "Microsoft VS Code/bin/code.cmd"], form: Form::Goto },
-    Editor { id: "cursor", name: "Cursor", programs: &["cursor"],
-             windows: &["Programs/cursor/resources/app/bin/cursor.cmd"], form: Form::Goto },
-    Editor { id: "windsurf", name: "Windsurf", programs: &["windsurf"], windows: &["Programs/Windsurf/bin/windsurf.cmd"],
-             form: Form::Goto },
-    Editor { id: "vscodium", name: "VSCodium", programs: &["codium", "com.vscodium.codium"],
-             windows: &["Programs/VSCodium/bin/codium.cmd", "VSCodium/bin/codium.cmd"], form: Form::Goto },
-    Editor { id: "zed", name: "Zed", programs: &["zed", "zeditor", "dev.zed.Zed"], windows: &["Programs/Zed/bin/zed.exe"],
-             form: Form::Suffix },
-    Editor { id: "sublime", name: "Sublime Text", programs: &["subl", "com.sublimetext.three"],
-             windows: &["Sublime Text/subl.exe", "Sublime Text 3/subl.exe"], form: Form::Suffix },
-    Editor { id: "notepad++", name: "Notepad++", programs: &["notepad++"], windows: &["Notepad++/notepad++.exe"],
-             form: Form::DashN },
-    Editor { id: "gedit", name: "gedit", programs: &["gedit", "org.gnome.gedit"], windows: &[], form: Form::Plus },
-    Editor { id: "idea", name: "IntelliJ IDEA", programs: &["idea", "idea64"], windows: &[], form: Form::LineFlag },
-    Editor { id: "pycharm", name: "PyCharm", programs: &["pycharm", "pycharm64"], windows: &[], form: Form::LineFlag },
-    Editor { id: "webstorm", name: "WebStorm", programs: &["webstorm", "webstorm64"], windows: &[], form: Form::LineFlag },
-    Editor { id: "goland", name: "GoLand", programs: &["goland", "goland64"], windows: &[], form: Form::LineFlag },
-    Editor { id: "clion", name: "CLion", programs: &["clion", "clion64"], windows: &[], form: Form::LineFlag },
-    Editor { id: "rustrover", name: "RustRover", programs: &["rustrover", "rustrover64"], windows: &[],
-             form: Form::LineFlag },
-    Editor { id: "rider", name: "Rider", programs: &["rider", "rider64"], windows: &[], form: Form::LineFlag },
+    Editor {
+        id: "vscode",
+        name: "Visual Studio Code",
+        programs: &["code", "com.visualstudio.code"],
+        windows: &[
+            "Programs/Microsoft VS Code/bin/code.cmd",
+            "Microsoft VS Code/bin/code.cmd",
+        ],
+        form: Form::Goto,
+    },
+    Editor {
+        id: "cursor",
+        name: "Cursor",
+        programs: &["cursor"],
+        windows: &["Programs/cursor/resources/app/bin/cursor.cmd"],
+        form: Form::Goto,
+    },
+    Editor {
+        id: "windsurf",
+        name: "Windsurf",
+        programs: &["windsurf"],
+        windows: &["Programs/Windsurf/bin/windsurf.cmd"],
+        form: Form::Goto,
+    },
+    Editor {
+        id: "vscodium",
+        name: "VSCodium",
+        programs: &["codium", "com.vscodium.codium"],
+        windows: &[
+            "Programs/VSCodium/bin/codium.cmd",
+            "VSCodium/bin/codium.cmd",
+        ],
+        form: Form::Goto,
+    },
+    Editor {
+        id: "zed",
+        name: "Zed",
+        programs: &["zed", "zeditor", "dev.zed.Zed"],
+        windows: &["Programs/Zed/bin/zed.exe"],
+        form: Form::Suffix,
+    },
+    Editor {
+        id: "sublime",
+        name: "Sublime Text",
+        programs: &["subl", "com.sublimetext.three"],
+        windows: &["Sublime Text/subl.exe", "Sublime Text 3/subl.exe"],
+        form: Form::Suffix,
+    },
+    Editor {
+        id: "notepad++",
+        name: "Notepad++",
+        programs: &["notepad++"],
+        windows: &["Notepad++/notepad++.exe"],
+        form: Form::DashN,
+    },
+    Editor {
+        id: "gedit",
+        name: "gedit",
+        programs: &["gedit", "org.gnome.gedit"],
+        windows: &[],
+        form: Form::Plus,
+    },
+    Editor {
+        id: "idea",
+        name: "IntelliJ IDEA",
+        programs: &["idea", "idea64"],
+        windows: &[],
+        form: Form::LineFlag,
+    },
+    Editor {
+        id: "pycharm",
+        name: "PyCharm",
+        programs: &["pycharm", "pycharm64"],
+        windows: &[],
+        form: Form::LineFlag,
+    },
+    Editor {
+        id: "webstorm",
+        name: "WebStorm",
+        programs: &["webstorm", "webstorm64"],
+        windows: &[],
+        form: Form::LineFlag,
+    },
+    Editor {
+        id: "goland",
+        name: "GoLand",
+        programs: &["goland", "goland64"],
+        windows: &[],
+        form: Form::LineFlag,
+    },
+    Editor {
+        id: "clion",
+        name: "CLion",
+        programs: &["clion", "clion64"],
+        windows: &[],
+        form: Form::LineFlag,
+    },
+    Editor {
+        id: "rustrover",
+        name: "RustRover",
+        programs: &["rustrover", "rustrover64"],
+        windows: &[],
+        form: Form::LineFlag,
+    },
+    Editor {
+        id: "rider",
+        name: "Rider",
+        programs: &["rider", "rider64"],
+        windows: &[],
+        form: Form::LineFlag,
+    },
 ];
 
 impl Editor {
@@ -67,7 +155,11 @@ impl Editor {
                 .iter()
                 .filter_map(|variable| std::env::var_os(variable).map(PathBuf::from))
                 .collect();
-            return self.windows.iter().flat_map(|below| bases.iter().map(move |base| base.join(below))).find(|path| path.is_file());
+            return self
+                .windows
+                .iter()
+                .flat_map(|below| bases.iter().map(move |base| base.join(below)))
+                .find(|path| path.is_file());
         }
         None
     }
@@ -95,7 +187,10 @@ pub fn installed() -> Vec<(&'static Editor, PathBuf)> {
 }
 
 fn installed_in(folders: &[PathBuf]) -> Vec<(&'static Editor, PathBuf)> {
-    EDITORS.iter().filter_map(|editor| editor.program(folders).map(|program| (editor, program))).collect()
+    EDITORS
+        .iter()
+        .filter_map(|editor| editor.program(folders).map(|program| (editor, program)))
+        .collect()
 }
 
 /// The editor code opens in: the one chosen (`choice`: an id) if it's installed, else the first installed; none for
@@ -109,14 +204,19 @@ fn chosen_in(choice: &str, folders: &[PathBuf]) -> Option<(&'static Editor, Path
         return None;
     }
     let mut found = installed_in(folders);
-    let at = found.iter().position(|(editor, _)| editor.id == choice).unwrap_or(0);
+    let at = found
+        .iter()
+        .position(|(editor, _)| editor.id == choice)
+        .unwrap_or(0);
     (!found.is_empty()).then(|| found.swap_remove(at))
 }
 
 /// Where programs are: PATH, and on Linux the folders a desktop session's PATH may lack (~/.local/bin, Snap's,
 /// Flatpak's).
 pub fn program_folders() -> Vec<PathBuf> {
-    let mut folders: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    let mut folders: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
     if cfg!(target_os = "linux") {
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
             folders.push(home.join(".local/bin"));
@@ -131,17 +231,24 @@ pub fn program_folders() -> Vec<PathBuf> {
 /// `name` as a program in one of `folders` (with Windows' .exe, .cmd and .bat).
 pub fn find(name: &str, folders: &[PathBuf]) -> Option<PathBuf> {
     let names: Vec<String> = if cfg!(windows) {
-        ["exe", "cmd", "bat"].iter().map(|extension| format!("{name}.{extension}")).collect()
+        ["exe", "cmd", "bat"]
+            .iter()
+            .map(|extension| format!("{name}.{extension}"))
+            .collect()
     } else {
         vec![name.to_string()]
     };
-    folders.iter().flat_map(|folder| names.iter().map(move |name| folder.join(name))).find(|path| runnable(path))
+    folders
+        .iter()
+        .flat_map(|folder| names.iter().map(move |name| folder.join(name)))
+        .find(|path| runnable(path))
 }
 
 #[cfg(unix)]
 fn runnable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]
@@ -160,9 +267,18 @@ mod tests {
     #[test]
     fn each_editor_is_told_the_line_its_way() {
         let path = "/home/me/code/my app/main.rs";
-        assert_eq!(editor("vscode").arguments(path, 12), ["-g", "/home/me/code/my app/main.rs:12"]);
-        assert_eq!(editor("zed").arguments(path, 12), ["/home/me/code/my app/main.rs:12"]);
-        assert_eq!(editor("sublime").arguments(path, 1), ["/home/me/code/my app/main.rs:1"]);
+        assert_eq!(
+            editor("vscode").arguments(path, 12),
+            ["-g", "/home/me/code/my app/main.rs:12"]
+        );
+        assert_eq!(
+            editor("zed").arguments(path, 12),
+            ["/home/me/code/my app/main.rs:12"]
+        );
+        assert_eq!(
+            editor("sublime").arguments(path, 1),
+            ["/home/me/code/my app/main.rs:1"]
+        );
         assert_eq!(editor("notepad++").arguments(path, 7), ["-n7", path]);
         assert_eq!(editor("gedit").arguments(path, 7), ["+7", path]);
         assert_eq!(editor("pycharm").arguments(path, 7), ["--line", "7", path]);
@@ -189,12 +305,24 @@ mod tests {
         }
         std::fs::write(folder.join("zed"), "not runnable").unwrap();
         let folders = [folder.clone()];
-        assert_eq!(editor("sublime").program(&folders), Some(folder.join("subl")));
+        assert_eq!(
+            editor("sublime").program(&folders),
+            Some(folder.join("subl"))
+        );
         assert_eq!(editor("zed").program(&folders), None);
         // The first installed in the list's order, unless another installed one is chosen.
-        assert_eq!(chosen_in("", &folders).map(|(editor, _)| editor.id), Some("vscodium"));
-        assert_eq!(chosen_in("sublime", &folders).map(|(editor, _)| editor.id), Some("sublime"));
-        assert_eq!(chosen_in("zed", &folders).map(|(editor, _)| editor.id), Some("vscodium"));
+        assert_eq!(
+            chosen_in("", &folders).map(|(editor, _)| editor.id),
+            Some("vscodium")
+        );
+        assert_eq!(
+            chosen_in("sublime", &folders).map(|(editor, _)| editor.id),
+            Some("sublime")
+        );
+        assert_eq!(
+            chosen_in("zed", &folders).map(|(editor, _)| editor.id),
+            Some("vscodium")
+        );
         assert!(chosen_in("default", &folders).is_none());
         std::fs::remove_dir_all(folder).unwrap();
     }
@@ -208,7 +336,11 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let program = folder.join("code.cmd");
         let said = folder.join("said.txt");
-        std::fs::write(&program, format!("@echo off\r\necho %* > \"{}\"\r\n", said.display())).unwrap();
+        std::fs::write(
+            &program,
+            format!("@echo off\r\necho %* > \"{}\"\r\n", said.display()),
+        )
+        .unwrap();
         let file = folder.join("my app").join("main.rs").display().to_string();
         editor("vscode").open(&program, &file, 12).unwrap();
         let mut text = String::new();

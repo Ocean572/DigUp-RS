@@ -15,7 +15,10 @@ pub struct Hours {
 impl Default for Hours {
     /// 01:00–07:00: the night, when a computer that's left on has nothing else to do.
     fn default() -> Hours {
-        Hours { start: 60, end: 420 }
+        Hours {
+            start: 60,
+            end: 420,
+        }
     }
 }
 
@@ -68,10 +71,27 @@ mod tests {
     #[test]
     fn hours() {
         let night = Hours::default();
-        assert!(night.contains(60) && night.contains(419) && !night.contains(420) && !night.contains(59));
-        let across = Hours { start: 22 * 60, end: 6 * 60 };
-        assert!(across.contains(23 * 60) && across.contains(0) && across.contains(5 * 60 + 59) && !across.contains(12 * 60));
-        assert!(Hours { start: 300, end: 300 }.contains(0));
+        assert!(
+            night.contains(60)
+                && night.contains(419)
+                && !night.contains(420)
+                && !night.contains(59)
+        );
+        let across = Hours {
+            start: 22 * 60,
+            end: 6 * 60,
+        };
+        assert!(
+            across.contains(23 * 60)
+                && across.contains(0)
+                && across.contains(5 * 60 + 59)
+                && !across.contains(12 * 60)
+        );
+        assert!(Hours {
+            start: 300,
+            end: 300
+        }
+        .contains(0));
         assert_eq!(clock(60), "01:00");
         assert_eq!(clock(22 * 60 + 5), "22:05");
         assert!(now() < 1440);

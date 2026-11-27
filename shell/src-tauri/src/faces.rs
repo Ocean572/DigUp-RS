@@ -227,7 +227,8 @@ pub fn consent_guard(shell: &Shell) -> Result<(PathBuf, ConsentRecord), String> 
     match read_consent(&consent) {
         Some(record) => Ok((consent, ConsentRecord::of(&record))),
         None => Err(
-            "faces: face recognition is not consented — accept it in the People tab first".to_string(),
+            "faces: face recognition is not consented — accept it in the People tab first"
+                .to_string(),
         ),
     }
 }
@@ -306,7 +307,10 @@ pub fn run_faces(
             }
             Err(RecvTimeoutError::Disconnected) => {
                 crate::helper::reap(&mut child);
-                return Err("faces: the helper is built without face recognition (upgrade DigUp)".to_string());
+                return Err(
+                    "faces: the helper is built without face recognition (upgrade DigUp)"
+                        .to_string(),
+                );
             }
         }
     }
@@ -373,7 +377,12 @@ pub fn verb(shell: &Shell, op: &str, fields: Map<String, Value>) -> Result<Value
 /// The Launch for one verb: the helper binary and env every helper gets (`DIGUP_MODELS`, the chosen
 /// processor), the scan below the person's own programs (background: true — nice, as indexing is).
 pub fn faces_launch(shell: &Shell, record: &ConsentRecord, op: &str) -> Result<Launch, String> {
-    let consent = consent_path(shell.settings_path.parent().ok_or("faces: no config folder")?);
+    let consent = consent_path(
+        shell
+            .settings_path
+            .parent()
+            .ok_or("faces: no config folder")?,
+    );
     let skipped = shell.settings.lock().unwrap().skipped.clone();
     let args = faces_arguments(
         shell.options.index.as_deref(),
@@ -390,7 +399,10 @@ pub fn faces_launch(shell: &Shell, record: &ConsentRecord, op: &str) -> Result<L
 /// GET /faces/status, shell shape: consented + record + the six pins' presence + the engine's counts
 /// (zeroes before consent — the app answers them itself, no daemon behind the wall).
 pub fn status(shell: &Shell) -> Result<Value, String> {
-    let config = shell.settings_path.parent().ok_or("faces: no config folder")?;
+    let config = shell
+        .settings_path
+        .parent()
+        .ok_or("faces: no config folder")?;
     let consent = consent_path(config);
     let record = read_consent(&consent);
     let models: Vec<Value> = FACE_MODELS
@@ -418,7 +430,10 @@ pub fn status(shell: &Shell) -> Result<Value, String> {
 /// The affirmative act (POST consent) and the opt-out (DELETE): the record names the tier the user
 /// accepted; the model pins ride the record, so the daemon serves exactly what the acceptance names.
 pub fn set_consent(shell: &Shell, accept: bool, emb_model: Option<&str>) -> Result<Value, String> {
-    let config = shell.settings_path.parent().ok_or("faces: no config folder")?;
+    let config = shell
+        .settings_path
+        .parent()
+        .ok_or("faces: no config folder")?;
     let consent = consent_path(config);
     if !accept {
         // Opting out removes the record; the face store stays (mass deletion is the user's act).
@@ -427,7 +442,10 @@ pub fn set_consent(shell: &Shell, accept: bool, emb_model: Option<&str>) -> Resu
     }
     let emb = emb_model.unwrap_or(DEFAULT_EMBEDDER);
     if !valid_embedder(emb) {
-        return Err("faces: the embedder must be one of the pinned face packs (see the People tab)".to_string());
+        return Err(
+            "faces: the embedder must be one of the pinned face packs (see the People tab)"
+                .to_string(),
+        );
     }
     let record = json!({
         "consented": true,
@@ -503,7 +521,10 @@ mod faces_port_tests {
             joined.contains("--faces-consent|/home/me/.config/DigUp/faces-consent.json"),
             "{joined}"
         );
-        assert!(joined.contains("--det-model|scrfd_10g_bnkps.onnx"), "{joined}");
+        assert!(
+            joined.contains("--det-model|scrfd_10g_bnkps.onnx"),
+            "{joined}"
+        );
         assert!(joined.contains("--emb-model|w600k_mbf.onnx"), "{joined}");
         assert!(
             joined.contains("--exclude|/home/me/photos/appdata_secret"),
@@ -541,7 +562,11 @@ mod faces_port_tests {
         assert!(read_consent(&path).is_none());
         std::fs::write(&path, "not json").unwrap();
         assert!(read_consent(&path).is_none());
-        std::fs::write(&path, "{\"consented\": true, \"emb_model\": \"w600k_mbf.onnx\"}").unwrap();
+        std::fs::write(
+            &path,
+            "{\"consented\": true, \"emb_model\": \"w600k_mbf.onnx\"}",
+        )
+        .unwrap();
         assert!(read_consent(&path).is_some());
     }
 
@@ -560,7 +585,10 @@ mod faces_port_tests {
     /// (the server refuses at faces.rs:218-222 the same way).
     #[test]
     fn a_record_without_an_embedder_refuses_the_daemon() {
-        let record = ConsentRecord { det_model: DETECTOR.to_string(), emb_model: String::new() };
+        let record = ConsentRecord {
+            det_model: DETECTOR.to_string(),
+            emb_model: String::new(),
+        };
         let launch = Launch {
             program: PathBuf::from("/nonexistent/digup"),
             args: Vec::new(),
@@ -568,8 +596,15 @@ mod faces_port_tests {
             log: None,
             background: false,
         };
-        let error = run_faces(launch, &record, "counts", Map::new(), verb_timeout("counts"), &mut |_| {})
-            .unwrap_err();
+        let error = run_faces(
+            launch,
+            &record,
+            "counts",
+            Map::new(),
+            verb_timeout("counts"),
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert_eq!(error, "faces: the consent record names no embedder");
     }
 

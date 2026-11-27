@@ -22,7 +22,11 @@ pub struct Look {
 
 impl Look {
     pub fn new(progress: Option<f64>, paused: bool) -> Look {
-        Look { step: progress.map(|progress| (progress.clamp(0.0, 1.0) * 24.0).round() as u8), paused, update: false }
+        Look {
+            step: progress.map(|progress| (progress.clamp(0.0, 1.0) * 24.0).round() as u8),
+            paused,
+            update: false,
+        }
     }
 
     pub fn with_update(self, update: bool) -> Look {
@@ -59,7 +63,9 @@ fn picture(look: Look) -> Image<'static> {
     if look.paused {
         return picture(PAUSED);
     }
-    let Some(step) = look.step else { return picture(LOGO) };
+    let Some(step) = look.step else {
+        return picture(LOGO);
+    };
     let (logo, dimmed) = (picture(LOGO), picture(DIMMED));
     let (width, height) = (logo.width(), logo.height());
     let reached = f64::from(step) / 24.0;
@@ -87,17 +93,31 @@ mod tests {
         let paused = pixels(Look::new(None, true));
         assert_ne!(idle, none);
         assert_ne!(none, paused);
-        assert_eq!(pixels(Look::new(Some(1.0), false)), idle);   // all the way round: the logo
-        // Half way: the right half is the logo's, the left half still dimmed.
+        assert_eq!(pixels(Look::new(Some(1.0), false)), idle); // all the way round: the logo
+                                                               // Half way: the right half is the logo's, the left half still dimmed.
         let half = pixels(Look::new(Some(0.5), false));
         let width = image(Look::new(None, false)).width() as usize;
-        let at = |rgba: &[u8], x: usize, y: usize| rgba[(y * width + x) * 4..(y * width + x) * 4 + 4].to_vec();
-        assert_eq!(at(&half, width * 3 / 4, width / 4), at(&idle, width * 3 / 4, width / 4));
-        assert_eq!(at(&half, width / 4, width * 3 / 4), at(&none, width / 4, width * 3 / 4));
+        let at = |rgba: &[u8], x: usize, y: usize| {
+            rgba[(y * width + x) * 4..(y * width + x) * 4 + 4].to_vec()
+        };
+        assert_eq!(
+            at(&half, width * 3 / 4, width / 4),
+            at(&idle, width * 3 / 4, width / 4)
+        );
+        assert_eq!(
+            at(&half, width / 4, width * 3 / 4),
+            at(&none, width / 4, width * 3 / 4)
+        );
         assert_eq!(Look::new(Some(0.5), false), Look::new(Some(0.51), false));
         // An update waiting: a red dot at the top right, the rest as it was.
         let dotted = pixels(Look::new(None, false).with_update(true));
-        assert_eq!(at(&dotted, width * 15 / 18, width * 3 / 18), vec![255, 59, 48, 255]);
-        assert_eq!(at(&dotted, width / 2, width / 2), at(&idle, width / 2, width / 2));
+        assert_eq!(
+            at(&dotted, width * 15 / 18, width * 3 / 18),
+            vec![255, 59, 48, 255]
+        );
+        assert_eq!(
+            at(&dotted, width / 2, width / 2),
+            at(&idle, width / 2, width / 2)
+        );
     }
 }

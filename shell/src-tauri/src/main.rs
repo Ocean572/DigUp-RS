@@ -35,7 +35,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder, WindowEvent, Wry};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, State, WebviewUrl,
+    WebviewWindowBuilder, WindowEvent, Wry,
+};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -125,7 +128,12 @@ impl Shell {
     /// The folders searched: the launch arguments' in dev runs, else the settings'.
     fn folders(&self) -> Vec<String> {
         if !self.options.roots.is_empty() {
-            return self.options.roots.iter().map(|root| root.display().to_string()).collect();
+            return self
+                .options
+                .roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect();
         }
         self.settings.lock().unwrap().folders.clone()
     }
@@ -133,7 +141,12 @@ impl Shell {
     /// Code search's folders: the launch arguments' in dev runs, else the settings'.
     fn code_folders(&self) -> Vec<String> {
         if !self.options.code_roots.is_empty() {
-            return self.options.code_roots.iter().map(|root| root.display().to_string()).collect();
+            return self
+                .options
+                .code_roots
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect();
         }
         self.settings.lock().unwrap().code_folders.clone()
     }
@@ -144,7 +157,11 @@ impl Shell {
 
     fn hotkey(&self) -> String {
         let chosen = self.settings.lock().unwrap().hotkey.clone();
-        self.options.hotkey.clone().unwrap_or(if chosen.is_empty() { DEFAULT_HOTKEY.to_string() } else { chosen })
+        self.options.hotkey.clone().unwrap_or(if chosen.is_empty() {
+            DEFAULT_HOTKEY.to_string()
+        } else {
+            chosen
+        })
     }
 
     /// The shortcut as people read it: the desktop's, once DigUp's is there (it may have been changed there).
@@ -189,8 +206,12 @@ impl Shell {
 
     /// What every helper gets: where the model is, and `DIGUP_DEVICE=cpu` when the person chose the processor.
     fn helper_env(&self) -> Vec<(String, String)> {
-        let mut env: Vec<(String, String)> =
-            self.options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())).collect();
+        let mut env: Vec<(String, String)> = self
+            .options
+            .models
+            .iter()
+            .map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string()))
+            .collect();
         if self.settings.lock().unwrap().processor_only {
             env.push(("DIGUP_DEVICE".to_string(), "cpu".to_string()));
         }
@@ -208,7 +229,11 @@ impl Shell {
     }
 
     fn index_arguments(&self) -> Vec<String> {
-        self.options.index.iter().flat_map(|index| ["--index".to_string(), index.display().to_string()]).collect()
+        self.options
+            .index
+            .iter()
+            .flat_map(|index| ["--index".to_string(), index.display().to_string()])
+            .collect()
     }
 
     /// `index-service` for the folders as they are now.
@@ -229,8 +254,13 @@ impl Shell {
 
     /// Where the code index is (deleted when code search is turned off).
     fn code_index_files(&self) -> Vec<PathBuf> {
-        let Some(index) = self.options.index_folder() else { return Vec::new() };
-        ["", "-wal", "-shm"].iter().map(|end| index.join(format!("code.sqlite{end}"))).collect()
+        let Some(index) = self.options.index_folder() else {
+            return Vec::new();
+        };
+        ["", "-wal", "-shm"]
+            .iter()
+            .map(|end| index.join(format!("code.sqlite{end}")))
+            .collect()
     }
 
     fn model_ready(&self) -> bool {
@@ -245,7 +275,9 @@ impl Shell {
     /// A dev run: its own index, folders or settings file. It leaves alone what an installed DigUp keeps outside its
     /// settings (the entry that opens it at login, GNOME's shortcut), which would otherwise point at the dev build.
     fn dev_run(&self) -> bool {
-        self.options.index.is_some() || !self.options.roots.is_empty() || self.options.settings.is_some()
+        self.options.index.is_some()
+            || !self.options.roots.is_empty()
+            || self.options.settings.is_some()
     }
 
     /// DigUp may open at login: not on a Mac (the DigUp app has its own login item) and not in a dev run.
@@ -256,7 +288,11 @@ impl Shell {
     /// What the pages show about indexing and the model (status.rs).
     fn snapshot(&self) -> Value {
         let model = self.model_state.lock().unwrap().clone();
-        let mut snapshot = self.status.lock().unwrap().snapshot(!self.folders().is_empty(), &model);
+        let mut snapshot = self
+            .status
+            .lock()
+            .unwrap()
+            .snapshot(!self.folders().is_empty(), &model);
         snapshot["hasCode"] = json!(!self.code_folders().is_empty());
         snapshot["update"] = self.updates.snapshot();
         snapshot
@@ -287,7 +323,12 @@ fn folder_arguments(settings: &Settings, code_folders: &[String]) -> Vec<String>
 /// what Settings shows — not what was current when the app launched (issue #170: the saved startup
 /// list was replayed, and folders added during the session dropped out of the helper's scope, its
 /// summaries, and the search result filter).
-fn search_arguments(index: Option<&Path>, settings: &Settings, code_folders: &[String], roots: &[String]) -> Vec<String> {
+fn search_arguments(
+    index: Option<&Path>,
+    settings: &Settings,
+    code_folders: &[String],
+    roots: &[String],
+) -> Vec<String> {
     let mut args = vec!["search-service".to_string()];
     if let Some(index) = index {
         args.extend(["--index".to_string(), index.display().to_string()]);
@@ -318,20 +359,31 @@ mod search_launch_tests {
     #[test]
     fn search_arguments_carry_the_current_folders() {
         let s = settings();
-        let args = search_arguments(Some(Path::new("C:\\digup-index")), &s, &s.code_folders, &s.folders);
+        let args = search_arguments(
+            Some(Path::new("C:\\digup-index")),
+            &s,
+            &s.code_folders,
+            &s.folders,
+        );
         let joined = args.join("|");
         assert_eq!(args.first().unwrap(), "search-service");
         assert!(joined.contains("--index|C:\\digup-index"), "{joined}");
         assert!(joined.contains("--exclude|C:\\Initial\\Secret"), "{joined}");
         assert!(joined.contains("--exclude-ext|tmp"), "{joined}");
         assert!(joined.contains("--code-root|D:\\code"), "{joined}");
-        assert!(joined.contains("--code-exclude|D:\\code\\vendor"), "{joined}");
+        assert!(
+            joined.contains("--code-exclude|D:\\code\\vendor"),
+            "{joined}"
+        );
         assert_eq!(args[args.len() - 2..], ["C:\\Initial", "E:\\AddedExternal"]);
     }
 
     #[test]
     fn search_arguments_without_an_index_folder() {
-        let s = Settings { folders: vec!["/home/me/Pictures".into()], ..Settings::default() };
+        let s = Settings {
+            folders: vec!["/home/me/Pictures".into()],
+            ..Settings::default()
+        };
         let args = search_arguments(None, &s, &[], &s.folders);
         assert_eq!(args, ["search-service", "/home/me/Pictures"]);
     }
@@ -342,8 +394,21 @@ mod search_launch_tests {
 /// The panel's and the window's questions for `search-service`.
 #[tauri::command]
 async fn ask(shell: State<'_, Arc<Shell>>, request: Value) -> Result<Value, String> {
-    let op = request.get("op").and_then(Value::as_str).unwrap_or_default();
-    if !["search", "embed_ahead", "text", "render", "prewarm", "status", "summaries"].contains(&op) {
+    let op = request
+        .get("op")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if ![
+        "search",
+        "embed_ahead",
+        "text",
+        "render",
+        "prewarm",
+        "status",
+        "summaries",
+    ]
+    .contains(&op)
+    {
         return Err(format!("not a question the panel asks: {op}"));
     }
     shell.search.ask(request).await
@@ -352,29 +417,55 @@ async fn ask(shell: State<'_, Arc<Shell>>, request: Value) -> Result<Value, Stri
 /// What indexing these folders would take, one answer per folder (`digup estimate --json`): files by kind, the first
 /// pass's seconds, the rest of long files, subfolders. For setup.
 #[tauri::command]
-async fn estimate(shell: State<'_, Arc<Shell>>, folders: Vec<String>, code: Option<bool>) -> Result<Vec<Value>, String> {
+async fn estimate(
+    shell: State<'_, Arc<Shell>>,
+    folders: Vec<String>,
+    code: Option<bool>,
+) -> Result<Vec<Value>, String> {
     let helper = shell.options.helper.clone();
     // Code folders: what the code index would read in them (its time and size, repository by repository).
-    let code = if code == Some(true) { vec!["--code".to_string()] } else { Vec::new() };
+    let code = if code == Some(true) {
+        vec!["--code".to_string()]
+    } else {
+        Vec::new()
+    };
     // The dataset rule rides the estimate too (issue #1): the forecast describes the tree
     // the indexer walks — the same rule the index helper gets.
-    let datasets = if shell.settings.lock().unwrap().include_datasets { vec!["--include-datasets".to_string()] } else { Vec::new() };
+    let datasets = if shell.settings.lock().unwrap().include_datasets {
+        vec!["--include-datasets".to_string()]
+    } else {
+        Vec::new()
+    };
     // The index's costs.json: what indexing costs on this computer, once it has indexed enough.
     let index = shell.index_arguments();
     shell.estimating.fetch_add(1, Ordering::SeqCst);
     let answers = tauri::async_runtime::spawn_blocking(move || {
         let mut command = std::process::Command::new(&helper);
-        command.arg("estimate").args(&folders).args(&index).args(&code).args(&datasets).arg("--json");
+        command
+            .arg("estimate")
+            .args(&folders)
+            .args(&index)
+            .args(&code)
+            .args(&datasets)
+            .arg("--json");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let child = command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
+        let child = command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
             .map_err(|error| format!("can't run {}: {error}", helper.display()))?;
         helper::adopt(&child);
-        let output = child.wait_with_output().map_err(|error| format!("can't run {}: {error}", helper.display()))?;
-        Ok(String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| serde_json::from_str(line).ok()).collect())
+        let output = child
+            .wait_with_output()
+            .map_err(|error| format!("can't run {}: {error}", helper.display()))?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect())
     })
     .await;
     shell.estimating.fetch_sub(1, Ordering::SeqCst);
@@ -388,12 +479,18 @@ fn setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
         Some(folders) => folders.clone(),
         None => {
             let paths = app.path();
-            [paths.document_dir(), paths.picture_dir(), paths.video_dir(), paths.audio_dir(), paths.desktop_dir(),
-             paths.download_dir()]
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|folder| folder.is_dir())
-                .collect()
+            [
+                paths.document_dir(),
+                paths.picture_dir(),
+                paths.video_dir(),
+                paths.audio_dir(),
+                paths.desktop_dir(),
+                paths.download_dir(),
+            ]
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|folder| folder.is_dir())
+            .collect()
         }
     };
     json!({
@@ -415,24 +512,37 @@ fn setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Value {
 #[tauri::command]
 async fn pick_folders(app: AppHandle) -> Vec<String> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog().file().set_title("Add Folders").pick_folders(move |folders| {
-        let _ = sender.send(folders);
-    });
+    app.dialog()
+        .file()
+        .set_title("Add Folders")
+        .pick_folders(move |folders| {
+            let _ = sender.send(folders);
+        });
     let picked = receiver.await.ok().flatten().unwrap_or_default();
-    picked.into_iter().filter_map(|folder| folder.into_path().ok()).map(|path| path.display().to_string()).collect()
+    picked
+        .into_iter()
+        .filter_map(|folder| folder.into_path().ok())
+        .map(|path| path.display().to_string())
+        .collect()
 }
 
 /// Setup's folders, kept on leaving its folders step (or on Save, choosing folders later): indexing starts on them at
 /// once (once the model is in), while the rest of setup goes on, as on the Mac. `skipped`: folders inside them that
 /// aren't searched.
 #[tauri::command]
-fn apply_setup_folders(app: AppHandle, shell: State<'_, Arc<Shell>>, folders: Vec<String>, skipped: Vec<String>)
-    -> Result<(), String> {
+fn apply_setup_folders(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    folders: Vec<String>,
+    skipped: Vec<String>,
+) -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
         settings.folders = folders;
         settings.skipped = skipped;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     apply_folders(&app);
     Ok(())
@@ -446,7 +556,9 @@ fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Stri
     if first {
         let mut settings = shell.settings.lock().unwrap();
         settings.set_up = true;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     // The first setup has DigUp open at login (it lives in the tray; Settings turns that off), as the Mac app does.
     if first && shell.opens_at_login() {
@@ -461,7 +573,10 @@ fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Stri
     #[cfg(target_os = "linux")]
     if first && shell.shortcut == Method::Gnome && !shell.dev_run() {
         if let Err(error) = hotkey::gnome::bind(&shell.hotkey(), &hotkey::toggle_command()) {
-            set_status(&app, &format!("The shortcut couldn't be added to GNOME's settings: {error}"));
+            set_status(
+                &app,
+                &format!("The shortcut couldn't be added to GNOME's settings: {error}"),
+            );
         }
     }
     if let Some(window) = app.get_webview_window("setup") {
@@ -479,7 +594,12 @@ fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Stri
 /// Opens a result in its default app: at `page` (a PDF's, from 1) or at `seconds` (a recording's or video's) when that
 /// app can be told where.
 #[tauri::command]
-fn open_path(app: AppHandle, path: String, page: Option<u32>, seconds: Option<f64>) -> Result<(), String> {
+fn open_path(
+    app: AppHandle,
+    path: String,
+    page: Option<u32>,
+    seconds: Option<f64>,
+) -> Result<(), String> {
     hide_panel(app.clone());
     if (page.is_some() || seconds.is_some()) && moments::open_at(&path, page, seconds) {
         return Ok(());
@@ -490,7 +610,12 @@ fn open_path(app: AppHandle, path: String, page: Option<u32>, seconds: Option<f6
 /// Opens a code result at its line in the editor chosen in Settings (or the first one installed), else in its default
 /// app.
 #[tauri::command]
-fn open_code(app: AppHandle, shell: State<'_, Arc<Shell>>, path: String, line: u32) -> Result<(), String> {
+fn open_code(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    path: String,
+    line: u32,
+) -> Result<(), String> {
     hide_panel(app.clone());
     let choice = shell.settings.lock().unwrap().code_editor.clone();
     if let Some((editor, program)) = editors::chosen(&choice) {
@@ -505,7 +630,8 @@ fn open_code(app: AppHandle, shell: State<'_, Arc<Shell>>, path: String, line: u
 /// Ctrl+C on a result: the file on the clipboard, to paste in a file manager, a mail or a chat.
 #[tauri::command]
 fn copy_file(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
-    clipboard::copy_file(&window, Path::new(&path)).inspect_err(|error| eprintln!("digup-shell: can't copy {path}: {error}"))
+    clipboard::copy_file(&window, Path::new(&path))
+        .inspect_err(|error| eprintln!("digup-shell: can't copy {path}: {error}"))
 }
 
 /// Ctrl+Shift+C / Ctrl+Shift+R on a result (and the window menu's two lines): the file's path as *text*
@@ -522,7 +648,8 @@ fn relative_path_text(path: String, roots: Vec<String>) -> String {
 /// (issue #148: the web `navigator.clipboard` is unavailable on Tauri's custom-scheme origins).
 #[tauri::command]
 fn copy_text(window: tauri::WebviewWindow, text: String) -> Result<(), String> {
-    clipboard::copy_text(&window, &text).inspect_err(|error| eprintln!("digup-shell: can't copy text: {error}"))
+    clipboard::copy_text(&window, &text)
+        .inspect_err(|error| eprintln!("digup-shell: can't copy text: {error}"))
 }
 
 /// The path inside the search folder that contains it — the longest match wins (a folder inside
@@ -540,7 +667,9 @@ fn relative_path(path: &str, roots: &[String]) -> Option<String> {
         .filter_map(|root| {
             let slashed = root.replace('\\', "/");
             let stem = slashed.trim_end_matches('/'); // any number of trailing separators: "C:\Initial\"
-            if stem.is_empty() && !slashed.contains('/') { return None; }   // a blank setting entry
+            if stem.is_empty() && !slashed.contains('/') {
+                return None;
+            } // a blank setting entry
             let hit = if stem.is_empty() {
                 usize::from(shown.starts_with('/')) // the root "/" — the trimmed stem matches by prefix
             } else if shown == stem {
@@ -588,8 +717,16 @@ fn drag_out() {}
 
 #[cfg(not(target_os = "linux"))]
 #[tauri::command]
-fn drag_out(window: tauri::WebviewWindow, path: String, icon: Option<String>) -> Result<(), String> {
-    let file = PathBuf::from(if cfg!(windows) { path.replace('/', "\\") } else { path });
+fn drag_out(
+    window: tauri::WebviewWindow,
+    path: String,
+    icon: Option<String>,
+) -> Result<(), String> {
+    let file = PathBuf::from(if cfg!(windows) {
+        path.replace('/', "\\")
+    } else {
+        path
+    });
     let image = match icon {
         Some(icon) => drag::Image::File(icon.into()),
         None => drag::Image::Raw(include_bytes!("../icons/128x128.png").to_vec()),
@@ -597,8 +734,13 @@ fn drag_out(window: tauri::WebviewWindow, path: String, icon: Option<String>) ->
     let source = window.clone();
     window
         .run_on_main_thread(move || {
-            let started = drag::start_drag(&source, drag::DragItem::Files(vec![file]), image, |_, _| {},
-                                           drag::Options::default());
+            let started = drag::start_drag(
+                &source,
+                drag::DragItem::Files(vec![file]),
+                image,
+                |_, _| {},
+                drag::Options::default(),
+            );
             if let Err(error) = started {
                 eprintln!("digup-shell: can't drag the file out: {error}");
             }
@@ -609,7 +751,11 @@ fn drag_out(window: tauri::WebviewWindow, path: String, icon: Option<String>) ->
 /// The licenses of what DigUp ships (THIRD-PARTY-NOTICES.txt, which the packages put beside the app; dev builds
 /// have none).
 fn licenses_file(app: &AppHandle) -> Option<PathBuf> {
-    let file = app.path().resource_dir().ok()?.join("THIRD-PARTY-NOTICES.txt");
+    let file = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("THIRD-PARTY-NOTICES.txt");
     file.is_file().then_some(file)
 }
 
@@ -638,7 +784,10 @@ fn hide_panel(app: AppHandle) {
 #[tauri::command]
 fn panel_height(app: AppHandle, height: f64) {
     if let Some(panel) = panel_window(&app) {
-        let _ = panel.set_size(LogicalSize::new(PANEL_WIDTH, height.clamp(FIELD_HEIGHT, 640.0)));
+        let _ = panel.set_size(LogicalSize::new(
+            PANEL_WIDTH,
+            height.clamp(FIELD_HEIGHT, 640.0),
+        ));
     }
 }
 
@@ -647,7 +796,12 @@ fn panel_height(app: AppHandle, height: f64) {
 fn panel_area(app: AppHandle, x: f64, y: f64, width: f64, height: f64) {
     #[cfg(target_os = "linux")]
     if let Some(panel) = panel_window(&app) {
-        let area = (x.floor() as i32, y.floor() as i32, width.ceil() as i32, height.ceil() as i32);
+        let area = (
+            x.floor() as i32,
+            y.floor() as i32,
+            width.ceil() as i32,
+            height.ceil() as i32,
+        );
         wayland::set_area(&panel, area);
     }
     #[cfg(not(target_os = "linux"))]
@@ -762,7 +916,11 @@ fn later(app: &AppHandle, work: impl FnOnce(&AppHandle) + Send + 'static) {
 /// The window, or setup while DigUp isn't set up (the tray's Open DigUp, a click on the tray icon, a second launch).
 fn show_window_or_setup(app: &AppHandle) {
     later(app, |app| {
-        let _ = if app.state::<Arc<Shell>>().is_set_up() { show_window(app) } else { show_setup(app) };
+        let _ = if app.state::<Arc<Shell>>().is_set_up() {
+            show_window(app)
+        } else {
+            show_setup(app)
+        };
     });
 }
 
@@ -805,7 +963,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // The launch at login says so: DigUp then waits in the tray instead of showing its window.
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--at-login"])))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--at-login"]),
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _, event| {
@@ -817,14 +978,69 @@ fn main() {
         )
         .setup(move |app| setup(app, options))
         .invoke_handler(tauri::generate_handler![
-            ask, estimate, setup_info, pick_folders, apply_setup_folders, finish_setup, open_path, open_code, reveal, hide_panel, panel_height,
-            panel_area, settings_info, set_open_at_login, set_center_panel, set_processor_only, set_include_datasets, debug_query, debug_report, window_info,
-            app_state, open_window, open_settings, choose_folders, index_now, quit_app, close_window, pause_indexing,
-            remove_folder, set_skipped, set_skip_types, set_index_hours, code_setup_info, set_code_folders, choose_code_folders,
-            remove_code_folder, turn_off_code, set_code_editor, window_resized, copy_file, relative_path_text, copy_text, drag_out, set_hotkey, hold_hotkey,
-            set_tray_click, check_for_updates, offer_update, set_update_checks, set_mcp_claude, open_licenses,
-            faces_status, faces_consent, faces_scan, faces_persons, faces_person, faces_pending,
-            faces_name, faces_merge, faces_delete, faces_confirm, faces_download, faces_paths
+            ask,
+            estimate,
+            setup_info,
+            pick_folders,
+            apply_setup_folders,
+            finish_setup,
+            open_path,
+            open_code,
+            reveal,
+            hide_panel,
+            panel_height,
+            panel_area,
+            settings_info,
+            set_open_at_login,
+            set_center_panel,
+            set_processor_only,
+            set_include_datasets,
+            debug_query,
+            debug_report,
+            window_info,
+            app_state,
+            open_window,
+            open_settings,
+            choose_folders,
+            index_now,
+            quit_app,
+            close_window,
+            pause_indexing,
+            remove_folder,
+            set_skipped,
+            set_skip_types,
+            set_index_hours,
+            code_setup_info,
+            set_code_folders,
+            choose_code_folders,
+            remove_code_folder,
+            turn_off_code,
+            set_code_editor,
+            window_resized,
+            copy_file,
+            relative_path_text,
+            copy_text,
+            drag_out,
+            set_hotkey,
+            hold_hotkey,
+            set_tray_click,
+            check_for_updates,
+            offer_update,
+            set_update_checks,
+            set_mcp_claude,
+            open_licenses,
+            faces_status,
+            faces_consent,
+            faces_scan,
+            faces_persons,
+            faces_person,
+            faces_pending,
+            faces_name,
+            faces_merge,
+            faces_delete,
+            faces_confirm,
+            faces_download,
+            faces_paths
         ])
         .build(tauri::generate_context!())
         .expect("DigUp couldn't start");
@@ -837,7 +1053,9 @@ fn main() {
             }
         }
         // Closing the last window isn't quitting: DigUp lives in the tray.
-        tauri::RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
+        tauri::RunEvent::ExitRequested {
+            code: None, api, ..
+        } => api.prevent_exit(),
         _ => {}
     });
 }
@@ -857,21 +1075,33 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     let roots: Vec<String> = if options.roots.is_empty() {
         settings.folders.clone()
     } else {
-        options.roots.iter().map(|root| root.display().to_string()).collect()
+        options
+            .roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect()
     };
     let code_folders: Vec<String> = if options.code_roots.is_empty() {
         settings.code_folders.clone()
     } else {
-        options.code_roots.iter().map(|root| root.display().to_string()).collect()
+        options
+            .code_roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect()
     };
     let search_args = search_arguments(options.index.as_deref(), &settings, &code_folders, &roots);
     let search = SearchService::new(
         Launch {
             program: options.helper.clone(),
             args: search_args,
-            env: options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())).collect(),
+            env: options
+                .models
+                .iter()
+                .map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string()))
+                .collect(),
             log: Some(logs.join("search.log")),
-            background: false,   // it answers typing
+            background: false, // it answers typing
         },
         {
             let app = handle.clone();
@@ -949,19 +1179,28 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         Method::Grab => {
             let hotkey = shell.hotkey();
             if let Err(error) = app.global_shortcut().register(hotkey.as_str()) {
-                set_status(&handle, &format!("The shortcut {} is taken", shortcut_text(&hotkey)));
+                set_status(
+                    &handle,
+                    &format!("The shortcut {} is taken", shortcut_text(&hotkey)),
+                );
                 eprintln!("digup-shell: can't use {hotkey} as the shortcut: {error}");
             }
         }
         // GNOME runs DigUp's custom shortcut (added at setup); its command follows DigUp when DigUp moves.
         #[cfg(target_os = "linux")]
-        Method::Gnome if shell.is_set_up() && !shell.dev_run() => hotkey::gnome::refresh(&hotkey::toggle_command()),
+        Method::Gnome if shell.is_set_up() && !shell.dev_run() => {
+            hotkey::gnome::refresh(&hotkey::toggle_command())
+        }
         // KDE signals DigUp while it runs.
         #[cfg(target_os = "linux")]
         Method::Kde => {
             let pressed = handle.clone();
-            if let Err(error) = hotkey::kde::listen(&shell.hotkey(), move || toggle_panel(&pressed)) {
-                set_status(&handle, &format!("The shortcut couldn't be added to KDE's settings: {error}"));
+            if let Err(error) = hotkey::kde::listen(&shell.hotkey(), move || toggle_panel(&pressed))
+            {
+                set_status(
+                    &handle,
+                    &format!("The shortcut couldn't be added to KDE's settings: {error}"),
+                );
                 eprintln!("digup-shell: can't add the shortcut to KDE's: {error}");
             }
         }
@@ -980,7 +1219,9 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
                 if status.files == 0 && reply["files"].is_u64() {
                     status.apply(&json!({"event": "counts", "files": reply["files"], "searchable": reply["searchable"],
                                          "pending": reply["pending"], "unfinished": reply["unfinished"]}));
-                    if status.activity == status::Activity::Starting && (status.paused || status.held_until.is_some()) {
+                    if status.activity == status::Activity::Starting
+                        && (status.paused || status.held_until.is_some())
+                    {
                         status.activity = status::Activity::Idle;
                     }
                 }
@@ -1003,7 +1244,9 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     if options.toggle || options.debug_show && options.debug_window.is_none() {
         // Started by the shortcut (DigUp wasn't running): the panel comes up as it would have.
         show_panel(&handle);
-    } else if options.debug_window.is_some() || shell.is_set_up() && !options.at_login && options.debug_query.is_none() {
+    } else if options.debug_window.is_some()
+        || shell.is_set_up() && !options.at_login && options.debug_query.is_none()
+    {
         // Opened by hand: the window, so opening DigUp never looks like nothing happened (at login it waits in the
         // tray).
         if let Err(error) = show_window(&handle) {
@@ -1038,7 +1281,12 @@ fn apply_folders(app: &AppHandle) {
     // rewrite of our own entry (the rest of the person's file is left where it is).
     let settings = shell.settings.lock().unwrap().clone();
     if settings.mcp_claude {
-        let args = search_arguments(shell.options.index.as_deref(), &settings, &shell.code_folders(), &folders);
+        let args = search_arguments(
+            shell.options.index.as_deref(),
+            &settings,
+            &shell.code_folders(),
+            &folders,
+        );
         if let Some(path) = mcp::config_file() {
             let _ = mcp::enable(&path, &shell.options.helper, &args);
         }
@@ -1052,7 +1300,12 @@ fn apply_folders(app: &AppHandle) {
 fn send_folders_request(shell: &Arc<Shell>) {
     let (roots, code) = (shell.folders(), shell.code_folders());
     let settings = shell.settings.lock().unwrap().clone();
-    shell.search.set_launch_args(search_arguments(shell.options.index.as_deref(), &settings, &code, &roots));
+    shell.search.set_launch_args(search_arguments(
+        shell.options.index.as_deref(),
+        &settings,
+        &code,
+        &roots,
+    ));
     let request = folders_request(shell);
     let search = shell.clone();
     tauri::async_runtime::spawn(async move {
@@ -1074,7 +1327,10 @@ fn watch_folders(app: &AppHandle) {
     let code_folders: Vec<PathBuf> = shell.code_folders().iter().map(PathBuf::from).collect();
     let (skipped, code_skipped) = {
         let settings = shell.settings.lock().unwrap();
-        (settings.skipped.iter().map(PathBuf::from).collect(), settings.code_skipped.iter().map(PathBuf::from).collect())
+        (
+            settings.skipped.iter().map(PathBuf::from).collect(),
+            settings.code_skipped.iter().map(PathBuf::from).collect(),
+        )
     };
     changed(app);
     let index = shell.options.index_folder();
@@ -1122,8 +1378,11 @@ fn watch_folders(app: &AppHandle) {
 fn may_index(shell: &Shell) -> bool {
     // Removing the last folder still needs a helper to prune the index, even without a model.
     (shell.prune.load(Ordering::SeqCst)
-        || ((!shell.folders().is_empty() || !shell.code_folders().is_empty()) && shell.model_ready()))
-        && !shell.measuring.load(Ordering::SeqCst) && !shell.quitting.load(Ordering::SeqCst) && {
+        || ((!shell.folders().is_empty() || !shell.code_folders().is_empty())
+            && shell.model_ready()))
+        && !shell.measuring.load(Ordering::SeqCst)
+        && !shell.quitting.load(Ordering::SeqCst)
+        && {
             let status = shell.status.lock().unwrap();
             !status.paused && status.held_until.is_none()
         }
@@ -1191,10 +1450,13 @@ fn delete_code_index(shell: &Arc<Shell>) {
     std::thread::spawn(move || {
         for _ in 0..30 {
             if !shell.code_folders().is_empty() {
-                return;   // turned on again meanwhile
+                return; // turned on again meanwhile
             }
             let files = shell.code_index_files();
-            if files.iter().all(|file| std::fs::remove_file(file).is_ok() || !file.exists()) {
+            if files
+                .iter()
+                .all(|file| std::fs::remove_file(file).is_ok() || !file.exists())
+            {
                 let mut settings = shell.settings.lock().unwrap();
                 if settings.delete_code_index {
                     settings.delete_code_index = false;
@@ -1219,7 +1481,9 @@ fn quit(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(WINDOW) {
         remember_place(&window);
     }
-    app.state::<Arc<Shell>>().quitting.store(true, Ordering::SeqCst);
+    app.state::<Arc<Shell>>()
+        .quitting
+        .store(true, Ordering::SeqCst);
     stop_helpers(app);
     app.exit(0);
 }
@@ -1228,7 +1492,11 @@ fn quit(app: &AppHandle) {
 
 /// The panel's window, hidden: fitted to the panel, or filling the screen with the panel centered in it.
 fn make_panel(app: &AppHandle, centered: bool) -> tauri::Result<()> {
-    let (label, page) = if centered { (CENTERED_PANEL, "index.html?fills") } else { (PANEL, "index.html") };
+    let (label, page) = if centered {
+        (CENTERED_PANEL, "index.html?fills")
+    } else {
+        (PANEL, "index.html")
+    };
     let panel = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
         .title("DigUp")
         .inner_size(PANEL_WIDTH, FIELD_HEIGHT)
@@ -1272,7 +1540,10 @@ fn panel_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
 fn remake_panel(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
     let old = panel_window(app);
-    if old.as_ref().is_some_and(|panel| (panel.label() == CENTERED_PANEL) == shell.centers_panel()) {
+    if old
+        .as_ref()
+        .is_some_and(|panel| (panel.label() == CENTERED_PANEL) == shell.centers_panel())
+    {
         return;
     }
     if let Err(error) = make_panel(app, shell.centers_panel()) {
@@ -1291,7 +1562,9 @@ fn show_panel(app: &AppHandle) {
         });
         return;
     }
-    let Some(panel) = panel_window(app) else { return };
+    let Some(panel) = panel_window(app) else {
+        return;
+    };
     // On the screen with the pointer, centered, a fifth of the way down: the page puts it there in a window that fills
     // the screen (GTK keeps the window maximized while it's hidden). Elsewhere on Wayland the desktop places it.
     if panel.label() == CENTERED_PANEL {
@@ -1343,12 +1616,28 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
         .min_inner_size(820.0, 520.0)
         .visible(false);
     // Where it was left, at the size it had, while that's still on a screen; else sized to this screen, centered.
-    let place = shell.settings.lock().unwrap().window.clone().filter(|place| place.width >= 820.0 && place.height >= 520.0);
-    let position = place.as_ref().and_then(|place| place.x.zip(place.y)).filter(|&(x, y)| {
-        app.monitor_from_point(f64::from(x) + 40.0, f64::from(y) + 20.0).ok().flatten().is_some()
-    });
+    let place = shell
+        .settings
+        .lock()
+        .unwrap()
+        .window
+        .clone()
+        .filter(|place| place.width >= 820.0 && place.height >= 520.0);
+    let position = place
+        .as_ref()
+        .and_then(|place| place.x.zip(place.y))
+        .filter(|&(x, y)| {
+            app.monitor_from_point(f64::from(x) + 40.0, f64::from(y) + 20.0)
+                .ok()
+                .flatten()
+                .is_some()
+        });
     match &place {
-        Some(place) => builder = builder.inner_size(place.width, place.height).maximized(place.maximized),
+        Some(place) => {
+            builder = builder
+                .inner_size(place.width, place.height)
+                .maximized(place.maximized)
+        }
         None => {
             let (width, height) = window_size(app);
             builder = builder.inner_size(width, height);
@@ -1392,8 +1681,14 @@ fn remember_place(window: &tauri::WebviewWindow) {
     // A maximized window keeps the size and place it comes back to.
     if !maximized {
         let reported = *shell.window_inner.lock().unwrap();
-        let measured = || window.inner_size().ok().zip(window.scale_factor().ok())
-            .map(|(size, scale)| size.to_logical::<f64>(scale)).map(|size| (size.width, size.height));
+        let measured = || {
+            window
+                .inner_size()
+                .ok()
+                .zip(window.scale_factor().ok())
+                .map(|(size, scale)| size.to_logical::<f64>(scale))
+                .map(|size| (size.width, size.height))
+        };
         if let Some((width, height)) = reported.or_else(measured) {
             (place.width, place.height) = (width, height);
         }
@@ -1410,11 +1705,22 @@ fn remember_place(window: &tauri::WebviewWindow) {
 /// The window's size: 1040 × 700, or less on a small screen (a laptop's 1366 × 768 at 125% has 1093 × 614 to show
 /// it in), but never under its least, 820 × 520.
 fn window_size(app: &AppHandle) -> (f64, f64) {
-    let screen = app.cursor_position().ok().and_then(|pointer| app.monitor_from_point(pointer.x, pointer.y).ok().flatten())
+    let screen = app
+        .cursor_position()
+        .ok()
+        .and_then(|pointer| app.monitor_from_point(pointer.x, pointer.y).ok().flatten())
         .or_else(|| app.primary_monitor().ok().flatten());
-    let Some(screen) = screen else { return (1040.0, 700.0) };
-    let area = screen.work_area().size.to_logical::<f64>(screen.scale_factor());
-    ((area.width * 0.9).clamp(820.0, 1040.0), (area.height * 0.9).clamp(520.0, 700.0))
+    let Some(screen) = screen else {
+        return (1040.0, 700.0);
+    };
+    let area = screen
+        .work_area()
+        .size
+        .to_logical::<f64>(screen.scale_factor());
+    (
+        (area.width * 0.9).clamp(820.0, 1040.0),
+        (area.height * 0.9).clamp(520.0, 700.0),
+    )
 }
 
 /// Code search's folders: setup's folder list for code, with Save.
@@ -1424,13 +1730,17 @@ fn show_code_folders(app: &AppHandle) -> tauri::Result<()> {
         let _ = window.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(app, "code-folders", WebviewUrl::App("setup.html?code".into()))
-        .title("Code Folders")
-        .inner_size(720.0, 600.0)
-        .resizable(false)
-        .maximizable(false)
-        .center()
-        .build()?;
+    WebviewWindowBuilder::new(
+        app,
+        "code-folders",
+        WebviewUrl::App("setup.html?code".into()),
+    )
+    .title("Code Folders")
+    .inner_size(720.0, 600.0)
+    .resizable(false)
+    .maximizable(false)
+    .center()
+    .build()?;
     Ok(())
 }
 
@@ -1517,14 +1827,23 @@ fn storage(shell: &Shell) -> Value {
     let index = shell.options.index_folder();
     let size = |name: &str| -> u64 {
         let Some(index) = &index else { return 0 };
-        ["", "-wal", "-shm"].iter().filter_map(|end| std::fs::metadata(index.join(format!("{name}{end}"))).ok()).map(|file| file.len()).sum()
+        ["", "-wal", "-shm"]
+            .iter()
+            .filter_map(|end| std::fs::metadata(index.join(format!("{name}{end}"))).ok())
+            .map(|file| file.len())
+            .sum()
     };
     let models = shell.options.models.clone().or_else(|| {
         if cfg!(windows) {
-            std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("DigUp").join("Models"))
+            std::env::var_os("LOCALAPPDATA")
+                .map(|local| PathBuf::from(local).join("DigUp").join("Models"))
         } else {
-            let data = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()).map(PathBuf::from)
-                .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+            let data = std::env::var_os("XDG_DATA_HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+                });
             data.map(|data| data.join("digup").join("Models"))
         }
     });
@@ -1556,34 +1875,50 @@ fn hold_hotkey(app: AppHandle, shell: State<'_, Arc<Shell>>, held: bool) {
 /// their own settings). The new one is registered before the old one goes, so one another app holds is refused and the
 /// old one stays. Returns the shortcut as it's shown.
 #[tauri::command]
-fn set_hotkey(app: AppHandle, shell: State<'_, Arc<Shell>>, hotkey: String) -> Result<String, String> {
+fn set_hotkey(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    hotkey: String,
+) -> Result<String, String> {
     if shell.shortcut != Method::Grab {
         return Err("This desktop keeps the shortcut in its own settings.".into());
     }
     let old = shell.hotkey();
     if hotkey != old {
         let shortcuts = app.global_shortcut();
-        shortcuts.register(hotkey.as_str())
-            .map_err(|_| format!("{} can't be used: another app may have it.", shortcut_text(&hotkey)))?;
+        shortcuts.register(hotkey.as_str()).map_err(|_| {
+            format!(
+                "{} can't be used: another app may have it.",
+                shortcut_text(&hotkey)
+            )
+        })?;
         if shortcuts.is_registered(old.as_str()) {
             let _ = shortcuts.unregister(old.as_str());
         }
         let mut settings = shell.settings.lock().unwrap();
         settings.hotkey = hotkey;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     Ok(shell.hotkey_text())
 }
 
 /// Settings → Folders: stops searching a folder (and what's skipped inside it); its files leave the index.
 #[tauri::command]
-fn remove_folder(app: AppHandle, shell: State<'_, Arc<Shell>>, folder: String) -> Result<(), String> {
+fn remove_folder(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    folder: String,
+) -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
         let inside = |path: &str| Path::new(path).starts_with(&folder);
         settings.folders.retain(|path| path != &folder);
         settings.skipped.retain(|path| !inside(path));
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     shell.prune.store(true, Ordering::SeqCst);
     apply_folders(&app);
@@ -1596,9 +1931,16 @@ fn offered_code(app: &AppHandle, shell: &Shell) -> Vec<String> {
     let folders = match (&shell.options.offered_code, shell.dev_run()) {
         (Some(folders), _) => folders.clone(),
         (None, true) => Vec::new(),
-        (None, false) => app.path().home_dir().map(|home| code::candidates(&home)).unwrap_or_default(),
+        (None, false) => app
+            .path()
+            .home_dir()
+            .map(|home| code::candidates(&home))
+            .unwrap_or_default(),
     };
-    folders.iter().map(|folder| folder.display().to_string()).collect()
+    folders
+        .iter()
+        .map(|folder| folder.display().to_string())
+        .collect()
 }
 
 /// The code folders window (setup's folder list for code): the folders with code it offers, those chosen, and the
@@ -1608,7 +1950,9 @@ async fn code_setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result
     let shell = shell.inner().clone();
     let offered = {
         let (app, shell) = (app.clone(), shell.clone());
-        tauri::async_runtime::spawn_blocking(move || offered_code(&app, &shell)).await.map_err(|error| error.to_string())?
+        tauri::async_runtime::spawn_blocking(move || offered_code(&app, &shell))
+            .await
+            .map_err(|error| error.to_string())?
     };
     Ok(json!({
         "code": true,
@@ -1622,20 +1966,30 @@ async fn code_setup_info(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result
 /// The code folders window's Save: the folders whose code is searched (code search starts with the first; none turns
 /// it off), and the folders skipped in them.
 #[tauri::command]
-fn set_code_folders(app: AppHandle, shell: State<'_, Arc<Shell>>, folders: Vec<String>, skipped: Vec<String>)
-    -> Result<(), String> {
+fn set_code_folders(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    folders: Vec<String>,
+    skipped: Vec<String>,
+) -> Result<(), String> {
     if folders.is_empty() {
         return turn_off_code(app, shell);
     }
     {
         let mut settings = shell.settings.lock().unwrap();
-        if settings.code_folders.iter().any(|folder| !folders.contains(folder)) {
+        if settings
+            .code_folders
+            .iter()
+            .any(|folder| !folders.contains(folder))
+        {
             shell.prune.store(true, Ordering::SeqCst);
         }
         settings.code_folders = folders;
         settings.code_skipped = skipped;
         settings.delete_code_index = false;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     apply_folders(&app);
     Ok(())
@@ -1650,13 +2004,19 @@ fn choose_code_folders(app: AppHandle) {
 
 /// Settings → Code: stops searching the code in a folder (its files leave the code index).
 #[tauri::command]
-fn remove_code_folder(app: AppHandle, shell: State<'_, Arc<Shell>>, folder: String) -> Result<(), String> {
+fn remove_code_folder(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    folder: String,
+) -> Result<(), String> {
     let off = {
         let mut settings = shell.settings.lock().unwrap();
         let inside = |path: &str| Path::new(path).starts_with(&folder);
         settings.code_folders.retain(|path| path != &folder);
         settings.code_skipped.retain(|path| !inside(path));
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
         settings.code_folders.is_empty()
     };
     if off {
@@ -1676,14 +2036,21 @@ fn turn_off_code(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Str
         settings.code_folders.clear();
         settings.code_skipped.clear();
         settings.delete_code_index = true;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     let shell = shell.inner().clone();
     // The saved launch arguments follow the cleared code folders too: a restarted helper must
     // not reopen the code index the person just turned off (#170's mechanism, same staleness).
     let (roots, code) = (shell.folders(), shell.code_folders());
     let settings = shell.settings.lock().unwrap().clone();
-    shell.search.set_launch_args(search_arguments(shell.options.index.as_deref(), &settings, &code, &roots));
+    shell.search.set_launch_args(search_arguments(
+        shell.options.index.as_deref(),
+        &settings,
+        &code,
+        &roots,
+    ));
     let request = folders_request(&shell);
     tauri::async_runtime::spawn(async move {
         let _ = shell.search.ask(request).await;
@@ -1699,8 +2066,14 @@ fn turn_off_code(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Str
 #[tauri::command]
 fn set_tray_click(shell: State<'_, Arc<Shell>>, click: String) -> Result<(), String> {
     let mut settings = shell.settings.lock().unwrap();
-    settings.tray_click = if click == "panel" { click } else { String::new() };
-    settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
+    settings.tray_click = if click == "panel" {
+        click
+    } else {
+        String::new()
+    };
+    settings
+        .save(&shell.settings_path)
+        .map_err(|error| format!("can't save the settings: {error}"))
 }
 
 /// Check for Updates… (the tray, the window's ⋯, Settings): the answer is shown, and an update found is offered.
@@ -1720,7 +2093,9 @@ fn offer_update(app: AppHandle) {
 fn set_update_checks(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
     let mut settings = shell.settings.lock().unwrap();
     settings.update_checks_off = !on;
-    settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
+    settings
+        .save(&shell.settings_path)
+        .map_err(|error| format!("can't save the settings: {error}"))
 }
 
 /// Settings → Code: the editor code results open in (an editor's id, or "default" for the file's default app).
@@ -1728,16 +2103,24 @@ fn set_update_checks(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), Strin
 fn set_code_editor(shell: State<'_, Arc<Shell>>, editor: String) -> Result<(), String> {
     let mut settings = shell.settings.lock().unwrap();
     settings.code_editor = editor;
-    settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
+    settings
+        .save(&shell.settings_path)
+        .map_err(|error| format!("can't save the settings: {error}"))
 }
 
 /// Settings → Folders: the folders skipped inside the ones searched.
 #[tauri::command]
-fn set_skipped(app: AppHandle, shell: State<'_, Arc<Shell>>, skipped: Vec<String>) -> Result<(), String> {
+fn set_skipped(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    skipped: Vec<String>,
+) -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
         settings.skipped = skipped;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     apply_folders(&app);
     Ok(())
@@ -1745,7 +2128,11 @@ fn set_skipped(app: AppHandle, shell: State<'_, Arc<Shell>>, skipped: Vec<String
 
 /// Settings → Folders: file types to leave out, as typed ("heic, .txt").
 #[tauri::command]
-fn set_skip_types(app: AppHandle, shell: State<'_, Arc<Shell>>, types: String) -> Result<Vec<String>, String> {
+fn set_skip_types(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    types: String,
+) -> Result<Vec<String>, String> {
     let mut list: Vec<String> = types
         .split(|c: char| c == ',' || c.is_whitespace())
         .map(|kind| kind.trim().trim_start_matches('.').to_lowercase())
@@ -1758,7 +2145,9 @@ fn set_skip_types(app: AppHandle, shell: State<'_, Arc<Shell>>, types: String) -
             return Ok(list);
         }
         settings.skip_types = list.clone();
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     apply_folders(&app);
     Ok(list)
@@ -1766,12 +2155,23 @@ fn set_skip_types(app: AppHandle, shell: State<'_, Arc<Shell>>, types: String) -
 
 /// Settings → Folders: "Index only at set hours".
 #[tauri::command]
-fn set_index_hours(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool, start: u32, end: u32) -> Result<(), String> {
+fn set_index_hours(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    on: bool,
+    start: u32,
+    end: u32,
+) -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
         settings.index_hours_on = on;
-        settings.index_hours = hours::Hours { start: start % 1440, end: end % 1440 };
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings.index_hours = hours::Hours {
+            start: start % 1440,
+            end: end % 1440,
+        };
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     held_now(&app);
     Ok(())
@@ -1783,7 +2183,12 @@ fn set_open_at_login(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) -> 
         return Err("not in a dev run".into());
     }
     let autolaunch = app.autolaunch();
-    (if on { autolaunch.enable() } else { autolaunch.disable() }).map_err(|error| error.to_string())?;
+    (if on {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    })
+    .map_err(|error| error.to_string())?;
     #[cfg(target_os = "linux")]
     if on {
         repair_login_entry(&app);
@@ -1800,14 +2205,22 @@ fn repair_login_entry<M: Manager<Wry>>(app: &M) {
     if std::env::var_os("APPIMAGE").is_some() {
         return;
     }
-    let Some(appdir) = std::env::var_os("APPDIR") else { return };
+    let Some(appdir) = std::env::var_os("APPDIR") else {
+        return;
+    };
     let apprun = PathBuf::from(appdir).join("AppRun");
     if !apprun.is_file() {
         return;
     }
-    let Ok(config) = app.path().config_dir() else { return };
-    let path = config.join("autostart").join(format!("{}.desktop", app.package_info().name));
-    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let Ok(config) = app.path().config_dir() else {
+        return;
+    };
+    let path = config
+        .join("autostart")
+        .join(format!("{}.desktop", app.package_info().name));
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
     let fixed = with_exec(&text, &format!("\"{}\" --at-login", apprun.display()));
     if fixed != text {
         if let Err(error) = std::fs::write(&path, fixed) {
@@ -1821,7 +2234,13 @@ fn repair_login_entry<M: Manager<Wry>>(app: &M) {
 fn with_exec(text: &str, exec: &str) -> String {
     let mut lines: Vec<String> = text
         .lines()
-        .map(|line| if line.starts_with("Exec=") { format!("Exec={exec}") } else { line.to_string() })
+        .map(|line| {
+            if line.starts_with("Exec=") {
+                format!("Exec={exec}")
+            } else {
+                line.to_string()
+            }
+        })
         .collect();
     lines.push(String::new());
     lines.join("\n")
@@ -1830,11 +2249,17 @@ fn with_exec(text: &str, exec: &str) -> String {
 /// The model on the processor from now on (the running search service and indexing helper are ended; they start
 /// again with the new environment when next needed).
 #[tauri::command]
-fn set_processor_only(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
+fn set_processor_only(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    on: bool,
+) -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
         settings.processor_only = on;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     shell.search.stop();
     shell.index.stop();
@@ -1848,11 +2273,17 @@ fn set_processor_only(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) ->
 /// sync take them out, exactly as the engine counts them. Search is untouched: it answers for
 /// what is indexed, as ever.
 #[tauri::command]
-fn set_include_datasets(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
+fn set_include_datasets(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    on: bool,
+) -> Result<(), String> {
     {
         let mut settings = shell.settings.lock().unwrap();
         settings.include_datasets = on;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     shell.index.stop();
     later(&app, run_index);
@@ -1866,7 +2297,12 @@ fn set_include_datasets(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) 
 #[tauri::command]
 fn set_mcp_claude(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
     let settings = shell.settings.lock().unwrap().clone();
-    let args = search_arguments(shell.options.index.as_deref(), &settings, &shell.code_folders(), &shell.folders());
+    let args = search_arguments(
+        shell.options.index.as_deref(),
+        &settings,
+        &shell.code_folders(),
+        &shell.folders(),
+    );
     let path = mcp::config_file().ok_or("this computer names no user settings folder")?;
     if on {
         mcp::enable(&path, &shell.options.helper, &args)?;
@@ -1875,14 +2311,20 @@ fn set_mcp_claude(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> 
     }
     let mut settings = shell.settings.lock().unwrap();
     settings.mcp_claude = on;
-    settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))
+    settings
+        .save(&shell.settings_path)
+        .map_err(|error| format!("can't save the settings: {error}"))
 }
 
 // MARK: People tab (faces.rs — docs/implementation/FACES.md)
 
 /// One verb call on the blocking pool: the faces daemon answers a click, not a keystroke (the
 /// server's per-call law, faces.rs:183-186), and a scan runs on the engine's clock.
-async fn faces_verb(shell: Arc<Shell>, op: &'static str, fields: serde_json::Map<String, Value>) -> Result<Value, String> {
+async fn faces_verb(
+    shell: Arc<Shell>,
+    op: &'static str,
+    fields: serde_json::Map<String, Value>,
+) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || faces::verb(&shell, op, fields))
         .await
         .map_err(|_| format!("faces: the {op} task stopped"))?
@@ -1897,7 +2339,10 @@ fn faces_id(key: &str, value: i64) -> Result<(), String> {
 }
 
 fn faces_fields(pairs: &[(&str, &Value)]) -> serde_json::Map<String, Value> {
-    pairs.iter().map(|(key, value)| (key.to_string(), (*value).clone())).collect()
+    pairs
+        .iter()
+        .map(|(key, value)| (key.to_string(), (*value).clone()))
+        .collect()
 }
 
 /// The People tab's status: consented + the record + the six packs' presence + the engine's counts
@@ -1913,18 +2358,28 @@ async fn faces_status(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
 /// The acceptance (POST consent) and the opt-out (DELETE): the record names the tier the person
 /// accepted; withdrawing closes the verbs and never deletes the face store.
 #[tauri::command]
-async fn faces_consent(shell: State<'_, Arc<Shell>>, accept: bool, emb_model: Option<String>) -> Result<Value, String> {
+async fn faces_consent(
+    shell: State<'_, Arc<Shell>>,
+    accept: bool,
+    emb_model: Option<String>,
+) -> Result<Value, String> {
     let shell = shell.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || faces::set_consent(&shell, accept, emb_model.as_deref()))
-        .await
-        .map_err(|_| "faces: the consent task stopped".to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        faces::set_consent(&shell, accept, emb_model.as_deref())
+    })
+    .await
+    .map_err(|_| "faces: the consent task stopped".to_string())?
 }
 
 /// POST scan: the consent wall, the faces writer lock (busy is "a faces scan is already running"),
 /// the roots — this app's own folders, never client-supplied — and the engine's own counts relayed.
 /// Its events (crawl/face-scan/cluster) reach the pages as the `faces` event while it runs.
 #[tauri::command]
-async fn faces_scan(app: AppHandle, shell: State<'_, Arc<Shell>>, limit: Option<i64>) -> Result<Value, String> {
+async fn faces_scan(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    limit: Option<i64>,
+) -> Result<Value, String> {
     let shell = shell.inner().clone();
     tauri::async_runtime::spawn_blocking(move || faces::scan(&app, &shell, limit))
         .await
@@ -1942,7 +2397,9 @@ async fn faces_persons(
     named: Option<bool>,
 ) -> Result<Value, String> {
     if let Some(n) = limit.filter(|n| *n < 0 || *n > 1_000_000) {
-        return Err(format!("faces: the persons window must be 0..=1000000, got {n}"));
+        return Err(format!(
+            "faces: the persons window must be 0..=1000000, got {n}"
+        ));
     }
     let mut fields = faces_fields(&[("covers", &json!(true))]);
     if let Some(n) = limit {
@@ -1970,13 +2427,17 @@ async fn faces_person(
 ) -> Result<Value, String> {
     faces_id("person", person)?;
     if let Some(n) = limit.filter(|n| *n < 1 || *n > 10_000) {
-        return Err(format!("faces: the gallery page must be 1..=10000, got {n}"));
+        return Err(format!(
+            "faces: the gallery page must be 1..=10000, got {n}"
+        ));
     }
     if let Some(n) = offset.filter(|n| *n < 0) {
         return Err(format!("faces: the gallery offset must be ≥ 0, got {n}"));
     }
     if let Some(o) = order.as_deref().filter(|o| !matches!(*o, "photo" | "scan")) {
-        return Err(format!("faces: the gallery order must be photo or scan, got {o}"));
+        return Err(format!(
+            "faces: the gallery order must be photo or scan, got {o}"
+        ));
     }
     let mut fields = faces_fields(&[("person", &json!(person))]);
     if let Some(n) = limit {
@@ -1996,12 +2457,13 @@ async fn faces_person(
 /// the store's own facts — membership relayed, no scores, no re-ranking; the search's own
 /// numbers ride untouched. Empty paths answer empty (nothing to filter).
 #[tauri::command]
-async fn faces_paths(shell: State<'_, Arc<Shell>>, person: i64, paths: Vec<String>) -> Result<Value, String> {
+async fn faces_paths(
+    shell: State<'_, Arc<Shell>>,
+    person: i64,
+    paths: Vec<String>,
+) -> Result<Value, String> {
     faces_id("person", person)?;
-    let fields = faces_fields(&[
-        ("person", &json!(person)),
-        ("paths", &json!(paths)),
-    ]);
+    let fields = faces_fields(&[("person", &json!(person)), ("paths", &json!(paths))]);
     faces_verb(shell.inner().clone(), "paths", fields).await
 }
 
@@ -2012,20 +2474,36 @@ async fn faces_pending(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn faces_name(shell: State<'_, Arc<Shell>>, person: i64, name: String) -> Result<Value, String> {
+async fn faces_name(
+    shell: State<'_, Arc<Shell>>,
+    person: i64,
+    name: String,
+) -> Result<Value, String> {
     faces_id("person", person)?;
     let text = name.trim().to_string();
     if text.is_empty() || text.chars().count() > 120 {
-        return Err("faces: the name must be a non-empty string of at most 120 characters".to_string());
+        return Err(
+            "faces: the name must be a non-empty string of at most 120 characters".to_string(),
+        );
     }
-    faces_verb(shell.inner().clone(), "name", faces_fields(&[("person", &json!(person)), ("name", &json!(text))])).await
+    faces_verb(
+        shell.inner().clone(),
+        "name",
+        faces_fields(&[("person", &json!(person)), ("name", &json!(text))]),
+    )
+    .await
 }
 
 #[tauri::command]
 async fn faces_merge(shell: State<'_, Arc<Shell>>, into: i64, from: i64) -> Result<Value, String> {
     faces_id("into", into)?;
     faces_id("from", from)?;
-    faces_verb(shell.inner().clone(), "merge", faces_fields(&[("into", &json!(into)), ("from", &json!(from))])).await
+    faces_verb(
+        shell.inner().clone(),
+        "merge",
+        faces_fields(&[("into", &json!(into)), ("from", &json!(from))]),
+    )
+    .await
 }
 
 /// Dissolving a person is NOT deleting photos: their face rows land in the review queue (the
@@ -2033,14 +2511,28 @@ async fn faces_merge(shell: State<'_, Arc<Shell>>, into: i64, from: i64) -> Resu
 #[tauri::command]
 async fn faces_delete(shell: State<'_, Arc<Shell>>, person: i64) -> Result<Value, String> {
     faces_id("person", person)?;
-    faces_verb(shell.inner().clone(), "delete", faces_fields(&[("person", &json!(person))])).await
+    faces_verb(
+        shell.inner().clone(),
+        "delete",
+        faces_fields(&[("person", &json!(person))]),
+    )
+    .await
 }
 
 #[tauri::command]
-async fn faces_confirm(shell: State<'_, Arc<Shell>>, face: i64, person: i64) -> Result<Value, String> {
+async fn faces_confirm(
+    shell: State<'_, Arc<Shell>>,
+    face: i64,
+    person: i64,
+) -> Result<Value, String> {
     faces_id("face", face)?;
     faces_id("person", person)?;
-    faces_verb(shell.inner().clone(), "confirm", faces_fields(&[("face", &json!(face)), ("person", &json!(person))])).await
+    faces_verb(
+        shell.inner().clone(),
+        "confirm",
+        faces_fields(&[("face", &json!(face)), ("person", &json!(person))]),
+    )
+    .await
 }
 
 /// The six face packs, into the app's models folder: the engine's download, its events relayed as
@@ -2056,7 +2548,9 @@ fn set_center_panel(app: AppHandle, shell: State<'_, Arc<Shell>>, on: bool) -> R
     {
         let mut settings = shell.settings.lock().unwrap();
         settings.center_panel = on;
-        settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
     }
     later(&app, remake_panel);
     Ok(())
@@ -2067,9 +2561,18 @@ fn shortcut_text(accelerator: &str) -> String {
     let parts: Vec<&str> = accelerator.split('+').collect();
     if cfg!(target_os = "macos") {
         let mut text = String::new();
-        for (name, sign) in [("Ctrl", "⌃"), ("Control", "⌃"), ("Alt", "⌥"), ("Option", "⌥"), ("Shift", "⇧"),
-                             ("CommandOrControl", "⌘"), ("CmdOrCtrl", "⌘"), ("Cmd", "⌘"), ("Command", "⌘"),
-                             ("Super", "⌘")] {
+        for (name, sign) in [
+            ("Ctrl", "⌃"),
+            ("Control", "⌃"),
+            ("Alt", "⌥"),
+            ("Option", "⌥"),
+            ("Shift", "⇧"),
+            ("CommandOrControl", "⌘"),
+            ("CmdOrCtrl", "⌘"),
+            ("Cmd", "⌘"),
+            ("Command", "⌘"),
+            ("Super", "⌘"),
+        ] {
             if parts.iter().any(|part| part.eq_ignore_ascii_case(name)) && !text.contains(sign) {
                 text.push_str(sign);
             }
@@ -2104,8 +2607,19 @@ fn make_tray(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<()> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&status, &separator, &search, &open, &folders, &index, &pause, &settings, &check,
-          &PredefinedMenuItem::separator(app)?, &quit_item],
+        &[
+            &status,
+            &separator,
+            &search,
+            &open,
+            &folders,
+            &index,
+            &pause,
+            &settings,
+            &check,
+            &PredefinedMenuItem::separator(app)?,
+            &quit_item,
+        ],
     )?;
     // DigUp's logo, in its colors (tray_icon.rs).
     let look = tray_icon::Look::new(None, false);
@@ -2141,10 +2655,22 @@ fn make_tray(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<()> {
             // Windows (and trays on Linux that report clicks): a click opens DigUp's window, as a click on an app's
             // tray icon does there, or shows the search panel if the person chose that (Settings → General); the menu
             // is on the other button.
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
                 if !cfg!(target_os = "macos") {
                     let app = tray.app_handle();
-                    if app.state::<Arc<Shell>>().settings.lock().unwrap().tray_click == "panel" {
+                    if app
+                        .state::<Arc<Shell>>()
+                        .settings
+                        .lock()
+                        .unwrap()
+                        .tray_click
+                        == "panel"
+                    {
                         toggle_panel(app);
                     } else {
                         show_window_or_setup(app);
@@ -2175,7 +2701,8 @@ fn held_now(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
     let held = {
         let settings = shell.settings.lock().unwrap();
-        (settings.index_hours_on && !settings.index_hours.contains(hours::now())).then(|| hours::clock(settings.index_hours.start))
+        (settings.index_hours_on && !settings.index_hours.contains(hours::now()))
+            .then(|| hours::clock(settings.index_hours.start))
     };
     let before = std::mem::replace(&mut shell.status.lock().unwrap().held_until, held.clone());
     if before == held {
@@ -2209,7 +2736,13 @@ fn set_paused(app: &AppHandle, paused: bool) {
 
 /// A problem to see in the tray's first line (the shortcut is taken…), until indexing next has news.
 fn set_status(app: &AppHandle, text: &str) {
-    if let Some(status) = app.state::<Arc<Shell>>().status_item.lock().unwrap().as_ref() {
+    if let Some(status) = app
+        .state::<Arc<Shell>>()
+        .status_item
+        .lock()
+        .unwrap()
+        .as_ref()
+    {
         let _ = status.set_text(text);
     }
 }
@@ -2226,7 +2759,11 @@ fn changed(app: &AppHandle) {
         let _ = index.set_enabled(folders && snapshot["busy"] == false);
     }
     if let Some(pause) = shell.pause_item.lock().unwrap().as_ref() {
-        let _ = pause.set_text(if snapshot["paused"] == true { "Resume Indexing" } else { "Pause Indexing" });
+        let _ = pause.set_text(if snapshot["paused"] == true {
+            "Resume Indexing"
+        } else {
+            "Pause Indexing"
+        });
         let _ = pause.set_enabled(folders);
     }
     update_line(app, &shell);
@@ -2262,9 +2799,16 @@ fn tray_host_present(shell: &Shell) -> bool {
             let bus = zbus::blocking::fdo::DBusProxy::new(&connection)?;
             Ok(bus.name_has_owner("org.kde.StatusNotifierWatcher".try_into()?)?)
         })()
-        .unwrap_or(true);   // can't tell: draw as before
+        .unwrap_or(true); // can't tell: draw as before
         if known.map_or(true, |(was, _)| was != present) {
-            eprintln!("digup-shell: tray host {}", if present { "found" } else { "not found: the icon isn't redrawn" });
+            eprintln!(
+                "digup-shell: tray host {}",
+                if present {
+                    "found"
+                } else {
+                    "not found: the icon isn't redrawn"
+                }
+            );
         }
         *known = Some((present, std::time::Instant::now()));
         present
@@ -2313,7 +2857,9 @@ fn search_event(app: &AppHandle, event: Value) {
     }
     if event["event"] == "ready" {
         if let Some(index) = event["index"].as_str() {
-            let _ = app.asset_protocol_scope().allow_directory(Path::new(index).join("previews"), false);
+            let _ = app
+                .asset_protocol_scope()
+                .allow_directory(Path::new(index).join("previews"), false);
         }
     }
     let _ = app.emit("helper", json!({"from": "search", "event": event}));
@@ -2323,10 +2869,15 @@ fn index_event(app: &AppHandle, event: Value) {
     if cfg!(debug_assertions) {
         println!("index: {event}");
     }
-    app.state::<Arc<Shell>>().status.lock().unwrap().apply(&event);
+    app.state::<Arc<Shell>>()
+        .status
+        .lock()
+        .unwrap()
+        .apply(&event);
     match event["event"].as_str().unwrap_or_default() {
         "file" => {
-            app.state::<Arc<Shell>>().last_file
+            app.state::<Arc<Shell>>()
+                .last_file
                 .lock()
                 .unwrap()
                 .clone_from(&event["path"].as_str().map(str::to_string));
@@ -2338,7 +2889,8 @@ fn index_event(app: &AppHandle, event: Value) {
             // A debug run through setup searches once the first index is in.
             let shell = app.state::<Arc<Shell>>();
             if let Some(query) = &shell.options.debug_query {
-                if shell.options.debug_setup && !shell.debug_query_sent.swap(true, Ordering::SeqCst) {
+                if shell.options.debug_setup && !shell.debug_query_sent.swap(true, Ordering::SeqCst)
+                {
                     let label = *shell.panel_label.lock().unwrap();
                     let _ = app.emit_to(label, "debug-query", query.clone());
                 }
@@ -2363,8 +2915,22 @@ fn index_event(app: &AppHandle, event: Value) {
 /// the restart cap bounds the loop (disclosed Windows limit).
 fn died_on_file(status: i64, signal: Option<i64>) -> bool {
     matches!(signal, Some(4 | 5 | 6 | 8 | 9 | 10 | 11))
-        || matches!(status, 4 | 5 | 6 | 8 | 9 | 10 | 11
-            | 0x80000004 | 0xC0000005 | 0xC00000FD | 0xC0000409 | 0xC000001D | 0xC0000094 | 0xC0000096)
+        || matches!(
+            status,
+            4 | 5
+                | 6
+                | 8
+                | 9
+                | 10
+                | 11
+                | 0x80000004
+                | 0xC0000005
+                | 0xC00000FD
+                | 0xC0000409
+                | 0xC000001D
+                | 0xC0000094
+                | 0xC0000096
+        )
 }
 
 /// The kill the OS delivers, not the file: Linux' OOM killer and macOS' jetsam choose the process with the
@@ -2440,14 +3006,19 @@ fn model_event(app: &AppHandle, event: Value) {
     let before = shell.model_state.lock().unwrap().clone();
     let state = match event["event"].as_str().unwrap_or_default() {
         "progress" => {
-            let (bytes, total) = (event["all_bytes"].as_f64().unwrap_or(0.0), event["all_total"].as_f64().unwrap_or(1.0));
+            let (bytes, total) = (
+                event["all_bytes"].as_f64().unwrap_or(0.0),
+                event["all_total"].as_f64().unwrap_or(1.0),
+            );
             json!({"state": "downloading", "bytes": bytes, "total": total})
         }
         "file" => json!({"state": "downloading", "from": event["from"]}),
         "verifying" => json!({"state": "checking"}),
         "waiting" => json!({"state": "waiting"}),
         // Where it got to stays shown while it waits to try again.
-        "retry" => json!({"state": "downloading", "bytes": before["bytes"], "total": before["total"], "problem": event["message"]}),
+        "retry" => {
+            json!({"state": "downloading", "bytes": before["bytes"], "total": before["total"], "problem": event["message"]})
+        }
         "done" => {
             shell.model_rerun.store(false, Ordering::SeqCst);
             json!({"state": "ready"})
@@ -2456,7 +3027,9 @@ fn model_event(app: &AppHandle, event: Value) {
         // The helper ended without saying done or why. The files may all be there (it died after the last one on
         // some Linux systems before 0.7.0-beta.2): run it once more, which verifies them and says done, or goes on.
         "stopped" => {
-            if !shell.model_rerun.swap(true, Ordering::SeqCst) && shell.model.run(&shell.download_launch()).is_ok() {
+            if !shell.model_rerun.swap(true, Ordering::SeqCst)
+                && shell.model.run(&shell.download_launch()).is_ok()
+            {
                 json!({"state": "checking"})
             } else {
                 json!({"state": "failed", "message": "the download stopped"})
@@ -2501,13 +3074,24 @@ fn measure_then_index(app: &AppHandle) {
         // Setup's folder estimates (walking folders, reading PDFs and media) would slow the check, and DigUp would then
         // take this computer for slower than it is: they go first (two minutes at most).
         let waiting = Instant::now();
-        while shell.estimating.load(Ordering::SeqCst) > 0 && waiting.elapsed() < Duration::from_secs(120) {
+        while shell.estimating.load(Ordering::SeqCst) > 0
+            && waiting.elapsed() < Duration::from_secs(120)
+        {
             std::thread::sleep(Duration::from_millis(250));
         }
         // The check itself waits (a minute at most) for other programs to settle: just after the model's download a
         // virus scanner reads the new files, and at a login everything starts at once.
         let mut command = std::process::Command::new(&shell.options.helper);
-        command.args(["speed", "--model", "--if-needed", "--when-quiet", "60", "--json"]).args(shell.index_arguments());
+        command
+            .args([
+                "speed",
+                "--model",
+                "--if-needed",
+                "--when-quiet",
+                "60",
+                "--json",
+            ])
+            .args(shell.index_arguments());
         if let Some(models) = &shell.options.models {
             command.env("DIGUP_MODELS", models);
         }
@@ -2515,7 +3099,11 @@ fn measure_then_index(app: &AppHandle) {
         // The engine's name for that file is `digup_core::paths::WORKER_LOG` ("worker.log", and
         // `WORKER_QUERY_LOG` for the query encoder's); this shell spawns the helper, it never
         // builds the path, so the literal in that sentence has nothing here to call.
-        let log = std::fs::OpenOptions::new().create(true).append(true).open(shell.logs.join("speed.log")).ok();
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(shell.logs.join("speed.log"))
+            .ok();
         if let Some(log) = log.as_ref().and_then(|log| log.try_clone().ok()) {
             command.stderr(log);
         }
@@ -2531,8 +3119,13 @@ fn measure_then_index(app: &AppHandle) {
             child.wait_with_output()
         });
         let reply = match output {
-            Ok(output) => String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| serde_json::from_str(line).ok())
-                .last().unwrap_or_else(|| json!({"event": "speed", "error": format!("exit {}", output.status)})),
+            Ok(output) => String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .last()
+                .unwrap_or_else(
+                    || json!({"event": "speed", "error": format!("exit {}", output.status)}),
+                ),
             Err(error) => json!({"event": "speed", "error": error.to_string()}),
         };
         if let Some(mut log) = log {
@@ -2581,35 +3174,65 @@ mod copy_path_tests {
     /// callers copy absolute then).
     #[test]
     fn relative_to_the_search_folder_that_contains_it() {
-        assert_eq!(relative_path("/home/me/Pics/a/b.png", &["/home/me/Pics".into()]),
-                   Some("a/b.png".into()));
-        assert_eq!(relative_path("C:\\Initial\\Secret\\note.md", &["C:\\Initial\\".into()]),
-                   Some("Secret/note.md".into()));
-        assert_eq!(relative_path("/home/me/Pics/a.png", &["/home/me".into(), "/home/me/Pics".into()]),
-                   Some("a.png".into()));   // the longest folder wins
-        // Case: Windows folds it in its filesystem, Linux and the Mac do not — `/a` is not the folder
-        // above `/A`, and a relative spelling there would point at a file outside the search folder.
+        assert_eq!(
+            relative_path("/home/me/Pics/a/b.png", &["/home/me/Pics".into()]),
+            Some("a/b.png".into())
+        );
+        assert_eq!(
+            relative_path("C:\\Initial\\Secret\\note.md", &["C:\\Initial\\".into()]),
+            Some("Secret/note.md".into())
+        );
+        assert_eq!(
+            relative_path(
+                "/home/me/Pics/a.png",
+                &["/home/me".into(), "/home/me/Pics".into()]
+            ),
+            Some("a.png".into())
+        ); // the longest folder wins
+           // Case: Windows folds it in its filesystem, Linux and the Mac do not — `/a` is not the folder
+           // above `/A`, and a relative spelling there would point at a file outside the search folder.
         if cfg!(windows) {
-            assert_eq!(relative_path("/HOME/me/Pics/a.png", &["/home/Me/Pics/".into()]),
-                       Some("a.png".into()));   // Windows' spelling
+            assert_eq!(
+                relative_path("/HOME/me/Pics/a.png", &["/home/Me/Pics/".into()]),
+                Some("a.png".into())
+            ); // Windows' spelling
         } else {
-            assert_eq!(relative_path("/HOME/me/Pics/a.png", &["/home/Me/Pics/".into()]), None);
+            assert_eq!(
+                relative_path("/HOME/me/Pics/a.png", &["/home/Me/Pics/".into()]),
+                None
+            );
             assert_eq!(relative_path("/A/x.png", &["/a".into()]), None);
         }
-        assert_eq!(relative_path("/home/me/Else/a.png", &["/home/me/Pics".into()]), None);
-        assert_eq!(relative_path("/home/me/Pics", &["/home/me/Pics".into()]), None);   // the root itself
+        assert_eq!(
+            relative_path("/home/me/Else/a.png", &["/home/me/Pics".into()]),
+            None
+        );
+        assert_eq!(
+            relative_path("/home/me/Pics", &["/home/me/Pics".into()]),
+            None
+        ); // the root itself
         assert_eq!(relative_path("/home/me/Pics/a.png", &[]), None);
         // A blank folder setting is not the root "/": it holds no path (#148 review, 2026-11-10).
         assert_eq!(relative_path("/home/me/Pics/a.png", &["".into()]), None);
-        assert_eq!(relative_path("/home/me/Pics/a.png", &["".into(), "/home/me/Pics".into()]),
-                   Some("a.png".into()));
+        assert_eq!(
+            relative_path("/home/me/Pics/a.png", &["".into(), "/home/me/Pics".into()]),
+            Some("a.png".into())
+        );
         // Review cases: the root spelled "/" holds every absolute path (the longest-folder rule
         // still picks a deeper folder first), and a root with trailing separators — one or many.
-        assert_eq!(relative_path("/home/me/Pics/a.png", &["/".into()]), Some("home/me/Pics/a.png".into()));
-        assert_eq!(relative_path("/home/me/Pics/a.png", &["/".into(), "/home/me".into()]), Some("Pics/a.png".into()));
+        assert_eq!(
+            relative_path("/home/me/Pics/a.png", &["/".into()]),
+            Some("home/me/Pics/a.png".into())
+        );
+        assert_eq!(
+            relative_path("/home/me/Pics/a.png", &["/".into(), "/home/me".into()]),
+            Some("Pics/a.png".into())
+        );
         assert_eq!(relative_path("/", &["/".into()]), None);
-        assert_eq!(relative_path("C:\\Initial\\Secret\\note.md", &["C:\\Initial\\\\".into()]),
-                   Some("Secret/note.md".into()));   // two trailing separators
+        assert_eq!(
+            relative_path("C:\\Initial\\Secret\\note.md", &["C:\\Initial\\\\".into()]),
+            Some("Secret/note.md".into())
+        ); // two trailing separators
     }
 
     /// Both fold shapes, both checked on one machine (the platform's answer is the `fold` parameter):
@@ -2648,19 +3271,27 @@ mod crash_class_tests {
             assert!(died_on_file(0, Some(signal)), "signal {signal}");
             assert!(died_on_file(signal, None), "macOS spells it as the status");
         }
-        assert!(!died_on_file(0, Some(13)));   // SIGPIPE: not a crash on a file
-        assert!(!died_on_file(0, None));       // an exit, not a killing
-        assert!(!died_on_file(75, None));      // the watchdog's own stop (EX_TEMPFAIL)
-        assert!(!died_on_file(1, None));       // an ordinary failure exit
+        assert!(!died_on_file(0, Some(13))); // SIGPIPE: not a crash on a file
+        assert!(!died_on_file(0, None)); // an exit, not a killing
+        assert!(!died_on_file(75, None)); // the watchdog's own stop (EX_TEMPFAIL)
+        assert!(!died_on_file(1, None)); // an ordinary failure exit
     }
 
     /// Windows has no signals: the crash class arrives as the SEH exit code (a Swift trap, a CRT fast-fail).
     #[test]
     fn seh_codes_carry_the_crash_class() {
-        for code in [0x80000004i64, 0xC0000005, 0xC00000FD, 0xC0000409, 0xC000001D, 0xC0000094, 0xC0000096] {
+        for code in [
+            0x80000004i64,
+            0xC0000005,
+            0xC00000FD,
+            0xC0000409,
+            0xC000001D,
+            0xC0000094,
+            0xC0000096,
+        ] {
             assert!(died_on_file(code, None), "code {code:#x}");
         }
-        assert!(!died_on_file(0xC0000022, None));   // a share-stop code: an exit, not a crash
+        assert!(!died_on_file(0xC0000022, None)); // a share-stop code: an exit, not a crash
     }
 
     /// Issue #182's review (2026-11-10): a SIGKILL accuses no file — the mark lands only when the kills
@@ -2669,9 +3300,15 @@ mod crash_class_tests {
     #[test]
     fn a_kill_names_a_file_only_on_a_repeat() {
         for signal in [4, 5, 6, 8, 10, 11] {
-            assert!(names_file(Some(signal), 0, false), "signal {signal} names at once");
+            assert!(
+                names_file(Some(signal), 0, false),
+                "signal {signal} names at once"
+            );
         }
-        assert!(!names_file(Some(9), 0, false), "the first SIGKILL is a retry, not an accusation");
+        assert!(
+            !names_file(Some(9), 0, false),
+            "the first SIGKILL is a retry, not an accusation"
+        );
         assert!(names_file(Some(9), 0, true), "the repeat marks it");
         // Windows has no signals (the SEH classes are faults inside the reading: they name at once), and the
         // Mac app spells a signal as the status itself.
