@@ -275,12 +275,64 @@ impl Indexer {
         roots: &[PathBuf],
         progress: &mut dyn FnMut(&CrawlProgress),
     ) -> digup_core::db::Result<SyncSummary> {
-        let crawl = digup_core::crawler::crawl(roots, &self.options, progress);
+        self.sync_scoped(roots, roots, progress)
+    }
+
+    /// Issue #7a: reconcile only the `walk` folders (the watcher's burst of changed paths),
+    /// treating them as the chosen folders they live under: the rules apply as in a full
+    /// crawl, removals prune ONLY the rows under `walk`, and rows outside the scope stand
+    /// untouched — they belong to a full sync (startup, manual rescans, watcher overflow,
+    /// settings changes, all unchanged paths). Dataset detection fires for every folder the
+    /// scope walks whole (a folder's own files are fully visible inside it); a folder whose
+    /// line-crossing files sit OUTSIDE the scope defers its verdict to the next full sync.
+    ///
+    /// The issue #2 keeps are scoped to the level of the claim:
+    /// - a chosen root that vanished (an ejected drive, a gone mount) keeps rows under it
+    ///   exactly as the full sync does — those files are elsewhere, not deleted;
+    /// - a scan failure at a path that EXISTS (a sealed folder, an unreachable mount below a
+    ///   live root) keeps rows, same as the full sync: "not seen" is the walk's blindness;
+    /// - a scan failure at a path that is GONE is a scope fired from remove events for a
+    ///   folder that was deleted: its rows prune. The ejected-drive case is caught by the
+    ///   root rule above, before this one can speak.
+    pub fn sync_scoped(
+        &self,
+        roots: &[PathBuf],
+        walk: &[PathBuf],
+        progress: &mut dyn FnMut(&CrawlProgress),
+    ) -> digup_core::db::Result<SyncSummary> {
         let root_paths: Vec<String> = roots
             .iter()
             .map(|root| paths::standardize(&root.to_string_lossy()))
             .collect();
-        let existing = self.store.files_under(&root_paths)?;
+        let mut walk_paths: Vec<String> = walk
+            .iter()
+            .map(|root| paths::standardize(&root.to_string_lossy()))
+            .collect();
+        // A scope is a set of folders INSIDE the user's chosen ones. A verb naming a folder
+        // above them (`sync ["/"]`, `sync ["/home/secret"]`) is not a scope at all: crawling
+        // it indexes trees the user never chose (rows its own scope never embeds, so they sit
+        // in `files` forever) and pruning under it deletes rows for paths the sync has no
+        // business touching. Answer it as a full sync — the roots, never less.
+        let scoped = walk_paths.iter().all(|dir| {
+            root_paths
+                .iter()
+                .any(|root| dir == root || paths::is_inside(dir, root))
+        });
+        let walk: Vec<PathBuf> = if scoped {
+            walk.to_vec()
+        } else {
+            walk_paths = root_paths.clone();
+            roots.to_vec()
+        };
+        let full = walk_paths == root_paths;
+        // The crawl walks the scope under the rules of the CHOSEN folders: the root-level
+        // exemptions (a chosen root is never a dataset; a chosen root's own files are not
+        // "inside a code project") belong to the folders the user chose, not to the folders
+        // the scope happens to name. Crawling the scope as its own root set indexes and
+        // embeds what the full crawl excludes, and the next full crawl deletes it — add,
+        // embed, prune, repeat, paying the model every burst.
+        let crawl = digup_core::crawler::crawl_scoped(&walk, roots, &self.options, progress);
+        let existing = self.store.files_under(&walk_paths)?;
         let mut by_path: HashMap<String, FileRecord> = HashMap::new();
         let mut by_inode: HashMap<String, FileRecord> = HashMap::new();
         for file in &existing {
@@ -317,8 +369,38 @@ impl Indexer {
                         summary.added += 1;
                     }
                 } else {
-                    summary.queued.push(self.store.insert(file)?);
-                    summary.added += 1;
+                    // Issue #7a: a file that ENTERS the scope from outside. Its row lives
+                    // above the scope, so the in-scope inode lookup misses and a SECOND row
+                    // is inserted while the old path keeps standing inside the store's scope —
+                    // search answers a path that no longer exists and the open fails, until a
+                    // full sync cleans it up. The watcher fires both sides of a move it can
+                    // see (pinned), so the trigger is the moves it cannot see: notify adds
+                    // watches lazily for newly created folders, FSEvents coalesces on a Mac,
+                    // and a dropped burst is a full sync by construction. The schema indexes
+                    // `(device, inode)` for exactly this lookup. The full sync keeps the
+                    // engine's pinned behavior unchanged: its scope is every chosen folder, so
+                    // a row outside it is not the move of an indexed file.
+                    let outside = if full {
+                        None
+                    } else {
+                        self.store.file_by_inode(file.device, file.inode)?
+                    };
+                    match outside {
+                        Some(row)
+                            if !seen.contains(&row.path)
+                                && !moved_from.contains(&row.path)
+                                && row.size == file.size
+                                && (row.mtime - file.mtime).abs() < 0.001 =>
+                        {
+                            self.store.move_file(row.id, &file.path)?;
+                            moved_from.insert(row.path.clone());
+                            summary.moved += 1;
+                        }
+                        _ => {
+                            summary.queued.push(self.store.insert(file)?);
+                            summary.added += 1;
+                        }
+                    }
                 }
             }
             // A root that went away while it was being walked (a drive ejected mid-crawl)
@@ -326,12 +408,22 @@ impl Indexer {
             // The same rule for a folder the walk could not read at all (issue #2): its files
             // exist, they were only unlistable — "not seen" is the walk's failure, not a
             // delete. Real deletes still prune: a SUCCESSFUL scan that lacks the file saw the
-            // folder's whole truth, and no failure is recorded for it.
+            // folder's whole truth, and no failure is recorded for it. Issue #7a: in a scoped
+            // sync a failure at a path that is GONE is the deleted folder the events named
+            // (the scope is fired by filesystem events, not by a drive walk), so only
+            // failures at paths that EXIST keep rows; vanished chosen roots keep theirs at
+            // any sync — an ejected drive's files are elsewhere, not deleted.
             let keep_under: Vec<String> = root_paths
                 .iter()
-                .filter(|path| !Path::new(path).exists())
+                .filter(|path| folder_is_gone(path))
                 .map(|path| paths::bound(path))
-                .chain(crawl.scan_failures.iter().map(|path| paths::bound(path)))
+                .chain(
+                    crawl
+                        .scan_failures
+                        .iter()
+                        .filter(|path| full || !folder_is_gone(path))
+                        .map(|path| paths::bound(path)),
+                )
                 .collect();
             for row in &existing {
                 if !seen.contains(&row.path)
@@ -1572,6 +1664,23 @@ fn grapheme_prefix(text: &str, count: usize) -> String {
     text.graphemes(true).take(count).collect()
 }
 
+/// Issue #7a: is this path CONFIRMED gone — `NotFound`, or `NotADirectory` from its own stat?
+/// `Path::exists` answers false for EVERY stat error, and that is the answer that deletes an
+/// index: a network mount in the middle of a remount answers `ESTALE` after a server restart,
+/// `EIO`, `ENOTCONN`, `EACCES` — a live folder, read by `exists()` as "the deleted folder the
+/// events named", with every row and vector under it pruned. A keep is free and the next sync
+/// rechecks; a delete is not, so an inconclusive stat keeps. `NotADirectory` rides the same
+/// law: a folder under a parent that stopped being one is a gone folder's other spelling.
+fn folder_is_gone(path: &str) -> bool {
+    match std::fs::symlink_metadata(Path::new(path)) {
+        Ok(_) => false,
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+        ),
+    }
+}
+
 /// The Swift `defer { reading = nil }` of `prepare`: the reading stamp clears on every exit
 /// path, including panics.
 struct ReadingGuard;
@@ -1652,5 +1761,38 @@ mod tests {
         assert_eq!(super::ocr_note(&ocr), "ocr 12 chars");
         assert_eq!(super::ocr_note(""), "ocr 0 chars");
         assert_eq!(super::ocr_note("hello"), "ocr 5 chars");
+    }
+
+    /// The keep/prune law's new hinge (issue #7a review): what counts as a GONE folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_stat_error_that_is_not_a_delete_is_not_a_gone_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let work = std::env::temp_dir().join("digup-gone-law");
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("file.txt"), b"hello").unwrap();
+        std::fs::create_dir_all(work.join("sealed")).unwrap();
+        std::fs::set_permissions(work.join("sealed"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+        // A folder that exists is not gone. A SEALED one is not gone either: its own stat
+        // answers, and only the listing of its contents fails — which is the walk's blindness
+        // the #2 law keeps rows for. `Path::exists` says "false" for both.
+        assert!(!super::folder_is_gone(
+            &work.join("sealed").to_string_lossy()
+        ));
+        assert!(!super::folder_is_gone(
+            &work.join("file.txt").to_string_lossy()
+        ));
+        // The two spellings of GONE the engine acts on, and only these.
+        assert!(super::folder_is_gone(
+            &work.join("missing").to_string_lossy()
+        ));
+        assert!(super::folder_is_gone(
+            &work.join("file.txt/child").to_string_lossy()
+        ));
+        std::fs::set_permissions(work.join("sealed"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&work);
     }
 }

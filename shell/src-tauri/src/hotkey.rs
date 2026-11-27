@@ -41,7 +41,8 @@ pub fn method() -> Method {
         if kde::available() {
             return Method::Kde;
         }
-        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty())
+        let wayland = std::env::var_os("WAYLAND_DISPLAY")
+            .is_some_and(|display| !display.is_empty())
             || std::env::var("XDG_SESSION_TYPE").is_ok_and(|session| session == "wayland");
         if wayland {
             return Method::ByHand;
@@ -61,7 +62,11 @@ pub fn toggle_command() -> String {
 
 /// A word as a shell reads it (GNOME splits a shortcut's command the same way).
 fn quoted(word: &str) -> String {
-    if !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c)) {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c))
+    {
         return word.to_string();
     }
     format!("'{}'", word.replace('\'', r"'\''"))
@@ -74,10 +79,22 @@ pub fn hand_over() -> bool {
     // tauri-plugin-single-instance 2.5's object: the app's identifier + ".SingleInstance", and that as a path.
     const NAME: &str = "com.abdurrahim.DigUp.SingleInstance";
     const PATH: &str = "/com/abdurrahim/DigUp/SingleInstance";
-    let Ok(connection) = zbus::blocking::Connection::session() else { return false };
+    let Ok(connection) = zbus::blocking::Connection::session() else {
+        return false;
+    };
     let args: Vec<String> = std::env::args().collect();
-    let folder = std::env::current_dir().map(|folder| folder.display().to_string()).unwrap_or_default();
-    connection.call_method(Some(NAME), PATH, Some("org.SingleInstance.DBus"), "ExecuteCallback", &(args, folder)).is_ok()
+    let folder = std::env::current_dir()
+        .map(|folder| folder.display().to_string())
+        .unwrap_or_default();
+    connection
+        .call_method(
+            Some(NAME),
+            PATH,
+            Some("org.SingleInstance.DBus"),
+            "ExecuteCallback",
+            &(args, folder),
+        )
+        .is_ok()
 }
 
 /// GNOME's custom shortcuts (Settings → Keyboard → View and Customize Shortcuts → Custom Shortcuts), which its
@@ -92,15 +109,21 @@ pub mod gnome {
 
     /// A GNOME session with its settings daemon's shortcut settings.
     pub fn available() -> bool {
-        let gnome = std::env::var("XDG_CURRENT_DESKTOP")
-            .is_ok_and(|desktops| desktops.split(':').any(|desktop| desktop.eq_ignore_ascii_case("GNOME")));
+        let gnome = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktops| {
+            desktops
+                .split(':')
+                .any(|desktop| desktop.eq_ignore_ascii_case("GNOME"))
+        });
         gnome
-            && gio::SettingsSchemaSource::default()
-                .is_some_and(|source| source.lookup(MEDIA_KEYS, true).is_some() && source.lookup(CUSTOM, true).is_some())
+            && gio::SettingsSchemaSource::default().is_some_and(|source| {
+                source.lookup(MEDIA_KEYS, true).is_some() && source.lookup(CUSTOM, true).is_some()
+            })
     }
 
     fn listed(list: &gio::Settings) -> bool {
-        list.strv("custom-keybindings").iter().any(|path| path.as_str() == OURS)
+        list.strv("custom-keybindings")
+            .iter()
+            .any(|path| path.as_str() == OURS)
     }
 
     /// DigUp's shortcut as GNOME has it now ("<Control><Shift>space"), if it's there.
@@ -108,7 +131,12 @@ pub mod gnome {
         if !listed(&gio::Settings::new(MEDIA_KEYS)) {
             return None;
         }
-        Some(gio::Settings::with_path(CUSTOM, OURS).string("binding").to_string()).filter(|binding| !binding.is_empty())
+        Some(
+            gio::Settings::with_path(CUSTOM, OURS)
+                .string("binding")
+                .to_string(),
+        )
+        .filter(|binding| !binding.is_empty())
     }
 
     /// Adds DigUp's shortcut (`accelerator` in Tauri's form) running `command`. When it's there already, only the
@@ -116,7 +144,10 @@ pub mod gnome {
     pub fn bind(accelerator: &str, command: &str) -> Result<(), String> {
         let list = gio::Settings::new(MEDIA_KEYS);
         let ours = gio::Settings::with_path(CUSTOM, OURS);
-        let set = |key: &str, value: &str| ours.set_string(key, value).map_err(|error| error.to_string());
+        let set = |key: &str, value: &str| {
+            ours.set_string(key, value)
+                .map_err(|error| error.to_string())
+        };
         let new = !listed(&list);
         if new {
             set("binding", &to_gnome(accelerator)?)?;
@@ -125,10 +156,17 @@ pub mod gnome {
         set("command", command)?;
         if new {
             // Listed last, so GNOME never reads half an entry.
-            let mut paths: Vec<String> = list.strv("custom-keybindings").iter().map(|path| path.to_string()).collect();
+            let mut paths: Vec<String> = list
+                .strv("custom-keybindings")
+                .iter()
+                .map(|path| path.to_string())
+                .collect();
             paths.push(OURS.to_string());
-            list.set_strv("custom-keybindings", paths.iter().map(String::as_str).collect::<Vec<_>>())
-                .map_err(|error| error.to_string())?;
+            list.set_strv(
+                "custom-keybindings",
+                paths.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+            .map_err(|error| error.to_string())?;
         }
         gio::Settings::sync();
         Ok(())
@@ -169,7 +207,10 @@ pub mod gnome {
             "comma" => Some("comma"),
             _ => None,
         };
-        let function = lower.strip_prefix('f').and_then(|number| number.parse::<u8>().ok()).filter(|n| (1..=24).contains(n));
+        let function = lower
+            .strip_prefix('f')
+            .and_then(|number| number.parse::<u8>().ok())
+            .filter(|n| (1..=24).contains(n));
         let plain = lower.chars().count() == 1 && lower.chars().all(|c| c.is_ascii_alphanumeric());
         match (named, function) {
             (Some(name), _) => text.push_str(name),
@@ -194,7 +235,11 @@ pub mod gnome {
             rest = &rest[end + 2..];
         }
         let mut key = rest.chars();
-        parts.push(key.next().map(|first| first.to_uppercase().chain(key).collect()).unwrap_or_default());
+        parts.push(
+            key.next()
+                .map(|first| first.to_uppercase().chain(key).collect())
+                .unwrap_or_default(),
+        );
         parts.join("+")
     }
 }
@@ -208,7 +253,12 @@ pub mod kde {
 
     const SERVICE: &str = "org.kde.kglobalaccel";
     /// The component, the action, and their names as System Settings shows them (sent as a slice: `as` on D-Bus).
-    const ACTION: [&str; 4] = ["com.abdurrahim.DigUp", "toggle-panel", "DigUp", "Show or Hide the Search Panel"];
+    const ACTION: [&str; 4] = [
+        "com.abdurrahim.DigUp",
+        "toggle-panel",
+        "DigUp",
+        "Show or Hide the Search Panel",
+    ];
     // KGlobalAccel's flags (kglobalacceld.h), and Qt's modifiers in a key code.
     const SET_PRESENT: u32 = 2;
     const IS_DEFAULT: u32 = 8;
@@ -220,12 +270,20 @@ pub mod kde {
 
     /// A KDE session with its shortcut service.
     pub fn available() -> bool {
-        let kde = std::env::var("XDG_CURRENT_DESKTOP")
-            .is_ok_and(|desktops| desktops.split(':').any(|desktop| desktop.eq_ignore_ascii_case("KDE")));
+        let kde = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktops| {
+            desktops
+                .split(':')
+                .any(|desktop| desktop.eq_ignore_ascii_case("KDE"))
+        });
         kde && Connection::session().is_ok_and(|connection| {
             connection
-                .call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"),
-                             "NameHasOwner", &(SERVICE,))
+                .call_method(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    Some("org.freedesktop.DBus"),
+                    "NameHasOwner",
+                    &(SERVICE,),
+                )
                 .is_ok_and(|reply| reply.body().deserialize::<bool>().unwrap_or(false))
         })
     }
@@ -251,7 +309,8 @@ pub mod kde {
                 accel.call_method("setShortcutKeys", &(ACTION.as_slice(), &keys, SET_PRESENT))?;
                 accel.call_method("setShortcutKeys", &(ACTION.as_slice(), &keys, IS_DEFAULT))?;
                 let path: OwnedObjectPath = accel.call("getComponent", &(ACTION[0],))?;
-                let component = Proxy::new(&connection, SERVICE, path, "org.kde.kglobalaccel.Component")?;
+                let component =
+                    Proxy::new(&connection, SERVICE, path, "org.kde.kglobalaccel.Component")?;
                 let signals = component.receive_signal("globalShortcutPressed")?;
                 Ok((connection, signals))
             };
@@ -271,14 +330,21 @@ pub mod kde {
                 }
             }
         });
-        answer.recv().map_err(|_| "KDE's shortcut service didn't answer".to_string())?
+        answer
+            .recv()
+            .map_err(|_| "KDE's shortcut service didn't answer".to_string())?
     }
 
     /// DigUp's key as KDE has it now ("Ctrl+Shift+Space"), once registered.
     pub fn current() -> Option<String> {
         let connection = Connection::session().ok()?;
-        let keys: Vec<(Vec<i32>,)> = service(&connection).ok()?.call("shortcutKeys", &(ACTION.as_slice(),)).ok()?;
-        keys.first().and_then(|(chords,)| chords.first()).map(|&key| shown(key))
+        let keys: Vec<(Vec<i32>,)> = service(&connection)
+            .ok()?
+            .call("shortcutKeys", &(ACTION.as_slice(),))
+            .ok()?;
+        keys.first()
+            .and_then(|(chords,)| chords.first())
+            .map(|&key| shown(key))
     }
 
     /// DigUp quits: the key is free again until it runs.
@@ -305,7 +371,10 @@ pub mod kde {
             };
         }
         let upper = key.to_ascii_uppercase();
-        let function = upper.strip_prefix('F').and_then(|number| number.parse::<i32>().ok()).filter(|n| (1..=24).contains(n));
+        let function = upper
+            .strip_prefix('F')
+            .and_then(|number| number.parse::<i32>().ok())
+            .filter(|n| (1..=24).contains(n));
         code |= match (upper.as_str(), function) {
             ("SPACE", _) => 0x20,
             ("ENTER" | "RETURN", _) => 0x0100_0004,
@@ -315,7 +384,9 @@ pub mod kde {
             ("PERIOD", _) => 0x2e,
             ("COMMA", _) => 0x2c,
             (_, Some(number)) => F1 + number - 1,
-            (one, None) if one.len() == 1 && one.chars().all(|c| c.is_ascii_alphanumeric()) => one.as_bytes()[0] as i32,
+            (one, None) if one.len() == 1 && one.chars().all(|c| c.is_ascii_alphanumeric()) => {
+                one.as_bytes()[0] as i32
+            }
             _ => return Err(format!("{accelerator}: {key} isn't a key KDE knows")),
         };
         Ok(code)
@@ -324,7 +395,12 @@ pub mod kde {
     /// A Qt key code in the words of the panel and setup: "Ctrl+Shift+Space".
     pub fn shown(code: i32) -> String {
         let mut parts = Vec::new();
-        for (flag, name) in [(META, "Meta"), (CTRL, "Ctrl"), (ALT, "Alt"), (SHIFT, "Shift")] {
+        for (flag, name) in [
+            (META, "Meta"),
+            (CTRL, "Ctrl"),
+            (ALT, "Alt"),
+            (SHIFT, "Shift"),
+        ] {
             if code & flag != 0 {
                 parts.push(name.to_string());
             }
@@ -335,7 +411,9 @@ pub mod kde {
             0x0100_0004 => "Enter".to_string(),
             0x0100_0001 => "Tab".to_string(),
             _ if (F1..F1 + 35).contains(&key) => format!("F{}", key - F1 + 1),
-            _ => char::from_u32(key as u32).map(String::from).unwrap_or_else(|| format!("{key:#x}")),
+            _ => char::from_u32(key as u32)
+                .map(String::from)
+                .unwrap_or_else(|| format!("{key:#x}")),
         });
         parts.join("+")
     }

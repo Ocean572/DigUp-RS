@@ -19,7 +19,9 @@ pub fn outside(program: impl AsRef<OsStr>) -> Command {
 
 #[cfg(target_os = "linux")]
 fn without_appimage(mut command: Command) -> Command {
-    let Ok(appdir) = std::env::var("APPDIR") else { return command };
+    let Ok(appdir) = std::env::var("APPDIR") else {
+        return command;
+    };
     for name in LISTS_APPRUN_CHANGES {
         if let Ok(value) = std::env::var(name) {
             match without(&value, &appdir) {
@@ -42,21 +44,40 @@ fn without_appimage(mut command: Command) -> Command {
 /// (`$APPDIR/usr/lib` on the library path first of all).
 #[cfg(target_os = "linux")]
 const LISTS_APPRUN_CHANGES: [&str; 16] = [
-    "LD_LIBRARY_PATH", "PATH", "XDG_DATA_DIRS", "PYTHONPATH", "PERLLIB", "QT_PLUGIN_PATH", "GSETTINGS_SCHEMA_DIR",
-    "GTK_DATA_PREFIX", "GI_TYPELIB_PATH", "GIO_MODULE_DIR", "GTK_EXE_PREFIX", "GTK_PATH", "GTK_IM_MODULE_FILE",
-    "GDK_PIXBUF_MODULE_FILE", "GST_PLUGIN_SYSTEM_PATH_1_0", "GST_PLUGIN_PATH_1_0",
+    "LD_LIBRARY_PATH",
+    "PATH",
+    "XDG_DATA_DIRS",
+    "PYTHONPATH",
+    "PERLLIB",
+    "QT_PLUGIN_PATH",
+    "GSETTINGS_SCHEMA_DIR",
+    "GTK_DATA_PREFIX",
+    "GI_TYPELIB_PATH",
+    "GIO_MODULE_DIR",
+    "GTK_EXE_PREFIX",
+    "GTK_PATH",
+    "GTK_IM_MODULE_FILE",
+    "GDK_PIXBUF_MODULE_FILE",
+    "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "GST_PLUGIN_PATH_1_0",
 ];
 /// What the hooks set outright, not paths: the theme (Adwaita, light or dark) and GStreamer's scanner settings.
 #[cfg(target_os = "linux")]
-const SETTINGS_APPRUN_MAKES: [&str; 4] =
-    ["GTK_THEME", "GST_REGISTRY_REUSE_PLUGIN_SCANNER", "GST_PLUGIN_SCANNER_1_0", "GST_PTP_HELPER_1_0"];
+const SETTINGS_APPRUN_MAKES: [&str; 4] = [
+    "GTK_THEME",
+    "GST_REGISTRY_REUSE_PLUGIN_SCANNER",
+    "GST_PLUGIN_SCANNER_1_0",
+    "GST_PTP_HELPER_1_0",
+];
 
 /// `list` (colon-separated) without the entries under `appdir`.
 #[cfg(any(target_os = "linux", test))]
 pub fn without(list: &str, appdir: &str) -> String {
     let appdir = appdir.trim_end_matches('/');
     list.split(':')
-        .filter(|entry| !entry.is_empty() && *entry != appdir && !entry.starts_with(&format!("{appdir}/")))
+        .filter(|entry| {
+            !entry.is_empty() && *entry != appdir && !entry.starts_with(&format!("{appdir}/"))
+        })
         .collect::<Vec<_>>()
         .join(":")
 }
@@ -65,7 +86,11 @@ pub fn without(list: &str, appdir: &str) -> String {
 /// app that is its own program (a PDF viewer) stays; either way it's reaped when it ends.
 pub fn start(program: &Path, args: &[String]) -> std::io::Result<()> {
     let mut command = outside(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -86,7 +111,9 @@ pub fn open(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
         return Ok(());
     }
     use tauri_plugin_opener::OpenerExt;
-    app.opener().open_path(path, None::<&str>).map_err(|error| error.to_string())
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 /// Shows `path` in the file manager, selected. On Linux the file manager is asked over D-Bus (it starts through the
@@ -104,7 +131,9 @@ pub fn reveal(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
         }
     }
     use tauri_plugin_opener::OpenerExt;
-    app.opener().reveal_item_in_dir(path).map_err(|error| error.to_string())
+    app.opener()
+        .reveal_item_in_dir(path)
+        .map_err(|error| error.to_string())
 }
 
 /// `org.freedesktop.FileManager1.ShowItems`, which Nautilus, Dolphin, Thunar and Nemo answer.
@@ -112,10 +141,16 @@ pub fn reveal(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
 fn show_items(path: &str) -> Result<(), String> {
     let url = tauri::Url::from_file_path(path).map_err(|_| "not an absolute path".to_string())?;
     let connection = zbus::blocking::Connection::session().map_err(|error| error.to_string())?;
-    let proxy = zbus::blocking::Proxy::new(&connection, "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
-                                           "org.freedesktop.FileManager1")
+    let proxy = zbus::blocking::Proxy::new(
+        &connection,
+        "org.freedesktop.FileManager1",
+        "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1",
+    )
+    .map_err(|error| error.to_string())?;
+    proxy
+        .call_method("ShowItems", &(vec![url.as_str()], ""))
         .map_err(|error| error.to_string())?;
-    proxy.call_method("ShowItems", &(vec![url.as_str()], "")).map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -126,11 +161,29 @@ mod tests {
     #[test]
     fn the_appimages_entries_come_off_a_list() {
         let appdir = "/tmp/.mount_DigUpAb12";
-        assert_eq!(without("/tmp/.mount_DigUpAb12/usr/bin:/usr/local/bin:/usr/bin", appdir), "/usr/local/bin:/usr/bin");
-        assert_eq!(without("/tmp/.mount_DigUpAb12//usr/lib:/tmp/.mount_DigUpAb12/usr/lib/x86_64-linux-gnu", appdir), "");
-        assert_eq!(without("/opt/own/lib:/tmp/.mount_DigUpAb12/usr/lib", appdir), "/opt/own/lib");
+        assert_eq!(
+            without(
+                "/tmp/.mount_DigUpAb12/usr/bin:/usr/local/bin:/usr/bin",
+                appdir
+            ),
+            "/usr/local/bin:/usr/bin"
+        );
+        assert_eq!(
+            without(
+                "/tmp/.mount_DigUpAb12//usr/lib:/tmp/.mount_DigUpAb12/usr/lib/x86_64-linux-gnu",
+                appdir
+            ),
+            ""
+        );
+        assert_eq!(
+            without("/opt/own/lib:/tmp/.mount_DigUpAb12/usr/lib", appdir),
+            "/opt/own/lib"
+        );
         // Another mount with the same prefix isn't this one.
-        assert_eq!(without("/tmp/.mount_DigUpAb12x/lib", appdir), "/tmp/.mount_DigUpAb12x/lib");
+        assert_eq!(
+            without("/tmp/.mount_DigUpAb12x/lib", appdir),
+            "/tmp/.mount_DigUpAb12x/lib"
+        );
         assert_eq!(without("", appdir), "");
     }
 }

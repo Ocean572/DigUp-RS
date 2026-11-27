@@ -67,7 +67,10 @@ pub struct WindowPlace {
 impl Settings {
     /// The file's settings, or the defaults when there's none (or it can't be read).
     pub fn load(path: &Path) -> Settings {
-        std::fs::read(path).ok().and_then(|data| serde_json::from_slice(&data).ok()).unwrap_or_default()
+        std::fs::read(path)
+            .ok()
+            .and_then(|data| serde_json::from_slice(&data).ok())
+            .unwrap_or_default()
     }
 
     /// Written whole to a temporary file first, so a crash never leaves half of it.

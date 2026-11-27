@@ -429,6 +429,30 @@ PRAGMA user_version = 5;"
         Ok(out)
     }
 
+    /// The row sharing a file's `(device, inode)`, wherever its path is (issue #7a: a scoped
+    /// sync's move across the scope's edge — `Indexer::sync_scoped`'s reason). The lookup's
+    /// shape is the schema's own `CREATE INDEX files_inode ON files(device, inode)`; a
+    /// store-wide scan is not. Two spellings of one file are one inode, and re-pathing any
+    /// of them lands on the live path, so the newest row is as good a pick as any.
+    pub fn file_by_inode(&self, device: u64, inode: u64) -> Result<Option<FileRecord>> {
+        let mut found: Option<FileRecord> = None;
+        self.db.query(
+            &format!(
+                "SELECT {} FROM files WHERE device = ? AND inode = ? LIMIT 1",
+                Self::FILE_COLUMNS
+            ),
+            vec![Sql::Int(device as i64), Sql::Int(inode as i64)],
+            |row| {
+                let record = IndexStore::record(row);
+                if found.is_none() {
+                    found = Some(record);
+                }
+                Ok(())
+            },
+        )?;
+        Ok(found)
+    }
+
     /// The file changed on disk: drop what was extracted from it and queue it again
     /// (`requeue(_:as:)`, IndexStore.swift:634) — kind/size/date/inode/device ride the new
     /// reading; the name row stays.

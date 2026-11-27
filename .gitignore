@@ -104,3 +104,9 @@ deploy/docker-compose.rust.yml
 # in the 11.8 devel container — the flavor the host's 580 driver pairs with):
 # working artifacts, like Vendor/.
 /Vendor-cuda118/
+
+# The shell-graph target bind: a SYMLINK named target. `.gitignore` above has `/target/`, a
+# DIRECTORY pattern — git treats a symlink-to-a-dir as a FILE, so it is not covered, and
+# `git add -A` ships a local path into the pushed history (measured 2026-11-26: one commit
+# carried `target -> /home/dude/...`). Bare `/target` covers the symlink form too.
+/target

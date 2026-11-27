@@ -56,7 +56,8 @@ pub fn enable(path: &Path, helper: &Path, daemon_args: &[String]) -> Result<(), 
         );
     }
     let mut doc = read_document(path)?;
-    backup_once(path).map_err(|error| format!("cannot back up Claude Desktop's settings: {error}"))?;
+    backup_once(path)
+        .map_err(|error| format!("cannot back up Claude Desktop's settings: {error}"))?;
     let servers = doc
         .entry("mcpServers".to_string())
         .or_insert_with(|| json!({}));
@@ -77,7 +78,8 @@ pub fn disable(path: &Path) -> Result<(), String> {
         return Ok(());
     }
     let mut doc = read_document(path)?;
-    backup_once(path).map_err(|error| format!("cannot back up Claude Desktop's settings: {error}"))?;
+    backup_once(path)
+        .map_err(|error| format!("cannot back up Claude Desktop's settings: {error}"))?;
     if let Some(servers) = doc.get_mut("mcpServers").and_then(Value::as_object_mut) {
         servers.remove("digup");
     }

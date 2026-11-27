@@ -42,7 +42,9 @@ impl Updates {
     /// "installs"} (false where a new package has to be downloaded by hand).
     pub fn snapshot(&self) -> Value {
         let found = self.found.lock().unwrap();
-        let Some(update) = found.as_ref() else { return Value::Null };
+        let Some(update) = found.as_ref() else {
+            return Value::Null;
+        };
         let state = match *self.phase.lock().unwrap() {
             Phase::Downloading => "downloading",
             Phase::Installing => "installing",
@@ -77,7 +79,10 @@ pub fn installs_itself() -> bool {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|time| time.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|time| time.as_secs())
+        .unwrap_or(0)
 }
 
 /// A line in updates.log (beside the other logs), with the time in UTC.
@@ -89,17 +94,27 @@ fn log(shell: &Shell, line: &str) {
     let z = days as i64 + 719_468;
     let era = z.div_euclid(146_097);
     let day_of_era = z - era * 146_097;
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month + 2) / 5 + 1;
     let month = if month < 10 { month + 3 } else { month - 9 };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
-    let stamp = format!("{year}-{month:02}-{day:02} {:02}:{:02}:{:02}Z", rest / 3600, rest / 60 % 60, rest % 60);
+    let stamp = format!(
+        "{year}-{month:02}-{day:02} {:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest / 60 % 60,
+        rest % 60
+    );
     if cfg!(debug_assertions) {
         println!("updates: {line}");
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(shell.logs.join("updates.log")) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(shell.logs.join("updates.log"))
+    {
         let _ = writeln!(file, "{stamp} {line}");
     }
 }
@@ -109,7 +124,10 @@ fn log(shell: &Shell, line: &str) {
 /// one check at once (then `--debug-update-install` takes what it finds without asking).
 pub fn start(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
-    log(&shell, &format!("DigUp {} started", app.package_info().version));
+    log(
+        &shell,
+        &format!("DigUp {} started", app.package_info().version),
+    );
     let debug = shell.options.debug_update_check;
     if !debug && (cfg!(debug_assertions) || shell.dev_run()) {
         return;
@@ -151,11 +169,15 @@ pub async fn check(app: &AppHandle, asked: bool) {
     // Before DigUp exits for the Windows installer: the helpers stop, and any other `digup` it started (a speed check)
     // ends and is gone, or the installer can't replace their files.
     let exiting = app.clone();
-    let result = match app.updater_builder().on_before_exit(move || {
-        stop_helpers(&exiting);
-        crate::helper::end_all();
-        exiting.cleanup_before_exit();
-    }).build() {
+    let result = match app
+        .updater_builder()
+        .on_before_exit(move || {
+            stop_helpers(&exiting);
+            crate::helper::end_all();
+            exiting.cleanup_before_exit();
+        })
+        .build()
+    {
         Ok(updater) => updater.check().await,
         Err(error) => Err(error),
     };
@@ -167,7 +189,10 @@ pub async fn check(app: &AppHandle, asked: bool) {
     }
     match result {
         Ok(Some(update)) => {
-            log(&shell, &format!("found {} ({})", update.version, update.download_url));
+            log(
+                &shell,
+                &format!("found {} ({})", update.version, update.download_url),
+            );
             *shell.updates.found.lock().unwrap() = Some(update);
             changed(app);
             if asked {
@@ -185,13 +210,24 @@ pub async fn check(app: &AppHandle, asked: bool) {
             *shell.updates.found.lock().unwrap() = None;
             changed(app);
             if asked {
-                tell(app, "You're up to date", &format!("DigUp {} is the newest version.", app.package_info().version));
+                tell(
+                    app,
+                    "You're up to date",
+                    &format!(
+                        "DigUp {} is the newest version.",
+                        app.package_info().version
+                    ),
+                );
             }
         }
         Err(error) => {
             log(&shell, &format!("couldn't check: {error}"));
             if asked {
-                tell(app, "Check for Updates", &format!("DigUp couldn't check for updates: {error}"));
+                tell(
+                    app,
+                    "Check for Updates",
+                    &format!("DigUp couldn't check for updates: {error}"),
+                );
             }
         }
     }
@@ -200,20 +236,35 @@ pub async fn check(app: &AppHandle, asked: bool) {
 /// "Update to DigUp X…": what's new, then Install and Restart (or, for a .deb, the release page to download it from).
 pub fn offer(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
-    let Some(update) = shell.updates.found.lock().unwrap().clone() else { return };
+    let Some(update) = shell.updates.found.lock().unwrap().clone() else {
+        return;
+    };
     if *shell.updates.phase.lock().unwrap() != Phase::Idle {
-        return;   // already on its way
+        return; // already on its way
     }
     let installs = installs_itself();
-    let mut text = format!("DigUp {} is available. You have {}.", update.version, app.package_info().version);
-    if let Some(notes) = update.body.as_deref().map(str::trim).filter(|notes| !notes.is_empty()) {
+    let mut text = format!(
+        "DigUp {} is available. You have {}.",
+        update.version,
+        app.package_info().version
+    );
+    if let Some(notes) = update
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|notes| !notes.is_empty())
+    {
         text.push_str("\n\n");
         text.push_str(notes);
     }
     if !installs {
         text.push_str("\n\nDownload the new package from its release page and install it as you installed this one.");
     }
-    let (yes, no) = if installs { ("Install and Restart", "Not Now") } else { ("Download…", "Not Now") };
+    let (yes, no) = if installs {
+        ("Install and Restart", "Not Now")
+    } else {
+        ("Download…", "Not Now")
+    };
     let app = app.clone();
     app.clone()
         .dialog()
@@ -239,9 +290,11 @@ pub fn offer(app: &AppHandle) {
 /// DigUp exits as the installer begins).
 pub async fn install(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
-    let Some(update) = shell.updates.found.lock().unwrap().clone() else { return };
+    let Some(update) = shell.updates.found.lock().unwrap().clone() else {
+        return;
+    };
     if !installs_itself() {
-        return;   // a .deb (offer() opens the release page instead)
+        return; // a .deb (offer() opens the release page instead)
     }
     {
         let mut phase = shell.updates.phase.lock().unwrap();
@@ -259,10 +312,13 @@ pub async fn install(app: &AppHandle) {
         .download(
             |chunk, total| {
                 received += chunk as u64;
-                let Some(total) = total.filter(|total| *total > 0) else { return };
+                let Some(total) = total.filter(|total| *total > 0) else {
+                    return;
+                };
                 let percent = Some((received * 100 / total).min(100) as u8);
                 let shell = progress.state::<Arc<Shell>>();
-                let before = std::mem::replace(&mut *shell.updates.percent.lock().unwrap(), percent);
+                let before =
+                    std::mem::replace(&mut *shell.updates.percent.lock().unwrap(), percent);
                 if before != percent {
                     changed(&progress);
                 }
@@ -273,17 +329,32 @@ pub async fn install(app: &AppHandle) {
     // The signature is checked as the download ends: a file that doesn't match it never gets here.
     let bytes = match downloaded {
         Ok(bytes) => bytes,
-        Err(error) => return failed(app, &format!("couldn't download {}: {error}", update.version)),
+        Err(error) => {
+            return failed(
+                app,
+                &format!("couldn't download {}: {error}", update.version),
+            )
+        }
     };
     *shell.updates.phase.lock().unwrap() = Phase::Installing;
     changed(app);
-    log(&shell, &format!("installing {} ({} bytes, signature checked)", update.version, bytes.len()));
+    log(
+        &shell,
+        &format!(
+            "installing {} ({} bytes, signature checked)",
+            update.version,
+            bytes.len()
+        ),
+    );
     match update.install(bytes) {
         Ok(()) => {
             log(&shell, "starting again");
             app.restart();
         }
-        Err(error) => failed(app, &format!("couldn't install {}: {error}", update.version)),
+        Err(error) => failed(
+            app,
+            &format!("couldn't install {}: {error}", update.version),
+        ),
     }
 }
 
@@ -295,12 +366,20 @@ fn failed(app: &AppHandle, problem: &str) {
     *shell.updates.percent.lock().unwrap() = None;
     changed(app);
     if !shell.options.debug_update_install {
-        tell(app, "DigUp Update", &format!("The update didn't go through: {problem}"));
+        tell(
+            app,
+            "DigUp Update",
+            &format!("The update didn't go through: {problem}"),
+        );
     }
 }
 
 fn tell(app: &AppHandle, title: &str, text: &str) {
-    app.dialog().message(text).title(title).kind(MessageDialogKind::Info).show(|_| {});
+    app.dialog()
+        .message(text)
+        .title(title)
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
 }
 
 /// The GitHub release page of a release's download (…/releases/download/<tag>/<file> → …/releases/tag/<tag>), else
@@ -322,6 +401,9 @@ mod tests {
     fn release_pages() {
         assert_eq!(release_page("https://github.com/ARahim3/DigUp/releases/download/v0.7.0-beta.1/DigUp_0.7.0-beta.1_amd64.AppImage"),
                    "https://github.com/ARahim3/DigUp/releases/tag/v0.7.0-beta.1");
-        assert_eq!(release_page("http://127.0.0.1:8765/DigUp.AppImage"), "https://github.com/Ocean572/DigUp-RS/releases");
+        assert_eq!(
+            release_page("http://127.0.0.1:8765/DigUp.AppImage"),
+            "https://github.com/Ocean572/DigUp-RS/releases"
+        );
     }
 }
