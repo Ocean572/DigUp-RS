@@ -48,8 +48,16 @@ pub fn read_text(path: &std::path::Path) -> Result<String, ExtractError> {
     } else if head.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return Ok(String::from_utf8_lossy(&bytes[3..]).into_owned());
     } else {
-        return Ok(String::from_utf8(bytes.clone())
-            .unwrap_or_else(|_| bytes.iter().map(|byte| char::from(*byte)).collect()));
+        // #169: strict UTF-8 wins; a legacy family the bytes decode CLEANLY in wins next;
+        // the pinned Latin-1 stays the answer when the sniff declines (Foundation parity,
+        // `tests/doc.rs` pins every row of it).
+        return Ok(match String::from_utf8(bytes.clone()) {
+            Ok(text) => text,
+            Err(_) => match crate::charset::sniff(&bytes) {
+                Some(sniffed) => sniffed.text,
+                None => crate::charset::latin1(&bytes),
+            },
+        });
     };
     // A BOM whose body does not decode falls back the way `readText` does: Latin-1 over the
     // whole file, BOM included.
@@ -57,7 +65,7 @@ pub fn read_text(path: &std::path::Path) -> Result<String, ExtractError> {
 }
 
 fn fallback_latin1(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| char::from(*byte)).collect()
+    crate::charset::latin1(bytes)
 }
 
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> Option<String> {

@@ -20,6 +20,8 @@ half = { workspace = true }
 memmap2 = { workspace = true }
 libc = { workspace = true }
 walkdir = { workspace = true }
+# #169: the legacy-encoding sniff (see `charset.rs`).
+encoding_rs = { workspace = true }
 flate2 = { workspace = true }
 regex = { workspace = true }
 

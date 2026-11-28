@@ -289,11 +289,13 @@ pub fn parameter(name: &str, value: Option<&str>) -> Option<String> {
 /// The bytes of a decoded body (or of an RFC 2047 encoded-word) read in the charset its header
 /// declares. UTF-8 is the default and the fallback; the two families mail before ~2008 sends are
 /// named here because reading their high bytes as UTF-8 gives the replacement character for every
-/// accented letter, and an accented word is a word keyword search cannot find. Any other
-/// declared charset reads as UTF-8.
+/// accented letter, and an accented word is a word keyword search cannot find. Any OTHER declared
+/// charset reads in its own label (#169: the header's own name is a fact, not a sniff — the whole
+/// WHATWG label table decodes it); an undeclared body takes the same decline-by-default sniff as
+/// the text readers, and the pinned UTF-8 answer when the sniff declines.
 pub fn decoded(bytes: &[u8], charset: Option<&str>) -> String {
     match charset_name(charset).as_str() {
-        "iso88591" | "latin1" => bytes.iter().map(|byte| char::from(*byte)).collect(),
+        "iso88591" | "latin1" => crate::charset::latin1(bytes),
         "windows1252" | "cp1252" | "1252" => bytes
             .iter()
             .map(|byte| {
@@ -307,7 +309,14 @@ pub fn decoded(bytes: &[u8], charset: Option<&str>) -> String {
                 }
             })
             .collect(),
-        _ => String::from_utf8_lossy(bytes).into_owned(),
+        _ => {
+            // Swift parity (MailMessage.swift:217-219): every declared charset other than
+            // iso-8859-1/windows-1252 — and no charset — reads as UTF-8, replacement characters
+            // included. This is the cross-engine-gate law the `charset=us-ascii` receipt pins:
+            // a UTF-8 em dash is ONE character here, never three. #169's sniff is for TEXT
+            // files (readText/DocExtractor/code readers); mail stays the pinned relay.
+            String::from_utf8_lossy(bytes).into_owned()
+        }
     }
 }
 

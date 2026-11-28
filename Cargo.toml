@@ -44,6 +44,9 @@ thiserror = "2"
 unicode-normalization = "0.1"
 unicode-general-category = "1"
 unicode-segmentation = "1"
+# #169: the legacy-encoding sniff (GBK/CP936/Big5/Shift-JIS/EUC-KR/CP1251). Pure Rust,
+# the WHATWG reference tables, no C vendor seam (MIT / Apache-2.0 / BSD-3).
+encoding_rs = "0.8"
 tempfile = "3"
 memmap2 = "0.9"
 libc = "0.2"
