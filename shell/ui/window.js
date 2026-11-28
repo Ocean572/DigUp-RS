@@ -908,6 +908,15 @@ function bigView(hit) {
   }
   image.ondblclick = () => { closeBig(); open(hit); };
   view.append(image);
+  // Issue #99: the big look shows its highlighted hits too. The page image carries the
+  // picture; the sentence the engine matched rides on the sheet below it, the query's own
+  // words marked (the passage marking, the same spelling as the list and the quick panel).
+  if (hit.excerpt) {
+    const strip = element("div", "found-here");
+    strip.innerHTML = highlighted(hit.excerpt, state.query, foundWords(hit.excerpt));
+    if (isRightToLeft(hit.excerpt)) strip.dir = "rtl";
+    view.append(strip);
+  }
   return view;
 }
 

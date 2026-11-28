@@ -1043,6 +1043,7 @@ fn main() {
             pause_indexing,
             remove_folder,
             set_skipped,
+            set_code_skipped,
             set_skip_types,
             set_index_hours,
             code_setup_info,
@@ -2183,6 +2184,26 @@ fn set_skipped(
     {
         let mut settings = shell.settings.lock().unwrap();
         settings.skipped = skipped;
+        settings
+            .save(&shell.settings_path)
+            .map_err(|error| format!("can't save the settings: {error}"))?;
+    }
+    apply_folders(&app);
+    Ok(())
+}
+
+/// Settings → Code (issue #129): the folders skipped INSIDE the code folders — the code twin
+/// of `set_skipped`. The crawl reads them on every pass (the same list onboarding writes),
+/// so saving and re-applying is the whole answer; Remove is "index this folder again".
+#[tauri::command]
+fn set_code_skipped(
+    app: AppHandle,
+    shell: State<'_, Arc<Shell>>,
+    skipped: Vec<String>,
+) -> Result<(), String> {
+    {
+        let mut settings = shell.settings.lock().unwrap();
+        settings.code_skipped = skipped;
         settings
             .save(&shell.settings_path)
             .map_err(|error| format!("can't save the settings: {error}"))?;

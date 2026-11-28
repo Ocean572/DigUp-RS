@@ -426,7 +426,16 @@ function renderBig() {
   }
   const box = element("div", "view");
   box.append(view);
-  $big.replaceChildren(head, box);
+  // Issue #99 on the quick panel too: the matched sentence below the picture, the query's
+  // words marked — a footer band in the sheet, so the picture keeps its full height.
+  const kids = [head, box];
+  if (hit.excerpt) {
+    const strip = element("div", "found-here");
+    strip.innerHTML = highlighted(hit.excerpt, state.text, foundWords(hit.excerpt));
+    if (isRightToLeft(hit.excerpt)) strip.dir = "rtl";
+    kids.push(strip);
+  }
+  $big.replaceChildren(...kids);
 }
 
 function message(title, text) {
