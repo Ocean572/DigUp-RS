@@ -64,6 +64,10 @@ windows-sys = { version = "0.61", features = [
 # supports case-insensitive class-free patterns the way Foundation's `NSRegularExpression` does.
 flate2 = "1"
 regex = "1"
+# F-D (#171 era, user law 2026-11-28 — pure Rust, no new C deps): the legacy Word `.doc`
+# reader opens the OLE compound container with `cfb` (MIT, pure Rust — no vendor seam, rides
+# the payload notices via the crate graph). The FIB/piece-table decode in `word.rs` is ours.
+cfb = "0.16"
 # Phase 2 step 8c (crates/native): the vendored stb builds with `cc` — the same single translation
 # unit and the same `-w` the Swift package's CStb target uses, so decodes, resizes and writes are
 # the engine's own C code, not a Rust reimplementation of it.

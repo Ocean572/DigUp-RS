@@ -9,7 +9,7 @@ use std::sync::{LazyLock, Mutex};
 use regex::Regex;
 
 use crate::extract::ExtractError;
-use crate::{mail, office, rtf, zipfile};
+use crate::{mail, office, rtf, word, zipfile};
 
 /// Plain text from one file, as the indexer reads it.
 pub fn text_of(path: &std::path::Path) -> Result<String, ExtractError> {
@@ -131,14 +131,12 @@ fn as_html(xml: &str, paragraphs: &[&str], breaks: &[&str], spaces: &[&str]) -> 
 
 fn rich_text(path: &std::path::Path, ext: &str) -> Result<String, ExtractError> {
     // `richText` answers the text file's own words BEFORE it opens a zip: an RTF is not a zip,
-    // and a legacy .doc refuses without reading anything.
+    // and a legacy .doc is an OLE compound file — the `word` reader (F-D) opens it, pure Rust.
     if ext == "rtf" {
         return Ok(rtf::text(&read_text(path)?));
     }
     if ext == "doc" {
-        return Err(ExtractError::Unreadable {
-            why: "legacy Word (.doc) files aren't read on this system".into(),
-        });
+        return word::text(path);
     }
     let zip = zipfile::ZipArchive::open(path)?;
     match ext {

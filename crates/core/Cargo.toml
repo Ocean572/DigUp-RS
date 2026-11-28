@@ -22,6 +22,7 @@ libc = { workspace = true }
 walkdir = { workspace = true }
 flate2 = { workspace = true }
 regex = { workspace = true }
+cfb = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
