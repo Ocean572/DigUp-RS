@@ -84,6 +84,7 @@ jobs:
           export CC=clang CXX=clang++
           tries=0; until ./scripts/build-llama.sh; do tries=$((tries+1)); [ "$tries" -ge 3 ] && exit 1; \
             echo "build-llama: attempt $tries failed; retrying in 30 s"; sleep 30; done
+          scripts/build-libraw.sh
         shell: bash
       - name: Model files, pinned by crates/runtime/src/models.rs (server.yml's recipe)
         run: |
@@ -303,6 +304,7 @@ jobs:
         run: |
           scripts/fetch-vendor.sh
           scripts/build-llama.sh
+          scripts/build-libraw.sh
           ${{ matrix.script }}
       - name: Payload (Windows — Git bash in the MSVC environment, the loader's own-folder rule)
         if: matrix.name == 'windows-x86_64'
@@ -314,6 +316,7 @@ jobs:
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           scripts/fetch-vendor.sh
           scripts/build-llama.sh
+          scripts/build-libraw.sh   # exits with a note on Windows: camera RAW keeps the notReadYet decline
           scripts/rust/package-windows.sh
       - name: The glibc floor of §11 (the payload is built in 22.04 and asks 2.35)
         if: startsWith(matrix.name, 'linux')

@@ -62,13 +62,19 @@ jobs:
         with:
           path: Vendor/llama
           key: llama-linux-cpu-${{ hashFiles('scripts/build-llama.sh') }}
-      - name: Vendored libraries, ffmpeg, llama.cpp
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Vendor/libraw
+          key: libraw-linux-${{ hashFiles('scripts/build-libraw.sh', 'scripts/fetch-vendor.sh') }}
+      - name: Vendored libraries, ffmpeg, llama.cpp, LibRaw
         # The small ffmpeg the packages carry (the image and video tests read HEIC, WebP and MPEG-TS through it);
         # built once per version of its script, then cached. llama.cpp with the CPU backend only.
+        # LibRaw (camera RAW, #152): the vendor tree's own make, static, cached the same way.
         run: |
           scripts/fetch-vendor.sh
           scripts/build-ffmpeg.sh
           scripts/build-llama.sh
+          scripts/build-libraw.sh
       - name: Format gate
         run: cargo fmt --all --check
       - name: Clippy

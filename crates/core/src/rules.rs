@@ -164,10 +164,13 @@ pub const PACKAGE_EXTENSIONS: [&str; 19] = [
     "dmg",
 ];
 
-/// RAW pictures, which nothing here decodes yet, are still images: they fail with a note.
-pub const IMAGE_EXTENSIONS: [&str; 25] = [
+/// RAW pictures are images: where the build links LibRaw (#152: Linux and macOS) they decode,
+/// elsewhere (Windows) they fail with `notReadYet`'s note. SVG joins the family through resvg
+/// (Feature C) on every platform — it is pure Rust.
+pub const IMAGE_EXTENSIONS: [&str; 26] = [
     "jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "heif",
     "avif", "psd", "tga", "pnm", "ppm", "pgm", "cr2", "nef", "arw", "dng", "raf", "orf", "rw2",
+    "svg",
 ];
 
 pub const AUDIO_EXTENSIONS: [&str; 16] = [

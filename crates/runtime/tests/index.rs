@@ -1069,3 +1069,153 @@ fn cross_engine_index_build() {
         compare_answers(&format!("dump {tag}"), &got, &vendored, !recorded, &mut bar);
     }
 }
+
+#[test]
+fn raw_pictures_index_like_photos() {
+    // #152, the Rust-side proof. The Swift-era engine DECLINED every RAW extension
+    // (`notReadYet`), so the cross-engine fixture corpus stays untouched: a file Swift refuses
+    // and Rust indexes IS a gate difference by the gate's own law, and Swift has no answer to
+    // pin. This test indexes the public RAW samples (DIGUP_RAW_FIXTURES, the suite-corpus
+    // convention: fetched, out of git) and pins the photo family's outcome: every file done,
+    // each with its pixels recorded and its vector in the store.
+    let Some(models) = models_or_skip() else {
+        return;
+    };
+    let samples = match std::env::var("DIGUP_RAW_FIXTURES") {
+        Ok(folder) if Path::new(&folder).is_dir() => PathBuf::from(folder),
+        _ => {
+            eprintln!("skipped: DIGUP_RAW_FIXTURES is not set (public RAW samples)");
+            return;
+        }
+    };
+    let names = [
+        "RAW_LEICA_M8.DNG",
+        "RAW_NIKON_D90.NEF",
+        "RAW_SONY_A700.ARW",
+        "sample_canon_400d1.cr2",
+    ];
+    let work = tempfile::tempdir().expect("a work folder");
+    let corpus = work.path().join("corpus");
+    let index = work.path().join("index");
+    std::fs::create_dir_all(&corpus).expect("the corpus folder");
+    std::fs::create_dir_all(&index).expect("the index folder");
+    for name in names {
+        std::fs::copy(samples.join(name), corpus.join(name))
+            .expect("the RAW fixture is fetched (DIGUP_RAW_FIXTURES)");
+    }
+    let events = index_all(&corpus, &index, false, &models);
+
+    let mut answered = 0;
+    for line in &events {
+        if line["type"] != "event" {
+            continue;
+        }
+        let path = line["path"].as_str().unwrap_or("");
+        let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+        if ["dng", "nef", "arw", "cr2"].contains(&ext.as_str()) {
+            answered += 1;
+            assert_eq!(
+                line["state"].as_str(),
+                Some("done"),
+                "{path}: the RAW file's state"
+            );
+        }
+    }
+    assert_eq!(answered, 4, "every RAW fixture answered an event line");
+
+    let conn = rusqlite::Connection::open(index.join(MAIN_FILE)).expect("the built index");
+    let (files, kind, width): (i64, String, String) = conn
+        .query_row(
+            "SELECT count(*), min(kind), min(json_extract(info, '$.width')) FROM files WHERE state = 'done'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("the done rows");
+    assert_eq!(files, 4, "the files table, done rows");
+    assert_eq!(kind, "image", "RAW joins the image family");
+    assert!(
+        width.parse::<i64>().unwrap_or(0) >= 1000,
+        "the pictures' own widths recorded: {width}"
+    );
+    let vectors: i64 = conn
+        .query_row(
+            "SELECT count(DISTINCT file) FROM segments WHERE vec IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("the vector rows");
+    assert_eq!(vectors, 4, "each RAW picture carries its own vector");
+}
+
+#[test]
+fn svg_pictures_index_like_photos() {
+    // Feature C, the Rust-side proof (the cross-engine corpus carries no SVGs, so there is
+    // no Swift answer to pin): the vector graphics index exactly like the photos the model
+    // already knows — done rows, the image family, their sizes recorded, one vector each.
+    let Some(models) = models_or_skip() else {
+        return;
+    };
+    let samples = match std::env::var("DIGUP_SVG_FIXTURES") {
+        Ok(folder) if Path::new(&folder).is_dir() => PathBuf::from(folder),
+        _ => {
+            eprintln!("skipped: DIGUP_SVG_FIXTURES is not set (public SVG samples)");
+            return;
+        }
+    };
+    let names = [
+        "Wikimedia_Bangladesh_logo.svg",
+        "Physical_World_Map.svg",
+        "Periodic_table.svg",
+        "Slovenian_vowel_chart.svg",
+    ];
+    let work = tempfile::tempdir().expect("a work folder");
+    let corpus = work.path().join("corpus");
+    let index = work.path().join("index");
+    std::fs::create_dir_all(&corpus).expect("the corpus folder");
+    std::fs::create_dir_all(&index).expect("the index folder");
+    for name in names {
+        std::fs::copy(samples.join(name), corpus.join(name))
+            .expect("the SVG fixture is fetched (DIGUP_SVG_FIXTURES)");
+    }
+    let events = index_all(&corpus, &index, false, &models);
+
+    let mut answered = 0;
+    for line in &events {
+        if line["type"] != "event" {
+            continue;
+        }
+        if line["path"].as_str().unwrap_or("").ends_with(".svg") {
+            answered += 1;
+            assert_eq!(
+                line["state"].as_str(),
+                Some("done"),
+                "{}: the SVG's state",
+                line["path"]
+            );
+        }
+    }
+    assert_eq!(answered, 4, "every SVG fixture answered an event line");
+
+    let conn = rusqlite::Connection::open(index.join(MAIN_FILE)).expect("the built index");
+    let (files, kind, width): (i64, String, String) = conn
+        .query_row(
+            "SELECT count(*), min(kind), min(json_extract(info, '$.width')) FROM files WHERE state = 'done'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("the done rows");
+    assert_eq!(files, 4, "the files table, done rows");
+    assert_eq!(kind, "image", "SVG joins the image family");
+    assert!(
+        width.parse::<i64>().unwrap_or(0) >= 500,
+        "the pictures' own widths recorded: {width}"
+    );
+    let vectors: i64 = conn
+        .query_row(
+            "SELECT count(DISTINCT file) FROM segments WHERE vec IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("the vector rows");
+    assert_eq!(vectors, 4, "each SVG carries its own vector");
+}

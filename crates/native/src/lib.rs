@@ -15,5 +15,7 @@ pub mod ffmpeg;
 pub mod image;
 pub mod media;
 pub mod pdf;
+pub mod raw;
 pub mod rgb;
 pub mod stb;
+pub mod svg;
