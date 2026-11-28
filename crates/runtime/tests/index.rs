@@ -1069,3 +1069,122 @@ fn cross_engine_index_build() {
         compare_answers(&format!("dump {tag}"), &got, &vendored, !recorded, &mut bar);
     }
 }
+
+#[test]
+fn password_protected_files_fail_and_the_queue_moves_on() {
+    // Issues #171 + #182's queue shape, the Rust-side proof (measured on this box
+    // 2026-11-28, DIGUP_DECODE_FIXTURES: encrypted Office files + a tiled TIFF, fixtures
+    // held out of git). #171 crashed the Swift helper on Windows (Foundation.dll, illegal
+    // instruction, on "Encrypt with Password" OOXML); #182's watchdog killed the Swift
+    // indexer (exit 5) on files over its memory limit, the same files were retried every
+    // restart, and 55k files sat behind them. The engine's answer is a refusal per file and
+    // a queue that moves: encrypted files FAIL BY NAME, the run completes, the readable
+    // file beside them indexes, and the NEXT run queues none of them again — a failed row
+    // is terminal, not pending.
+    let Some(models) = models_or_skip() else {
+        return;
+    };
+    let samples = match std::env::var("DIGUP_DECODE_FIXTURES") {
+        Ok(folder) if Path::new(&folder).is_dir() => PathBuf::from(folder),
+        _ => {
+            eprintln!(
+                "skipped: DIGUP_DECODE_FIXTURES is not set (encrypted Office + tiled TIFF samples)"
+            );
+            return;
+        }
+    };
+    let work = tempfile::tempdir().expect("a work folder");
+    let corpus = work.path().join("corpus");
+    let index = work.path().join("index");
+    std::fs::create_dir_all(&corpus).expect("the corpus folder");
+    std::fs::create_dir_all(&index).expect("the index folder");
+    for name in ["encrypted.docx", "encrypted.xlsx", "tiled_lzw.tif"] {
+        std::fs::copy(samples.join(name), corpus.join(name))
+            .expect("the decode fixture is fetched (DIGUP_DECODE_FIXTURES)");
+    }
+    let events = index_all(&corpus, &index, false, &models);
+
+    let mut states: BTreeMap<String, (String, String)> = BTreeMap::new();
+    for line in &events {
+        if line["type"] != "event" {
+            continue;
+        }
+        let name = line["path"]
+            .as_str()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        states.insert(
+            name,
+            (
+                line["state"].as_str().unwrap_or("").to_string(),
+                line["note"].as_str().unwrap_or("").to_string(),
+            ),
+        );
+    }
+    assert_eq!(
+        states
+            .get("encrypted.docx")
+            .map(|(state, note)| (state.as_str(), note.as_str())),
+        Some(("failed", "unreadable: not a zip file")),
+        "the CFB container through the doc reader: refused as what it is"
+    );
+    assert_eq!(
+        states
+            .get("encrypted.xlsx")
+            .map(|(state, note)| (state.as_str(), note.as_str())),
+        Some(("failed", "password-protected")),
+        "the encrypted workbook fails, it does not crash the reader"
+    );
+    assert_eq!(
+        states.get("tiled_lzw.tif").map(|(state, _)| state.as_str()),
+        Some("done"),
+        "the readable file beside them indexes: {:?}",
+        states.get("tiled_lzw.tif")
+    );
+    let failed: Vec<&String> = states
+        .values()
+        .filter(|(state, _)| state == "failed")
+        .map(|(state, _)| state)
+        .collect();
+    assert_eq!(failed.len(), 2, "both encrypted files answered failed");
+
+    // The stall's cure, pinned: the next pass queues nothing. Sync sees the files unchanged
+    // and the run answers NO file events — a failed row is never re-tried.
+    let again = index_all(&corpus, &index, false, &models);
+    let queued = again
+        .iter()
+        .find(|line| line["type"] == "sync")
+        .expect("the second sync");
+    assert_eq!(queued["added"].as_f64(), Some(0.0), "nothing new");
+    assert_eq!(queued["changed"].as_f64(), Some(0.0), "nothing changed");
+    let file_events = again.iter().filter(|line| line["type"] == "event").count();
+    assert_eq!(
+        file_events, 0,
+        "the second run re-read none of the failed files (the #182 retry storm)"
+    );
+
+    let conn = rusqlite::Connection::open(index.join(MAIN_FILE)).expect("the built index");
+    let (done, failed_rows): (i64, i64) = conn
+        .query_row(
+            "SELECT sum(state = 'done'), sum(state = 'failed') FROM files",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("the file rows");
+    assert_eq!(done, 1, "the tiled TIFF is the searchable row");
+    assert_eq!(failed_rows, 2, "the encrypted rows stand as failed");
+    let pending: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM files WHERE state = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("the pending rows");
+    assert_eq!(
+        pending, 0,
+        "a failed row is terminal: nothing queues behind it"
+    );
+}
