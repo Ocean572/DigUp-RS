@@ -39,8 +39,13 @@
 //!     files share one shape. Undeclared files of those families ride the CJK reading the
 //!     share contest picks (measured and pinned: EUC-KR rides gb18030, EUC-JP rides Big5);
 //!     telling them apart is the same frequency-model round.
-//! Mail that DECLARES any charset (GBK, Big5, Shift-JIS, EUC-KR, windows-1251, …) is decoded
-//! exactly by the header's own label — `mail::decoded` uses the declared fact, never a sniff.
+//! Mail is NOT a client of the sniff: `mail::decoded` is the pinned Swift relay — only
+//! iso-8859-1/windows-1252 get their tables and every OTHER declared charset (and none)
+//! reads as UTF-8-lossy (MailMessage.swift:217). The cross-engine gate pinned this law on
+//! the receipt fixture (`charset=us-ascii` with a UTF-8 em dash: ONE character, never
+//! three — the WHATWG label table redirects ascii labels to windows-1252, and reading the
+//! em dash "in" it emits the mojibake the gate refused). Declared-charset decoding for the
+//! legacy families is a separate, measured round, not #169's.
 //!
 //! Determinism: a pure function over the file's bytes — fixed candidate order, fixed
 //! thresholds, no statistics across files, no per-process state, nothing that changes between
@@ -316,8 +321,7 @@ mod tests {
         // family the share contest picks takes it (measured: EUC-KR rides gb18030, EUC-JP
         // rides Big5 — the deterministic result of the pure function, pinned verbatim). An
         // improvement over the Latin-1 they used to get, not a full cure; the frequency-model
-        // round is the cure, and mail that DECLARES EUC-KR/EUC-JP is decoded exactly by its
-        // header's label.
+        // round is the cure. (Mail is the pinned Swift relay, module comment.)
         let euc = EUC_KR
             .encode("회의록: 오늘 한국어 검색 인코딩 논의 meeting 2024\n")
             .0
@@ -337,9 +341,9 @@ mod tests {
         // The scoped law, pinned: real Cyrillic runs break the GB18030 clean-decode gate on
         // odd-length word runs (a lone high byte before a space is an illegal GB trail), and
         // even runs that read as clean CJK are indistinguishable from Chinese without a
-        // letter-frequency model. The decline is the honest result. (Mail that DECLARES
-        // windows-1251 is decoded exactly by its header's name: `mail::decoded`'s label
-        // path, not the sniff.)
+        // letter-frequency model. The decline is the honest result. (Mail is the pinned
+        // Swift relay — `mail::decoded` reads every non-Latin-1/CP1252 declaration as
+        // UTF-8, module comment.)
         let koi = KOI8_R
             .encode("Привет, это русский текст report 2024\n")
             .0

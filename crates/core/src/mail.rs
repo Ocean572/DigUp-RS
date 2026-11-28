@@ -310,27 +310,12 @@ pub fn decoded(bytes: &[u8], charset: Option<&str>) -> String {
             })
             .collect(),
         _ => {
-            // #169. A declared charset is a FACT, not a guess: `encoding_rs` knows the label
-            // (GBK, GB2312, CP936, Big5, Shift-JIS, EUC-KR, KS_C_5601, windows-1251, KOI8-R,
-            // ISO-2022-KR, the whole WHATWG label table), so the body reads in the charset its
-            // own header names. With NO declared charset, the bytes go through the same
-            // decline-by-default sniff as the text readers — legacy 8-bit bodies (the shape
-            // pre-2008 mail wrote with `Content-Type: text/plain` and no charset) decode as
-            // their own script. Undeclared bytes the sniff declines keep the pinned answer.
-            if let Some(charset) = charset.filter(|name| !name.trim().is_empty()) {
-                if let Some(encoding) = encoding_rs::Encoding::for_label(charset.as_bytes()) {
-                    return encoding
-                        .decode_without_bom_handling_and_without_replacement(bytes)
-                        .map(|text| text.into_owned())
-                        .unwrap_or_else(|| {
-                            encoding.decode_without_bom_handling(bytes).0.into_owned()
-                        });
-                }
-            }
-            match crate::charset::sniff(bytes) {
-                Some(sniffed) => sniffed.text,
-                None => String::from_utf8_lossy(bytes).into_owned(),
-            }
+            // Swift parity (MailMessage.swift:217-219): every declared charset other than
+            // iso-8859-1/windows-1252 — and no charset — reads as UTF-8, replacement characters
+            // included. This is the cross-engine-gate law the `charset=us-ascii` receipt pins:
+            // a UTF-8 em dash is ONE character here, never three. #169's sniff is for TEXT
+            // files (readText/DocExtractor/code readers); mail stays the pinned relay.
+            String::from_utf8_lossy(bytes).into_owned()
         }
     }
 }
