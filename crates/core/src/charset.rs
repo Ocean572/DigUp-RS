@@ -30,10 +30,16 @@
 //!
 //! THE DECLINED FAMILIES (each pinned by a test, each an honest decline, not a miss):
 //!   • Western single-byte (Latin-1 pins stay — module comment).
-//!   • windows-1251 / KOI8-R: Cyrillic high-high pairs land in the GB2312 core grid and read
-//!     as clean CJK; telling Cyrillic from Chinese needs a letter-frequency model — its own
-//!     round. Real Cyrillic runs also break GB18030 on odd-length word runs (measured: the
-//!     files decline outright).
+//!   • windows-1251 / KOI8-R: Cyrillic high-high pairs land in the GB2312 core grid (trail
+//!     shape 1.0) and map to clean CJK ideographs — telling Cyrillic from Chinese needs a
+//!     letter-frequency model, its own round. The measured shape: real Cyrillic prose is
+//!     full of odd-length word runs, and a lone high byte before a space is an illegal GB
+//!     trail, so the clean-decode gate declines real Cyrillic files — the short pinned line
+//!     AND a 2 320-character one, in windows-1251 and KOI8-R alike (measured digit-for-digit,
+//!     pinned below). And a Cyrillic PROBE cannot close the gap: windows-1251/KOI8-R spell
+//!     Cyrillic letters with exactly the high bytes the GB2312 grid uses for Chinese, so a
+//!     GBK file decoded as windows-1251 reads ~half Cyrillic — the probe fires on the
+//!     Chinese corpus itself.
 //!   • EUC-KR / EUC-JP: their grid IS the GB2312 grid (pairs 0xA1–0xFE × 0xA1–0xFE), so no
 //!     table-free test separates them from GBK — the Chinese corpus and Korean/Japanese-EUC
 //!     files share one shape. Undeclared files of those families ride the CJK reading the
@@ -60,9 +66,10 @@ use encoding_rs::BIG5;
 use encoding_rs::GB18030;
 use encoding_rs::SHIFT_JIS;
 
-/// The families the sniff can win for, in the order a tie falls through: the two whose byte
-/// shape is separable from GB18030's superset reading (Big5's 0x40–0x7E trails, Shift-JIS's
-/// 0x80–0xA0 trails) behind the corpus family itself.
+/// The families the sniff can win for, in priority order: the two whose byte shape is
+/// separable from GB18030's superset reading (Big5's 0x40–0x7E trails, Shift-JIS's
+/// 0x80–0xA0 trails) behind the corpus family itself. The ranking is by own-script share
+/// (the module's tie law below); this is the fixed order a tie falls through, GB18030 first.
 const CANDIDATES: &[&Encoding] = &[GB18030, BIG5, SHIFT_JIS];
 
 /// The share of the family's own script letters a candidate needs (of all decoded
@@ -141,6 +148,9 @@ fn is_own_script(code: u32, encoding: &'static Encoding) -> bool {
 /// (0x81–0xFE 0x30–0x39 0x81–0xFE 0x30–0x39 — rare CJK/emoji extensions) count as non-core;
 /// real corpus text has almost none, and the bar leaves them room.
 fn gb_trail_core_share(bytes: &[u8]) -> f64 {
+    if bytes.is_empty() {
+        return 0.0;
+    }
     let mut core = 0usize;
     let mut trails = 0usize;
     let mut i = 0usize;
@@ -161,7 +171,7 @@ fn gb_trail_core_share(bytes: &[u8]) -> f64 {
                 core += 1;
             }
             i += 2;
-        } else if (0x30..=0x39).contains(&trail) && i + 3 < bytes.len() {
+        } else if (0x30..=0x39).contains(&trail) && i + 4 <= bytes.len() {
             trails += 2; // the four-byte form's two digit trails: non-core
             i += 4;
         } else {
@@ -185,7 +195,8 @@ pub fn latin1(bytes: &[u8]) -> String {
 }
 
 /// What the sniff decided: the family's IANA name (encoding_rs's own spelling, so a log line
-/// names the family the file was read in) and the decoded text.
+/// names the family the file was read in) and the decoded text. Constructed only by `sniff`,
+/// which decodes exactly one of its candidate families.
 pub struct Sniffed {
     pub encoding: &'static str,
     pub text: String,
@@ -328,12 +339,29 @@ mod tests {
             .into_owned();
         let sniffed = sniff(&euc).expect("the shared grid decodes cleanly as CJK");
         assert_eq!(sniffed.encoding, "gb18030");
+        // The rides are CLEAN CJK readings, not replacement-character garbage that passed a
+        // lenient gate: the Hangul letters map to real ideographs (zero control characters
+        // in the decoded text, so every one is a letter, a digit, punctuation or whitespace).
+        let (decoded, had) = GB18030.decode_without_bom_handling(&euc);
+        assert!(!had, "the GB reading is clean");
+        assert_eq!(
+            tally(&decoded, GB18030).control,
+            0,
+            "no control characters in the ride"
+        );
         let eucjp = EUC_JP
             .encode("会議議事録：今日中文検索について議論 meeting 2024\n")
             .0
             .into_owned();
         let sniffed = sniff(&eucjp).expect("the shared grid decodes cleanly as CJK");
         assert_eq!(sniffed.encoding, "Big5");
+        let (decoded, had) = BIG5.decode_without_bom_handling(&eucjp);
+        assert!(!had, "the Big5 reading is clean");
+        assert_eq!(
+            tally(&decoded, BIG5).control,
+            0,
+            "no control characters in the ride"
+        );
     }
 
     #[test]
@@ -354,6 +382,16 @@ mod tests {
             .0
             .into_owned();
         assert!(sniff(&cp).is_none());
+        // The long case, pinned as measured (2026-11-28): 2 320 characters of real Cyrillic,
+        // windows-1251 and KOI8-R alike, decline too — real prose is full of odd-length word
+        // runs, and every lone high byte breaks the clean-decode gate on all three candidates
+        // (measured digit-for-digit: cp1251 → gb18030 had, Big5 had, Shift_JIS had; KOI8-R →
+        // same). The review round's "long clean Cyrillic rides gb18030" claim did NOT
+        // reproduce on this box, and its probe cannot exist anyway (module comment): the
+        // decline is the pinned answer for Cyrillic, short or long.
+        let long = "Привет, это длинный русский текст для проверки кодировки. ".repeat(40);
+        assert!(sniff(&WINDOWS_1251.encode(&long).0).is_none());
+        assert!(sniff(&KOI8_R.encode(&long).0).is_none());
     }
 
     #[test]
