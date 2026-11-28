@@ -1,0 +1,11 @@
+{
+  "version": "0.9.0",
+  "notes": "NEW in 0.9.0:\n• People — face recognition. Finds faces, clusters them into people you can\n  name, People filter on search. Consent-gated: you pick the recognition\n  model, then approve a one-time download from Hugging Face; photos never\n  leave your machine, and withdrawal never deletes them. Desktop + web.\n• Scoped search: `name:` prefix, search inside a folder/subfolder, extension\n  filters, per-folder skip lists — CLI, desktop app, and web.\n• Rendering fix for NVIDIA cards on Linux — the stale-paint/ghosting chase\n  closes with the measured webkit rendering config baked into the app\n  (no user env variables needed).\n• Settings upgrades: consent explanation, API-access section with minted\n  keys + browsable docs, agent-neutral MCP setup copy.\n• The README documents People, the MCP server for AI agents, and why the\n  face models are downloaded after consent, not packaged.\n\nIMPORTANT — update chain: this is the first release signed with the fork's\nown updater key. Desktop installs from 0.8.x (built with the old upstream\nkey) update by hand ONCE from this release page; installs from 0.9.0 onward\nself-update automatically from here on.\n\nKnown: in admin-key-only server deployments, starting an index job\n(POST /index with the admin key) can crash the API process — fix in\nprogress, ships in the next release; the desktop app is unaffected.\n\nInstall: payload tiles below (server/engine), the Homebrew formula, and the\ndesktop installers (Windows setup, Linux AppImage, macOS universal) attached\nwhen the Packages build turns green.",
+  "pub_date": "2026-11-26T18:46:52Z",
+  "platforms": {
+    "macos-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRdllqNzVKWndicU91Y2xERWNERm0vZnFrQS8vNkpKWTBiL0dMZzkwSXVFS0ZDMWNFS1JKOWRyV2I0c1phM3g1aUtrd0piak9iV2lzZCs0b0dUZVN5cWl6MkFUYjVTV0FZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzE4NzQ4CWZpbGU6RGlnVXBfMC45LjBfdW5pdmVyc2FsLmFwcC50YXIuZ3oJdmVyc2lvbjowLjkuMApRekpBVWFndGh4SlQ4M2lpTCtYNDluMmF1M2ZVTEZpZHNDVE4xOFJ6YXRSeFlRWEtVWVdsSnBhUHZXd0lxaytIWkJmZXZ6K2V5RmpDa0d3ckpjYU9CQT09Cg==",
+      "url": "https://github.com/Ocean572/DigUp-RS/releases/download/v0.9.0/DigUp_0.9.0_universal.app.tar.gz"
+    }
+  }
+}

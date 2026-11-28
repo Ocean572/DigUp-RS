@@ -374,9 +374,20 @@ fn path_words(root: &str) -> String {
 /// The file-id → path map (root spelled `C`) for the walk-order normalization.
 fn file_paths(index: &Path, sqlite: &str, root: &str) -> BTreeMap<i64, String> {
     let db = rusqlite::Connection::open(index.join(sqlite)).expect("open the index");
-    let mut rows = db
-        .prepare("SELECT id, path FROM files")
-        .expect("files for the id map");
+    // v7 (#195): the row is (anchor, rel) — the harness reads the ASSEMBLED absolute path,
+    // the same shape the engine answers, so the dump's root canonicalization (`root` → `C`)
+    // keeps comparing byte-identical to the Swift-era absolute rows. A v6 store (if the
+    // harness ever replays one) reads its stored path verbatim.
+    let version: i64 = db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(7);
+    let sql = if version >= 7 {
+        "SELECT f.id, CASE WHEN substr(a.abs, -1, 1) = '/' THEN a.abs || f.path ELSE a.abs || '/' || f.path END \
+         FROM files f JOIN anchors a ON a.id = f.anchor"
+    } else {
+        "SELECT id, path FROM files"
+    };
+    let mut rows = db.prepare(sql).expect("files for the id map");
     let map = rows
         .query_map([], |row| {
             Ok((
@@ -515,10 +526,16 @@ fn canonical_json(text: &str) -> String {
 fn dump_lines(index: &Path, file: &str, root: &str) -> Vec<String> {
     let db = rusqlite::Connection::open(index.join(file)).expect("open the index for the dump");
     let mut lines = Vec::new();
+    // v7 (#195): the Swift twin is frozen at schema 6 — the stamp is a layout fact, not an
+    // answer, so the harness canonicalizes 7 → 6. The store's shape is pinned on the core
+    // suites (storage.rs: fresh = 7); the dump compares Swift-era bytes.
     let version: i64 = db
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("user_version");
-    lines.push(format!("USER_VERSION|{version}"));
+    lines.push(format!(
+        "USER_VERSION|{}",
+        if version >= 7 { 6 } else { version }
+    ));
 
     let mut rows = db
         .prepare("SELECT key, value FROM meta ORDER BY key")
@@ -540,12 +557,19 @@ fn dump_lines(index: &Path, file: &str, root: &str) -> Vec<String> {
         ));
     }
 
-    let mut rows = db
-        .prepare(
-            "SELECT id, path, kind, size, mtime, inode, device, bucket, state, detail, info \
-             FROM files ORDER BY id",
-        )
-        .expect("files");
+    let version: i64 = db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(7);
+    let files_sql = if version >= 7 {
+        "SELECT f.id, \
+         CASE WHEN substr(a.abs, -1, 1) = '/' THEN a.abs || f.path ELSE a.abs || '/' || f.path END, \
+         f.kind, f.size, f.mtime, f.inode, f.device, f.bucket, f.state, f.detail, f.info \
+         FROM files f JOIN anchors a ON a.id = f.anchor ORDER BY f.id"
+    } else {
+        "SELECT id, path, kind, size, mtime, inode, device, bucket, state, detail, info \
+         FROM files ORDER BY id"
+    };
+    let mut rows = db.prepare(files_sql).expect("files");
     for row in rows
         .query_map([], |row| {
             let mut cells = Vec::with_capacity(11);
@@ -557,6 +581,22 @@ fn dump_lines(index: &Path, file: &str, root: &str) -> Vec<String> {
         .expect("files rows")
     {
         let row = row.expect("a files row");
+        // v7 (#195): the stored bucket is the anchor-prefixed counter key `"<id>/<rel bucket>"`
+        // — the dump compares Swift's `bucket_of(absolute)`, so the harness derives the SAME
+        // string from the ASSEMBLED path (the prefix key is internal to the layout, not a
+        // client fact; the engine never answers it).
+        let bucket_cell = if version >= 7 {
+            match &row[1] {
+                rusqlite::types::Value::Text(text) => rusqlite::types::Value::Text(
+                    text.rfind('/')
+                        .map(|i| text[..i].to_string())
+                        .unwrap_or_default(),
+                ),
+                other => other.clone(),
+            }
+        } else {
+            row[7].clone()
+        };
         // `info` carries folder facts too (a code file's info names its repo root) —
         // the canonical JSON gets the same `C` treatment as the path columns.
         let info = match &row[10] {
@@ -572,7 +612,7 @@ fn dump_lines(index: &Path, file: &str, root: &str) -> Vec<String> {
             cell(row[4].clone()),
             cell(row[5].clone()),
             cell(row[6].clone()),
-            cell(row[7].clone()).replace(root, "C"),
+            cell(bucket_cell).replace(root, "C"),
             cell(row[8].clone()),
             cell(row[9].clone()).replace(root, "C"),
             info,
@@ -606,6 +646,39 @@ fn dump_lines(index: &Path, file: &str, root: &str) -> Vec<String> {
         ));
     }
 
+    // v7 (#195): the counters keys are the anchor-prefixed buckets `"<anchor id>/<rel
+    // bucket>"` (root-level file: `"<id>/"`). Swift's dump carries `bucket_of(absolute)` —
+    // the harness derives the SAME string from the anchor (the prefix key is internal to the
+    // v7 layout; the engine never answers it), and re-sorts each block by the derived keys:
+    // Swift's ORDER BY rides its own key space, and the prefixed space orders multi-anchor
+    // rows differently. Within (bucket, col1) the primary key decides, so the re-sort
+    // reproduces Swift's line order exactly. A v6 store has no anchors table — keys verbatim.
+    let anchors: std::collections::BTreeMap<i64, String> =
+        match db.prepare("SELECT id, abs FROM anchors") {
+            Ok(mut rows) => rows
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .expect("anchors")
+                .collect::<Result<_, _>>()
+                .expect("anchor rows"),
+            Err(_) => std::collections::BTreeMap::new(),
+        };
+    let swift_bucket = |bucket: &str| -> String {
+        let Some((head, rest)) = bucket.split_once('/') else {
+            return bucket.to_string();
+        };
+        let Ok(id) = head.parse::<i64>() else {
+            return bucket.to_string();
+        };
+        match anchors.get(&id) {
+            Some(abs) if rest.is_empty() => abs.clone(),
+            Some(abs) if abs.ends_with('/') => format!("{abs}{rest}"),
+            Some(abs) => format!("{abs}/{rest}"),
+            None => bucket.to_string(),
+        }
+    };
+
     for (label, sql, columns) in [
         (
             "COUNTERS",
@@ -619,6 +692,7 @@ fn dump_lines(index: &Path, file: &str, root: &str) -> Vec<String> {
         ),
     ] {
         let mut rows = db.prepare(sql).expect(label);
+        let mut spelled_rows: Vec<Vec<String>> = Vec::new();
         for row in rows
             .query_map([], |row| {
                 let mut cells = Vec::with_capacity(columns);
@@ -630,10 +704,17 @@ fn dump_lines(index: &Path, file: &str, root: &str) -> Vec<String> {
             .expect("counter rows")
         {
             let row = row.expect("a counter row");
+            let mut spelled: Vec<String> = row.iter().map(|value| cell(value.clone())).collect();
+            spelled[0] = swift_bucket(&spelled[0]);
+            spelled_rows.push(spelled);
+        }
+        spelled_rows.sort_by(|a, b| a[0].cmp(&b[0]).then_with(|| a[1].cmp(&b[1])));
+        for spelled in spelled_rows {
             lines.push(format!(
                 "{label}|{}",
-                row.iter()
-                    .map(|value| cell(value.clone()).replace(root, "C"))
+                spelled
+                    .iter()
+                    .map(|value| value.replace(root, "C"))
                     .collect::<Vec<String>>()
                     .join("|")
             ));

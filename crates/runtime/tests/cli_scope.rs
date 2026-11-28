@@ -175,6 +175,7 @@ fn search_under_scopes_to_folder_and_worktree_main_repo() {
             &SearchOptions {
                 limit: 20,
                 under: Some(&billing_roots[..]),
+                person_files: None,
                 ..SearchOptions::default()
             },
         )
@@ -192,6 +193,7 @@ fn search_under_scopes_to_folder_and_worktree_main_repo() {
             &SearchOptions {
                 limit: 20,
                 under: Some(&shipping_roots[..]),
+                person_files: None,
                 ..SearchOptions::default()
             },
         )
@@ -210,6 +212,7 @@ fn search_under_scopes_to_folder_and_worktree_main_repo() {
             &SearchOptions {
                 limit: 20,
                 under: Some(&empty_roots[..]),
+                person_files: None,
                 ..SearchOptions::default()
             },
         )
@@ -251,6 +254,7 @@ fn search_under_scopes_to_folder_and_worktree_main_repo() {
             &SearchOptions {
                 limit: 20,
                 under: Some(&worktree_roots[..]),
+                person_files: None,
                 ..SearchOptions::default()
             },
         )

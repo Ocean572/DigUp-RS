@@ -33,6 +33,7 @@ freshness for the rest.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import time
@@ -76,6 +77,19 @@ class Faces:
     def consent_path(self) -> Path:
         return self.config_dir / "faces-consent.json"
 
+    def faces_home(self) -> Path:
+        """The device-side faces home (#195, the privacy move): the daemon's file
+        lives at `<config>/faces/<hash>/face.sqlite`, where <hash> is the first 16
+        hex of the sha256 over the INDEX FOLDER PATH — the store's device-local
+        identity. The anchors are NOT the key (measured 2026-11-27: a real v6→v7
+        migration creates one anchor per row cluster, and every folder the user adds
+        is a new anchor, so an anchor-keyed home would move under the running app).
+        The faces belong to the DEVICE that computed them, never to the folder: a
+        carried `.digup` carries its index, never the faces of its photos."""
+        key = str(self.index)
+        digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+        return self.config_dir / "faces" / digest
+
     def scan(self, body: dict | None = None):
         return self.client.post("/api/v1/faces/scan", json=body if body is not None else {})
 
@@ -105,8 +119,10 @@ def faces_corpus(corpus, tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def faces(faces_corpus, tmp_path_factory):
-    """One server, one index, one scan stretch: face.sqlite lives beside a fresh index
-    folder of its own (the store is the scan's, the module's mutations are its story)."""
+    """One server, one index, one scan stretch: the faces' file lives at the
+    DEVICE-side home `<config>/faces/<anchor-hash>/face.sqlite` beside a fresh index
+    folder of the store's own (the #195 privacy move — the store is the scan's, the
+    module's mutations are its story)."""
     index = tmp_path_factory.mktemp("faces-index")
     cfg = _cfg(index, (faces_corpus,))
     # Fill the fixture's own index BEFORE serving (measured 2026-11-25): conftest's
@@ -159,6 +175,7 @@ def test_status_reports_the_faces_state_before_any_consent(faces):
     ("post", "/api/v1/faces/name", {"person": 1, "name": "x"}),
     ("post", "/api/v1/faces/merge", {"into": 1, "from": 2}),
     ("post", "/api/v1/faces/delete", {"person": 1}),
+    ("post", "/api/v1/faces/unload", {}),
     ("post", "/api/v1/faces/confirm", {"face": 1, "person": 1}),
 ])
 def test_every_faces_verb_refuses_before_consent(faces, method, path, body):
@@ -170,7 +187,10 @@ def test_every_faces_verb_refuses_before_consent(faces, method, path, body):
     detail = reply.json()["detail"]
     assert CONSENT_SENTENCE in detail, detail
     assert "/api/v1/faces/consent" in detail, detail
-    # Nothing was built behind the wall: no store, no counts, and consent itself reads closed.
+    # Nothing was built behind the wall: no store, no counts, and consent itself reads
+    # closed. The store is the DEVICE-side home (#195), and the index folder carries no
+    # faces file on any path — the privacy boundary, pinned on both sides.
+    assert (faces.faces_home() / "face.sqlite").exists() is False
     assert (faces.index / "face.sqlite").exists() is False
     assert faces.client.get("/api/v1/faces/consent").json()["consented"] is False
 
@@ -232,10 +252,11 @@ def test_scan_relays_the_engines_counts(faces, faces_corpus):
     assert scan["skipped"] == 0, scan
     assert scan["fresh"] == 0, scan
     assert scan["assigned"] == FACE_COUNT, scan
-    # The face store is the scan's own file beside the index — separate from index.sqlite
-    # (FACES.md §2: faces never ride the main store's schema).
-    assert (faces.index / "face.sqlite").is_file()
-    assert (faces.index / "face.sqlite") != (faces.index / "index.sqlite")
+    # The face store is the scan's own file at the DEVICE-side home (#195, the privacy
+    # move) — never in the index folder, never riding the main store's schema (FACES.md §2).
+    assert (faces.faces_home() / "face.sqlite").is_file()
+    assert faces.faces_home() != faces.index
+    assert (faces.index / "face.sqlite").exists() is False
     # The scan crawled the SERVER's roots (never a client-supplied path): the rows it
     # recorded live under the deployment's own tree.
     names = {p.name for p in faces_corpus.iterdir()}
@@ -502,12 +523,14 @@ def test_confirm_answers_a_queued_face(faces):
 
 # ── the search window's People filter (round six, 2026-11-23, the user's design) ─
 
-def test_search_person_filter_relays_the_faces_membership(faces):
-    # The search stays PURE: the engine answers its ranking untouched, and the face
-    # store answers WHICH of those paths carry the person's face. The server drops
-    # whole rows the store does not name — z, kind, score, excerpt ride verbatim,
-    # nothing is re-scored (the rows compare field-for-field with the unfiltered
-    # answer; the per-call minted media_id is the only difference).
+def test_search_person_scope_pools_the_answer_into_the_faces_membership(faces):
+    # The pool law (round twelve, 2026-11-27, the user's People search): `person` rides
+    # the VERB — the face store's rows for the person are the candidate set and the
+    # engine's z-gate is computed INSIDE that pool (the in-pool math is pinned
+    # engine-side in searcher.rs; here the relay and the walls). The server drops
+    # nothing: it asks the engine for the pool and relays the answer — z, kind, score,
+    # excerpt ride verbatim (the keyword rows compare field-for-field with the
+    # unfiltered answer; the per-call minted media_id is the only difference).
     target = faces.persons()[0]["id"]
     gallery = faces.client.get(f"/api/v1/faces/person/{target}").json()["faces"]
     owned = {f["path"] for f in gallery}
@@ -523,12 +546,46 @@ def test_search_person_filter_relays_the_faces_membership(faces):
     filtered = faces.client.post("/api/v1/search", json={"q": q, "person": target}).json()
     kept = {h["path"] for h in filtered["hits"]}
     assert kept == plain_paths & owned, filtered["hits"]  # exactly the face-photo rows
-    plain_rows = {h["path"]: {k: v for k, v in h.items() if k != "media_id"}
+    # The rows ride verbatim (thin-client law), `keyword_rank` aside: the rank is the
+    # row's position in the ANSWER's keyword order (the engine's own per-answer
+    # artifact — the canonicalization law pins it as an order, never as a per-row
+    # value). The pool re-ranks its restricted list; the bm25 order must be preserved.
+    plain_rows = {h["path"]: {k: v for k, v in h.items()
+                              if k not in ("media_id", "keyword_rank")}
                   for h in plain["hits"]}
+    plain_rank = {h["path"]: h["keyword_rank"] for h in plain["hits"]}
     for h in filtered["hits"]:
-        row = {k: v for k, v in h.items() if k != "media_id"}
+        row = {k: v for k, v in h.items() if k not in ("media_id", "keyword_rank")}
         assert row == plain_rows[h["path"]], (row, plain_rows[h["path"]])
-    # `person: null` is the pure search — the same rows, the same numbers.
+    pool_order = sorted(filtered["hits"], key=lambda h: h["keyword_rank"])
+    assert [h["keyword_rank"] for h in pool_order] == list(range(1, len(pool_order) + 1)), pool_order
+    assert [plain_rank[h["path"]] for h in pool_order] == sorted(
+        plain_rank[h["path"]] for h in pool_order), "the pool preserves the bm25 order"
+
+    # The meaning leg rides the pool too: candidates are the person's photos, so a
+    # pooled answer can never carry a crowd file the global field ranks in.
+    meaning = faces.client.post("/api/v1/search", json={"q": "wakeboarding"}).json()
+    crowd_only = {h["path"] for h in meaning["hits"]} - owned
+    pooled = faces.client.post("/api/v1/search",
+                               json={"q": "wakeboarding", "person": target}).json()
+    pooled_paths = {h["path"] for h in pooled["hits"]}
+    assert pooled_paths <= owned, (pooled["hits"], owned)
+    assert pooled_paths.isdisjoint(crowd_only), (pooled["hits"], crowd_only)
+
+    # A person the store has no faces for pools to NOTHING — the empty-pool law (like
+    # an empty scope): an honest empty answer, never an unscoped pass.
+    empty = faces.client.post("/api/v1/search", json={"q": q, "person": 999_999}).json()
+    assert empty["hits"] == [] and empty["strong"] == 0, empty
+
+    # Faces live on photos, never on code rows: the daemon refuses a code search
+    # pooled into a person, and the server relays the refusal (503, the words verbatim).
+    refused = faces.client.post("/api/v1/search",
+                                json={"q": "wakeboarding", "code": True, "person": target})
+    assert refused.status_code == 503, refused.text
+    assert "never a code one" in refused.json()["detail"], refused.json()
+
+    # `person: null` is the field-less verb — the byte-parity search, the same rows,
+    # the same numbers.
     nulled = faces.client.post("/api/v1/search", json={"q": q, "person": None}).json()
     assert {h["path"] for h in nulled["hits"]} == plain_paths
     # The pydantic law of the field (SearchRequest's declarations put person last):
@@ -612,9 +669,81 @@ def test_withdrawing_consent_closes_every_verb(faces):
     refused = faces.client.post("/api/v1/search", json={"q": "name: faces", "person": 1})
     assert refused.status_code == 400, refused.text
     assert CONSENT_SENTENCE in refused.json()["detail"], refused.json()
-    # Opting out is not deleting the faces: the store stays on disk, the user's data.
-    assert (faces.index / "face.sqlite").is_file()
+    # Opting out is not deleting the faces: the store stays on disk at the device home,
+    # the user's data.
+    assert (faces.faces_home() / "face.sqlite").is_file()
     # Re-consenting is the same affirmative act, and the store is the same store.
     again = faces.client.post("/api/v1/faces/consent", json={"accept": True})
     assert again.status_code == 200, again.text
     assert faces.counts()["faces"] == 4 * FACE_COUNT, faces.counts()
+
+
+# ── the bulk unload (the user's law 2026-11-27, the "Unload unnamed" button) ──
+
+def test_unload_dissolves_the_unnamed_group_and_keeps_the_named(faces):
+    # The named people are the anchors: the unnamed clusters dissolve, their faces
+    # requeue for the next clustering pass, no photo is deleted. The reply relays
+    # the engine's own counts — the server invents no numbers.
+    persons = faces.persons()
+    assert persons, persons
+    anchor = max(persons, key=lambda p: p["count"])
+    named = faces.client.post("/api/v1/faces/name",
+                              json={"person": anchor["id"], "name": "Anchor Person"})
+    assert named.status_code == 200, named.text
+    before = faces.counts()
+    reply = faces.client.post("/api/v1/faces/unload", json={})
+    assert reply.status_code == 200, reply.text
+    body = reply.json()
+    assert body["ok"] is True, body
+    assert body["persons"] == before["persons"] - 1, body      # exactly the unnamed group
+    assert body["faces"] == before["assigned"] - anchor["count"], body
+    after = faces.counts()
+    assert after["faces"] == before["faces"], "no photo was deleted"
+    assert (after["persons"], after["named"]) == (1, 1), after
+    assert after["assigned"] == anchor["count"], after
+    assert after["pending"] == body["faces"], after            # the requeued evidence
+    # Idempotent: with nothing unnamed left, nothing moves.
+    again = faces.client.post("/api/v1/faces/unload", json={})
+    assert again.status_code == 200, again.text
+    assert (again.json()["persons"], again.json()["faces"]) == (0, 0), again.json()
+
+
+# ── the pre-rendered cover cards (round eleven, 2026-11-27) ───────────────────
+
+def test_persons_rows_carry_the_pre_rendered_cover_cards(faces):
+    # The scan fills the cards as a byproduct (the photos it decodes are the same
+    # decodes it pays for detection). The persons relay carries the engine's
+    # `cover_render`; the server mints it like every media row, and `/file`
+    # serves the card with zero render — the People grid reads plain files.
+    persons = faces.persons()
+    assert persons, persons
+    row = persons[0]
+    assert row.get("cover_render"), row
+    assert row.get("cover_media"), row
+    reply = faces.client.get(f"/api/v1/media/{row['cover_media']}/file")
+    assert reply.status_code == 200, reply.text
+    assert reply.headers["content-type"].startswith("image/"), reply.headers
+    assert reply.content[:2] == b"\xff\xd8", "the card is the engine's JPEG"
+
+
+def test_unload_takes_the_unnamed_covers_with_it(faces):
+    # The cache follows the store: dissolving 8,800 people dissolves their 8,800 cards,
+    # the named survivor keeps its own. The suite store at this point is one named
+    # anchor with the review queue requeued — a scan re-cluster it into fresh unnamed
+    # people (the scan's tail fills THEIR cards too, the crawl is freshness-skipped),
+    # and the unload then dissolves exactly those: the covers folder is left with the
+    # anchor's card and nothing else.
+    persons = faces.persons()
+    assert persons, persons
+    anchor = max(persons, key=lambda p: p["count"])
+    named = faces.client.post("/api/v1/faces/name",
+                              json={"person": anchor["id"], "name": "Anchor Person"})
+    assert named.status_code == 200, named.text
+    scanned = faces.scan()
+    assert scanned.status_code == 200, scanned.text
+    reply = faces.client.post("/api/v1/faces/unload", json={})
+    assert reply.status_code == 200, reply.text
+    after = faces.persons()
+    assert [p["id"] for p in after] == [anchor["id"]], after
+    covers = sorted(p.name for p in (faces.faces_home() / "covers").iterdir())
+    assert covers == [f"{anchor['id']}.jpg"], covers

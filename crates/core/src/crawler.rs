@@ -252,6 +252,153 @@ pub fn crawl(
     options: &IndexOptions,
     progress: &mut dyn FnMut(&CrawlProgress),
 ) -> CrawlReport {
+    crawl_with(roots, roots, options, progress, None)
+}
+
+/// Issue #7a: crawl the `walk` folders under the rules of the folders the USER chose: the
+/// scope is what gets walked, the chosen folders are what the ROOT-level rules key on.
+/// Handing `crawl` the scope as its own chosen set makes the scope folder a root, and the
+/// two root-exempt rules then flip for it — a chosen root is never a dataset
+/// (`rules::dataset_folders`' roots exclusion) and a chosen root's own files are not
+/// "inside a code project" (`is_in_project_under`'s `folder == root` boundary). A scope dir
+/// that a full crawl excludes — a recorder's frame dump, a sync client's numbered pile,
+/// the media inside a code project the user chose — is then indexed and EMBEDDED by the
+/// scoped sync (the model is the expensive part) and deleted by the next full crawl: add,
+/// embed, prune, repeat, every burst. With the chosen folders as the rules' set the scope
+/// is treated as what it is: inside its root.
+pub fn crawl_scoped(
+    walk: &[PathBuf],
+    rules: &[PathBuf],
+    options: &IndexOptions,
+    progress: &mut dyn FnMut(&CrawlProgress),
+) -> CrawlReport {
+    crawl_with(walk, rules, options, progress, None)
+}
+
+/// #110: the gated crawl. Every descent law, rule, and report line of the full crawl
+/// runs VERBATIM; the ONE addition is the folder gate: the walk enters a folder's
+/// contents only when the folder is in `active` — the set of folders whose (mtime,
+/// entries) pair changed since the last sync (plus every folder on the path to one:
+/// descendants of a changed folder must be reached through their unchanged ancestors,
+/// and the ancestors' own file work IS skipped by their own gate verdict), folders the
+/// snapshot has no facts for (never seen: descend, honest), and the roots themselves.
+/// Files under folders NOT entered are the sync's row-check territory (the file-level
+/// law stats the stored paths — content-edit-in-place is caught there, the Gemini
+/// inverse of the dir mtime law).
+pub fn crawl_gated(
+    walk: &[PathBuf],
+    rules: &[PathBuf],
+    options: &IndexOptions,
+    active: &HashSet<String>,
+    progress: &mut dyn FnMut(&CrawlProgress),
+) -> CrawlReport {
+    crawl_with(walk, rules, options, progress, Some(active))
+}
+
+/// One prefilter fact of a folder (#110): its mtime (the `file_info` lstat law, ns-precision)
+/// and the RAW readdir entry count. The pair is the folder's own fact: POSIX mutates a
+/// folder's mtime when an entry is added/removed/renamed, and the raw count guards the
+/// same-second alias (ext4 ns mtimes). RAW (hidden included) on both sides — fill and gate
+/// use the same code path, so the count the gate compares is the count the fill wrote.
+#[derive(Debug, Clone, Copy)]
+pub struct DirFacts {
+    pub mtime: f64,
+    pub entries: i64,
+}
+
+/// The prefilter of the gated walk (#110): visit every folder the crawl law can REACH —
+/// one readdir + one stat per folder, no per-file work (measured: the folder-tree pass is
+/// the seconds-cheap part; the 1.7 M-file full walk on the bench HDD is 1262 s) — and
+/// answer each folder's facts. The visit law mirrors the walk's own descent law exactly
+/// (hidden subtrees, bundles, excluded/code skips, symlinked folders: the walk never
+/// enters them, so the prefilter never visits them, and their folders keep no facts —
+/// a folder with no facts descends, the honest never-seen shape). A scan failure at a
+/// folder yields no facts — same law: gate descends, the walk reports the failure, the
+/// sync keeps the rows.
+pub fn dir_facts(roots: &[PathBuf], options: &IndexOptions) -> HashMap<String, DirFacts> {
+    let home = paths::home().to_string_lossy().into_owned();
+    let root_paths: Vec<String> = {
+        let mut v: Vec<String> = roots
+            .iter()
+            .map(|r| paths::standardize(&r.to_string_lossy()))
+            .collect();
+        v.sort_by_key(|root| std::cmp::Reverse(root.chars().count()));
+        v
+    };
+    let mut facts: HashMap<String, DirFacts> = HashMap::new();
+    let mut stack: Vec<String> = root_paths.clone();
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue; // no facts: the gate descends, the walk reports the failure
+        };
+        let mut entries = 0i64;
+        let mut child_dirs: Vec<String> = Vec::new();
+        for entry in read.flatten() {
+            entries += 1;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue; // the walk never enters a hidden subtree
+            }
+            let ft = entry.file_type().ok(); // std::fs::DirEntry::file_type is a Result
+            let is_dir = if ft.is_some_and(|t| t.is_symlink()) {
+                #[cfg(target_os = "windows")]
+                let follows = std::fs::metadata(entry.path())
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
+                #[cfg(not(target_os = "windows"))]
+                let follows = false;
+                follows
+            } else {
+                ft.is_some_and(|t| t.is_dir())
+            };
+            if !is_dir || rules::is_package(&name) {
+                continue; // files, and bundles the enumerator never enters
+            }
+            let child = paths::to_slashes(&entry.path().to_string_lossy());
+            // The skips law of the root this folder lives under (the deepest chosen one,
+            // the walk's attribution), and the code skip law.
+            let under = root_paths
+                .iter()
+                .find(|root| paths::is_inside(&child, root))
+                .cloned()
+                .unwrap_or_else(|| dir.clone());
+            let skips: Vec<String> = options
+                .excluded_folders
+                .iter()
+                .filter(|folder| {
+                    paths::is_inside(folder, &under)
+                        || paths::is_inside(folder, &paths::real_path(&under))
+                })
+                .flat_map(|folder| [folder.clone(), paths::real_path(folder)])
+                .collect();
+            if rules::skip_reason(&child, &home, &skips).is_some()
+                || (options.code && rules::code_skip_reason(&child).is_some())
+            {
+                continue; // the walk prunes this subtree whole
+            }
+            child_dirs.push(child);
+        }
+        if let Some(info) = file_info(&dir) {
+            facts.insert(
+                dir,
+                DirFacts {
+                    mtime: info.mtime,
+                    entries,
+                },
+            );
+        }
+        stack.extend(child_dirs);
+    }
+    facts
+}
+
+fn crawl_with(
+    roots: &[PathBuf],
+    rules: &[PathBuf],
+    options: &IndexOptions,
+    progress: &mut dyn FnMut(&CrawlProgress),
+    gate: Option<&HashSet<String>>,
+) -> CrawlReport {
     let home = paths::home().to_string_lossy().into_owned();
     let mut report = CrawlReport::default();
     let mut project_roots: HashSet<String> = HashSet::new();
@@ -274,9 +421,13 @@ pub fn crawl(
         .iter()
         .map(|root| PathBuf::from(paths::standardize(&root.to_string_lossy())))
         .collect();
-    let root_paths: HashSet<String> = roots
+    // Issue #7a: the ROOT-level rules key on the folders the USER chose (`crawl_scoped`),
+    // not on the folders the scope happens to walk. With the full crawl `rules == roots`,
+    // so every pinned fixture, every `leftOut` key and every dataset verdict is byte-for-byte
+    // the Swift-era value.
+    let root_paths: HashSet<String> = rules
         .iter()
-        .map(|root| root.to_string_lossy().into_owned())
+        .map(|root| paths::standardize(&root.to_string_lossy()))
         .collect();
     // Issue #3 — the deepest chosen root containing a path is ITS root: a folder chosen
     // inside another chosen folder is the more specific instruction, and every per-path
@@ -285,6 +436,30 @@ pub fn crawl(
     // reports exactly as before. Sorted longest-first so the first match is the deepest.
     let mut sorted_roots: Vec<String> = root_paths.iter().cloned().collect();
     sorted_roots.sort_by_key(|root| std::cmp::Reverse(root.chars().count()));
+    // Issue #7a: the code-project rule reads the markers a WALK SEES, and the folders above
+    // the scope dir are exactly what a scope walk does not see — media inside a code project
+    // the user chose is a project root's DESCENDANT, so from the scope dir down the marker is
+    // invisible and the media indexes here and goes on the next full crawl. Seed the markers
+    // along the chain from each walked folder up to the chosen folder containing it: a handful
+    // of listings per scope dir, not a walk. The full crawl is unaffected — `is_in_project_under`
+    // stops AT the root (`folder == root` is false before the marker set is read), so a root's
+    // own marker is never consulted, exactly as the walk that never enumerates the root leaves it.
+    for root in &roots {
+        let mut folder = root.to_string_lossy().into_owned();
+        loop {
+            if rules::is_project_root(&folder) {
+                project_roots.insert(folder.clone());
+            }
+            if root_paths.contains(&folder) {
+                break;
+            }
+            let parent = paths::parent(&folder);
+            if parent == folder {
+                break;
+            }
+            folder = parent;
+        }
+    }
     let mut checked: i64 = 0;
 
     for root in roots {
@@ -424,6 +599,12 @@ pub fn crawl(
                             .entry(format!("folders {}", reason))
                             .or_default() += 1;
                     }
+                } else if gate.is_some_and(|active| !active.contains(&path)) {
+                    // #110 gate: this folder's (mtime, entries) pair stands unchanged and
+                    // no folder under it changed — its files are answered by the row-check
+                    // (the file-level law stats the stored paths), not by enumeration.
+                    // Skips fired FIRST above: the skip report is byte-identical gated.
+                    walker.skip_current_dir();
                 } else if options.code {
                     repos.enter(&path);
                 } else if rules::is_project_root(&path) {

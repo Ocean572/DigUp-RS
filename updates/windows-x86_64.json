@@ -1,11 +1,11 @@
 {
-  "version": "0.7.0-beta.3",
-  "notes": "The Mac's 0.6.2 fixes for Windows and Linux (a chosen folder read whole, Settings says why files aren't read, steady progress, faster keyword search, stub files, spreadsheets and presentations), plus the search process exiting when idle on Linux, no tray redraws without a tray, \"Checking folders…\" before indexing, and setup that looks at nothing before you've read the first page.",
-  "pub_date": "2026-10-22T10:46:59Z",
+  "version": "0.9.0",
+  "notes": "NEW in 0.9.0:\n• People — face recognition. Finds faces, clusters them into people you can\n  name, People filter on search. Consent-gated: you pick the recognition\n  model, then approve a one-time download from Hugging Face; photos never\n  leave your machine, and withdrawal never deletes them. Desktop + web.\n• Scoped search: `name:` prefix, search inside a folder/subfolder, extension\n  filters, per-folder skip lists — CLI, desktop app, and web.\n• Rendering fix for NVIDIA cards on Linux — the stale-paint/ghosting chase\n  closes with the measured webkit rendering config baked into the app\n  (no user env variables needed).\n• Settings upgrades: consent explanation, API-access section with minted\n  keys + browsable docs, agent-neutral MCP setup copy.\n• The README documents People, the MCP server for AI agents, and why the\n  face models are downloaded after consent, not packaged.\n\nIMPORTANT — update chain: this is the first release signed with the fork's\nown updater key. Desktop installs from 0.8.x (built with the old upstream\nkey) update by hand ONCE from this release page; installs from 0.9.0 onward\nself-update automatically from here on.\n\nKnown: in admin-key-only server deployments, starting an index job\n(POST /index with the admin key) can crash the API process — fix in\nprogress, ships in the next release; the desktop app is unaffected.\n\nInstall: payload tiles below (server/engine), the Homebrew formula, and the\ndesktop installers (Windows setup, Linux AppImage, macOS universal) attached\nwhen the Packages build turns green.",
+  "pub_date": "2026-11-26T18:46:52Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUNjNXOS9wdUxYRmEzVGNkUnRLSmlERjlyY1hOU25INTdDZjFYRnVBMXNiREFRdEZtRXd2YkxUbGhIcUVDd0ZXdU42ZHhqTnQ5QjRvNHIyZkRyc1M1WUFKczN6QzlxckFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNjYzNTc1CWZpbGU6RGlnVXBfMC43LjAtYmV0YS4zX3g2NC1zZXR1cC5leGUJdmVyc2lvbjowLjcuMC1iZXRhLjMKWklqR2FmaFdGdHVnbnR4TWlnY2hVWTV1TVNCRjNpWWszUVBpbmg3ZUd5K0YwUWRLVHdpRXhEVkZ6M0lJcFhpUFZuaFpFZVovRWdHLzFBNUljaW5kQnc9PQo=",
-      "url": "https://github.com/ARahim3/DigUp/releases/download/v0.7.0-beta.3/DigUp_0.7.0-beta.3_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRdllqNzVKWndicU14aDF4a0pVWUZqTlpKcmpLS0M0TjFMb0ZsajhLYXZTYlBDWmxFT2Y0d3kwZkRRMGgwTkV6d25RODF2N29wVm9WMU9kNmp0b0JZbTN3RGZNOU9sa3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzA1MTM5CWZpbGU6RGlnVXBfMC45LjBfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuOS4wCk1UUGUyYXdqNkVsZkw2b1hvNVdtSXFaUWZMLytJSExPVytjY1RkRW5WL3M3MUk5c1pkYmxpSDlqRVBvSEcrQ0M2RVQ1dEZCRTBRR3kwRGF2Rmp4d0F3PT0K",
+      "url": "https://github.com/Ocean572/DigUp-RS/releases/download/v0.9.0/DigUp_0.9.0_x64-setup.exe"
     }
   }
 }

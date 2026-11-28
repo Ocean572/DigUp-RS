@@ -91,7 +91,9 @@ impl Options {
                 "--hotkey" => options.hotkey = Some(value()?),
                 "--settings" => options.settings = Some(value()?.into()),
                 "--offer" => options.offered = Some(std::env::split_paths(&value()?).collect()),
-                "--offer-code" => options.offered_code = Some(std::env::split_paths(&value()?).collect()),
+                "--offer-code" => {
+                    options.offered_code = Some(std::env::split_paths(&value()?).collect())
+                }
                 "--debug-setup" => options.debug_setup = true,
                 "--debug-query" => options.debug_query = Some(value()?),
                 "--debug-quit" => options.debug_quit = true,
@@ -138,10 +140,15 @@ impl Options {
             return self.index.clone();
         }
         if cfg!(windows) {
-            return std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("DigUp").join("index"));
+            return std::env::var_os("LOCALAPPDATA")
+                .map(|local| PathBuf::from(local).join("DigUp").join("index"));
         }
-        let data = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()).map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+            });
         data.map(|data| data.join("digup").join("index"))
     }
 }
@@ -152,7 +159,10 @@ impl Options {
 /// binary from usr/bin, where the bin-folder probe reached it), else beside this program.
 fn default_helper() -> PathBuf {
     let name = if cfg!(windows) { "digup.exe" } else { "digup" };
-    let Some(folder) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)) else {
+    let Some(folder) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+    else {
         return PathBuf::from(name);
     };
     [

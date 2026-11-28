@@ -255,6 +255,10 @@ class DigupPeople extends LitElement {
           <button id="faces-scan" type="button" ?disabled=${scan.spinning}
                   title="Scan the folders for faces — files already recorded are skipped"
                   @click=${() => this.#emit("digup:scan", {})}>Scan now</button>
+          ${(c.persons - (c.named ?? 0)) > 0 ? html`
+            <button id="faces-unload" type="button"
+                    title="Dissolve every unnamed person — their faces move to the review queue, the named people stay, no photo is deleted"
+                    @click=${() => this.#emit("digup:unload", { unnamed: c.persons - (c.named ?? 0) })}>Unload unnamed</button>` : nothing}
           <span class="scan-clock">
             <span class="badge ${c.faces ? "ok" : "off"}">${c.faces} faces</span>
             <span class="badge ${c.persons ? "ok" : "off"}">${c.persons} people</span>
@@ -370,7 +374,7 @@ class DigupPeople extends LitElement {
               title=${`Show the ${person.count} photo${person.count === 1 ? "" : "s"} of ${personLabel(person)}`}
               @click=${() => this.#toggle(person.id)}
               @keydown=${(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); this.#toggle(person.id); } }}>
-          ${faceCrop(person.cover_face)}
+          ${faceCrop(person.cover_face, 512, person.cover_media)}
         </span>
         ${this.#nameInput(person, p)}
         <span class="set-facts">

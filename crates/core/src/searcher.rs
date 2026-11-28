@@ -341,6 +341,16 @@ pub struct SearchOptions<'a> {
     /// resolved once by `search_targets`, and on Windows scoping ignores case, as Windows
     /// file systems do. An empty scope answer is no hits, not an unscoped search.
     pub under: Option<&'a [String]>,
+    /// `person:` (round twelve, 2026-11-27, the user's pool law): the PEOPLE-scoped search.
+    /// This is the face store's set of the person's photo paths, and it POOLS the search:
+    /// only the files at these paths are candidates, AND the z-gate is computed over the
+    /// pool (modality means, pool mean, deviation all see the pool's rows only) — the
+    /// engine's honest numbers for the query WITHIN the person's photos, not the global
+    /// field's winners kept by a post-filter (`under:` stays its pinned #178 shape: rows
+    /// dropped after ranking, z's verbatim — that is why this is its own field). Paths are
+    /// the store's own crawl spellings, joined by exact match against the index rows. An
+    /// empty pool answers no hits, like an empty scope.
+    pub person_files: Option<&'a std::collections::HashSet<String>>,
 }
 
 impl Default for SearchOptions<'_> {
@@ -352,6 +362,7 @@ impl Default for SearchOptions<'_> {
             word_weight: None,
             prefix_last: false,
             under: None,
+            person_files: None,
         }
     }
 }
@@ -498,15 +509,20 @@ impl<'a> Searcher<'a> {
     }
 
     /// `reloadFiles` (Searcher.swift:92, #189): the file-kind and file-path maps, and
-    /// `vector_source`.
+    /// `vector_source`. v7 (#195): paths arrive ASSEMBLED (anchor + rel) — the map keeps the
+    /// same absolute shape v6 stored, so `under:`, the hits, and every client contract are
+    /// byte-identical.
     pub fn reload_files(&mut self) -> Result<(), crate::db::Error> {
         let mut rows: Vec<(i64, Option<String>, Option<String>)> = Vec::new();
-        self.store
-            .db
-            .query("SELECT id, kind, path FROM files", [], |row| {
-                rows.push((row.int(0), row.text(1), row.text(2)));
-                Ok(())
-            })?;
+        let sql = format!(
+            "SELECT f.id, f.kind, {} FROM files f{}",
+            self.store.abs_path_sql(),
+            self.store.anchors_join()
+        );
+        self.store.db.query(&sql, [], |row| {
+            rows.push((row.int(0), row.text(1), row.text(2)));
+            Ok(())
+        })?;
         self.file_kind.clear();
         self.file_path.clear();
         for (id, kind, path) in rows {
@@ -558,50 +574,51 @@ impl<'a> Searcher<'a> {
     /// covers (a vector-only image) reports metadata with `text: nil`.
     pub fn segment(&self, id: i64) -> Result<Option<SegmentDetail>, crate::db::Error> {
         let mut detail: Option<SegmentDetail> = None;
-        self.store.db.query(
-            "SELECT s.id, f.path, f.kind, s.kind, s.loc, s.loc_end, s.excerpt, f.mtime, f.size, f.info, \
+        let sql = format!(
+            "SELECT s.id, {}, f.kind, s.kind, s.loc, s.loc_end, s.excerpt, f.mtime, f.size, f.info, \
              coalesce(fts.original, fts.body) \
-             FROM segments s JOIN files f ON f.id = s.file \
+             FROM segments s JOIN files f ON f.id = s.file{} \
              LEFT JOIN fts ON fts.rowid = s.id WHERE s.id = ?",
-            [Sql::Int(id)],
-            |row| {
-                // Swift casts the info JSON to [String: String]; any non-string value fails
-                // the cast, and the whole map falls back to empty (the hit loop's rule).
-                let mut info: HashMap<String, String> = HashMap::new();
-                if let Some(json) = row.text(9) {
-                    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&json) {
-                        let mut all_strings = true;
-                        let mut entries: HashMap<String, String> = HashMap::new();
-                        for (key, value) in map {
-                            match value {
-                                Value::String(text) => {
-                                    entries.insert(key, text);
-                                }
-                                _ => all_strings = false,
+            self.store.abs_path_sql(),
+            self.store.anchors_join()
+        );
+        self.store.db.query(&sql, [Sql::Int(id)], |row| {
+            // Swift casts the info JSON to [String: String]; any non-string value fails
+            // the cast, and the whole map falls back to empty (the hit loop's rule).
+            let mut info: HashMap<String, String> = HashMap::new();
+            if let Some(json) = row.text(9) {
+                if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&json) {
+                    let mut all_strings = true;
+                    let mut entries: HashMap<String, String> = HashMap::new();
+                    for (key, value) in map {
+                        match value {
+                            Value::String(text) => {
+                                entries.insert(key, text);
                             }
-                        }
-                        if all_strings {
-                            info = entries;
+                            _ => all_strings = false,
                         }
                     }
+                    if all_strings {
+                        info = entries;
+                    }
                 }
-                detail = Some(SegmentDetail {
-                    segment_id: row.int(0),
-                    path: row.text(1).unwrap_or_default(),
-                    kind: FileKind::parse(&row.text(2).unwrap_or_default()).unwrap_or(FileKind::Doc),
-                    segment: SegmentKind::parse(&row.text(3).unwrap_or_default())
-                        .unwrap_or(SegmentKind::Name),
-                    loc: (!row.is_null(4)).then(|| row.double(4)),
-                    loc_end: (!row.is_null(5)).then(|| row.double(5)),
-                    excerpt: row.text(6),
-                    text: row.text(10),
-                    modified: row.double(7),
-                    size: row.int(8),
-                    info,
-                });
-                Ok(())
-            },
-        )?;
+            }
+            detail = Some(SegmentDetail {
+                segment_id: row.int(0),
+                path: row.text(1).unwrap_or_default(),
+                kind: FileKind::parse(&row.text(2).unwrap_or_default()).unwrap_or(FileKind::Doc),
+                segment: SegmentKind::parse(&row.text(3).unwrap_or_default())
+                    .unwrap_or(SegmentKind::Name),
+                loc: (!row.is_null(4)).then(|| row.double(4)),
+                loc_end: (!row.is_null(5)).then(|| row.double(5)),
+                excerpt: row.text(6),
+                text: row.text(10),
+                modified: row.double(7),
+                size: row.int(8),
+                info,
+            });
+            Ok(())
+        })?;
         Ok(detail)
     }
 
@@ -787,27 +804,57 @@ impl<'a> Searcher<'a> {
                 targets
             }
         });
-        let allowed_ids: Option<std::collections::HashSet<i64>> = targets.map(|targets| {
-            self.file_path
-                .iter()
-                .filter(|(id, path)| {
-                    let kind_ok = match opts.kinds {
-                        None => true,
-                        Some(kinds) => self
-                            .file_kind
-                            .get(id)
-                            .is_some_and(|kind| kinds.contains(kind)),
-                    };
-                    let checked = if ignore_case {
-                        path.to_lowercase()
-                    } else {
-                        path.to_string()
-                    };
-                    kind_ok && crate::folder_selection::matches(&checked, &targets, false)
-                })
-                .map(|(id, _)| *id)
-                .collect()
-        });
+        let allowed_ids: Option<std::collections::HashSet<i64>> = {
+            let under_ids: Option<std::collections::HashSet<i64>> =
+                targets.as_ref().map(|targets| {
+                    self.file_path
+                        .iter()
+                        .filter(|(id, path)| {
+                            let kind_ok = match opts.kinds {
+                                None => true,
+                                Some(kinds) => self
+                                    .file_kind
+                                    .get(id)
+                                    .is_some_and(|kind| kinds.contains(kind)),
+                            };
+                            let checked = if ignore_case {
+                                path.to_lowercase()
+                            } else {
+                                path.to_string()
+                            };
+                            kind_ok && crate::folder_selection::matches(&checked, targets, false)
+                        })
+                        .map(|(id, _)| *id)
+                        .collect()
+                });
+            // `person_files:` (round twelve): join the face store's paths onto the index
+            // rows by exact path (both are crawl spellings of the same roots), the kind
+            // filter folded the same way `under:` folds it. A path the index no longer
+            // carries is simply not in the pool — ghost rows never score.
+            let person_ids: Option<std::collections::HashSet<i64>> =
+                opts.person_files.map(|paths| {
+                    self.file_path
+                        .iter()
+                        .filter(|(id, path)| {
+                            paths.contains(path.as_str())
+                                && match opts.kinds {
+                                    None => true,
+                                    Some(kinds) => self
+                                        .file_kind
+                                        .get(id)
+                                        .is_some_and(|kind| kinds.contains(kind)),
+                                }
+                        })
+                        .map(|(id, _)| *id)
+                        .collect()
+                });
+            match (under_ids, person_ids) {
+                (None, None) => None,
+                (Some(under), None) => Some(under),
+                (None, Some(person)) => Some(person),
+                (Some(under), Some(person)) => Some(under.intersection(&person).copied().collect()),
+            }
+        };
         if allowed_ids.as_ref().is_some_and(|set| set.is_empty()) {
             return Ok(Vec::new());
         }
@@ -829,8 +876,23 @@ impl<'a> Searcher<'a> {
         if let Some(query) = &query_vector {
             if query.len() == DIMENSION && !self.row_file.is_empty() {
                 let scores = self.score(query);
-                let meaning =
-                    scoring::meaning(&scores, &self.row_modality, Some(&self.row_sets_scale));
+                // The pool law (round twelve, the user's People-scoped search): with a
+                // person pool, the z-statistics see ONLY the pool's rows — modality means,
+                // pool mean, deviation all computed over the person's photos, so her own
+                // standouts stand out (`under:` stays its pinned #178 shape: z's from the
+                // whole field, rows dropped after ranking — that is the pool's difference).
+                let pool_mask: Option<Vec<bool>> = opts.person_files.map(|_| {
+                    (0..scores.len())
+                        .map(|row| {
+                            self.row_sets_scale[row]
+                                && allowed_ids
+                                    .as_ref()
+                                    .is_some_and(|ids| ids.contains(&self.row_file[row]))
+                        })
+                        .collect()
+                });
+                let scale: &[bool] = pool_mask.as_deref().unwrap_or(&self.row_sets_scale);
+                let meaning = scoring::meaning(&scores, &self.row_modality, Some(scale));
                 for row in 0..scores.len() {
                     if !allowed(self.row_file[row]) {
                         continue;
@@ -1043,19 +1105,19 @@ impl<'a> Searcher<'a> {
             let mut modified = 0.0;
             let mut size = 0i64;
             let mut info_json: Option<String> = None;
-            self.store.db.query(
-                "SELECT path, kind, mtime, size, info FROM files WHERE id = ?",
-                [Sql::Int(file)],
-                |row| {
-                    path = row.text(0).unwrap_or_default();
-                    kind =
-                        FileKind::parse(&row.text(1).unwrap_or_default()).unwrap_or(FileKind::Doc);
-                    modified = row.double(2);
-                    size = row.int(3);
-                    info_json = row.text(4);
-                    Ok(())
-                },
-            )?;
+            let show_sql = format!(
+                "SELECT {}, f.kind, f.mtime, f.size, f.info FROM files f{} WHERE f.id = ?",
+                self.store.abs_path_sql(),
+                self.store.anchors_join()
+            );
+            self.store.db.query(&show_sql, [Sql::Int(file)], |row| {
+                path = row.text(0).unwrap_or_default();
+                kind = FileKind::parse(&row.text(1).unwrap_or_default()).unwrap_or(FileKind::Doc);
+                modified = row.double(2);
+                size = row.int(3);
+                info_json = row.text(4);
+                Ok(())
+            })?;
             // Swift casts the info JSON to [String: String]; any non-string value fails
             // the cast, and the whole map falls back to empty.
             let mut info: HashMap<String, String> = HashMap::new();
@@ -1146,6 +1208,7 @@ impl<'a> Searcher<'a> {
 mod tests {
     use super::*;
     use crate::{Candidate, Modality, SegmentKind};
+    use std::path::Path;
 
     fn candidate(path: &str, kind: FileKind) -> Candidate {
         Candidate {
@@ -1308,6 +1371,150 @@ mod tests {
             searcher.vector_count(),
             6,
             "the same six rows, in the same order"
+        );
+    }
+
+    /// The pool fixture (round twelve, 2026-11-27, the user's People-scoped search):
+    /// six photos of one person — one wakeboarding standout among her own frames — and
+    /// four crowd photos that all score above her best. On the FULL field her standout
+    /// is crowded out (no z reaches the 2.0σ gate); inside her pool it stands out.
+    /// `person_files` pools the candidates AND the z statistics; `under:` keeps its
+    /// pinned #178 shape (z from the whole field, rows dropped) — this fixture is the
+    /// measured proof that the two controls mean different things, on the same store.
+    fn pool_store(tmp: &Path) -> IndexStore {
+        let store = IndexStore::open(tmp, crate::MAIN_FILE).expect("an index");
+        let rows: Vec<(&str, f32)> = vec![
+            ("/data/l/p1.jpg", 0.50),
+            ("/data/l/p2.jpg", 0.51),
+            ("/data/l/p3.jpg", 0.52),
+            ("/data/l/p4.jpg", 0.53),
+            ("/data/l/p5.jpg", 0.54),
+            ("/data/l/p6.jpg", 0.87),
+            ("/data/c/c1.jpg", 0.85),
+            ("/data/c/c2.jpg", 0.86),
+            ("/data/c/c3.jpg", 0.88),
+            ("/data/c/c4.jpg", 0.89),
+        ];
+        for (path, value) in rows {
+            let file = store
+                .insert(&candidate(path, FileKind::Image))
+                .expect("a photo");
+            store
+                .finish(file, "done", None, HashMap::new())
+                .expect("done");
+            store
+                .add_segment(
+                    file,
+                    SegmentKind::Ocr,
+                    Modality::Text,
+                    None,
+                    None,
+                    Some("wakeboarding on the lake"),
+                    Some("wakeboarding on the lake"),
+                    Some(&vector(value)),
+                )
+                .expect("an ocr row with the photo's words and vector");
+        }
+        store
+    }
+
+    #[test]
+    fn the_person_pool_answers_inside_the_persons_photos_where_under_drops_the_same_rows() {
+        let tmp = tempfile::tempdir().expect("a temp folder");
+        let store = pool_store(tmp.path());
+        let mut searcher = Searcher::new(&store, true).expect("the searcher loads");
+        let query = vector(1.0f32);
+
+        // The whole field, words that match nothing: candidates are z-gate only, and
+        // the crowd crowds her out — the user's measured complaint, pinned.
+        let global = searcher
+            .search("zzqx", Some(&query), &SearchOptions::default())
+            .expect("the global answer");
+        assert!(
+            global.is_empty(),
+            "the full field's 2.0σ gate keeps nobody: her best photo is crowded out by \
+             the higher-scoring crowd — {global:?}"
+        );
+
+        // `under:` (the pinned #178 law): her folder scopes the ROWS, z stays the whole
+        // field's — the same answer stays empty. The folder scope is a keep-filter, not
+        // a pool; this is exactly why `person_files` is its own field.
+        let folder = ["/data/l".to_string()];
+        let scoped = searcher
+            .search(
+                "zzqx",
+                Some(&query),
+                &SearchOptions {
+                    under: Some(&folder[..]),
+                    ..SearchOptions::default()
+                },
+            )
+            .expect("the scoped answer");
+        assert!(
+            scoped.is_empty(),
+            "under: keeps its global-field z — the pool law is not the scope law: {scoped:?}"
+        );
+
+        // `person_files:` (the pool law): her six photos are the field — the z-gate
+        // is computed INSIDE the pool and her wakeboarding frame answers.
+        let pool: std::collections::HashSet<String> = [
+            "/data/l/p1.jpg",
+            "/data/l/p2.jpg",
+            "/data/l/p3.jpg",
+            "/data/l/p4.jpg",
+            "/data/l/p5.jpg",
+            "/data/l/p6.jpg",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let pooled = searcher
+            .search(
+                "zzqx",
+                Some(&query),
+                &SearchOptions {
+                    person_files: Some(&pool),
+                    ..SearchOptions::default()
+                },
+            )
+            .expect("the pooled answer");
+        assert_eq!(
+            pooled
+                .iter()
+                .map(|hit| hit.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/data/l/p6.jpg"],
+            "in her pool the standout stands out (z ≥ 2.0σ in-pool) and nothing else clears \
+             the gate — the engine's honest in-pool numbers"
+        );
+        assert!(pooled[0].z.unwrap() >= crate::scoring::Z_GATE);
+
+        // Words ride the pool too: the same keyword rows, restricted. All ten photos
+        // carry "wakeboarding"; globally every one answers, in her pool only hers do.
+        let global_words = searcher
+            .search("wakeboarding", None, &SearchOptions::default())
+            .expect("the global keyword answer");
+        assert_eq!(global_words.len(), 10, "every photo carries the words");
+        let pooled_words = searcher
+            .search(
+                "wakeboarding",
+                None,
+                &SearchOptions {
+                    person_files: Some(&pool),
+                    ..SearchOptions::default()
+                },
+            )
+            .expect("the pooled keyword answer");
+        assert_eq!(
+            pooled_words.len(),
+            6,
+            "the keyword scan answers the pool only"
+        );
+        assert!(
+            pooled_words
+                .iter()
+                .all(|hit| hit.path.starts_with("/data/l/")),
+            "{pooled_words:?}"
         );
     }
 

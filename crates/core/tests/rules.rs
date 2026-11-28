@@ -151,6 +151,71 @@ fn classify_code_reads_source_not_data() {
 }
 
 #[test]
+fn classify_skips_key_and_password_files_too() {
+    // Issue #8: the secret rule is GLOBAL — `is_secret`'s comment reads "never read,
+    // wherever they are". Code indexing always honored it (the shapes pinned above);
+    // normal indexing must not index the same names as documents. The reason string is
+    // the code path's, relayed verbatim.
+    let options = IndexOptions::default();
+    let with_code = IndexOptions {
+        include_code: true,
+        ..IndexOptions::default()
+    };
+    let secret = skip("key or password file");
+    for path in [
+        "/x/secrets.txt",
+        "/x/credentials.md",
+        "/x/id_rsa.md",
+        "/x/htpasswd.txt",
+        "/x/.npmrc.md",
+        "/x/.env.production",
+        "/x/secret-sauce.odt",
+        "/x/keystore.jks",
+        "/x/server.pem",
+        "/x/notes.key",
+    ] {
+        assert_eq!(
+            rules::classify(path, false, &options),
+            secret,
+            "classify({path})"
+        );
+        assert_eq!(
+            rules::classify(path, false, &with_code),
+            secret,
+            "classify({path}) with code on"
+        );
+        assert_eq!(
+            rules::classify_code(path, &with_code),
+            secret,
+            "classifyCode({path})"
+        );
+    }
+    // The rule is prefixes and extensions, not the words: neighbors that merely mention
+    // them stay documents, and a FOLDER named Secrets is not a secret file — its pictures
+    // ride the name rule exactly as the code path has always treated them.
+    assert_eq!(
+        rules::classify("/x/my-notes.txt", false, &options),
+        index(FileKind::Doc)
+    );
+    assert_eq!(
+        rules::classify("/x/project-secrets.md", false, &options),
+        index(FileKind::Doc)
+    );
+    assert_eq!(
+        rules::classify("/x/keygen.txt", false, &options),
+        index(FileKind::Doc)
+    );
+    assert_eq!(
+        rules::classify("/x/keyboard.jpg", false, &options),
+        index(FileKind::Image)
+    );
+    assert_eq!(
+        rules::classify("/x/Secrets/holiday.jpg", false, &options),
+        index(FileKind::Image)
+    );
+}
+
+#[test]
 fn machine_names_are_machine_named() {
     // `^[a-z]{0,16}[-_. ]?\d{3,}([-_.]\d+)*$` and `^[0-9a-f]{8,}([-_][0-9a-f]{4,})*$`.
     for name in [

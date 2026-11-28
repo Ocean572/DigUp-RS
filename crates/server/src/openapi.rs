@@ -380,6 +380,13 @@ fn paths() -> Value {
                 })
             )
         },
+        "/api/v1/faces/unload": {
+            "post": post_op(
+                "Unload every unnamed person — their faces queue for re-clustering, named persons stay (admin)",
+                "faces_unload",
+                json!({ "type": "object", "properties": {} })
+            )
+        },
         "/api/v1/faces/confirm": {
             "post": post_op(
                 "Confirm a queued face into a person (admin; the human answer to a collision)",

@@ -73,8 +73,9 @@ One query, the engine's answer.
 | `meaning` | bool | `true` | `false` = keyword-only (words, no embedding) — the desktop panel's first keystroke |
 | `prefix_last` | bool | `false` | last word as a prefix; the panel's "typing a word that isn't indexed yet" path |
 | `name_only` | bool | `false` | **#66 "Names only"**: the daemon seam composes the exact typed `name:` spelling above (same names-only path, no model); a false/absent field is the byte-parity verb, and the reply shape is the ordinary search answer |
-| `under` | array of paths | unscoped | **#206/#132/#188 "Scope"**: keep only rows inside these folder/file paths, narrowed **inside the server's own roots** — scope never widens what a key can see; the searcher resolves each path canonically (realpath, worktree→main-repo). Omit/empty/null = unscoped (the field-less verb) |
-| `ext` | array of extensions | all | **Extension allow-list**: keep only rows whose file carries one of these extensions (`mp4`, `.pdf`, `mp4,pdf` spelling is the client's; the engine normalizes). The keep is **post-ranking** — the engine's z rows ride verbatim, nothing is re-scored, so the answer can come back shorter than `limit` |
+| `person` | int ≥ 1 | absent | **the People search (round twelve, 2026-11-27)**: the search is POOLED into that person's photos — the face store's rows for the person are the candidate set, and the engine's z-gate is computed **inside that pool** (modality means, pool mean, deviation all see the pool's rows), so her own standouts stand out instead of being crowded out by the global field. The store's read is consent-gated engine-side and consent-gated here: no accepted consent record for the target → the **400** faces wall, before any daemon call. A person with no photos answers empty (the honest pool, like an empty scope). Never with `code` — faces live on photos, never on code rows → 502-shaped engine refusal relayed. The field is absent in the verb when unset: every pre-round pin stays byte-identical |
+| `under` | array of folder paths | absent | **#206/#132/#188 folder scope**: the engine answers only for files under these paths — z's stay the WHOLE field's, rows outside the scope are dropped after ranking (the pinned #178/#189 shape: a keep-scope, not a pool — which is exactly why `person` above is its own field). An empty scope answers no hits |
+| `ext` | array of extensions | absent | file-type keep (lowercase, no dot): post-ranking, the engine's ranked rows ride verbatim, the filter KEEPS, it never re-scores |
 
 **Prefixes inside `q`** (the engine parses them, so every client gets them through one path):
 
@@ -84,9 +85,12 @@ One query, the engine's answer.
 | `name: …` | **file and folder names only**: keyword search over the name segments, no query vector — the engine's encoder never starts for it, and the app's unloaded vectors stay unloaded. A 2-letter word there matches as a name prefix (`name: in` finds "Invoices"); one-letter words are no search | `NameQuery`, `Searcher.search`, `SearchService.swift:138` |
 
 The two are one prefix per query: the engine reads `code:` first, so `"code: name: x"` is a code
-search of `name: x`. The server relays `q` verbatim — it adds no rewriting of its own; the UI's
-`code`/`names` boxes are the same two shapes (`code` → the flag, `names` → the `name:` prefix on
-the text).
+search of `name: x`. The server relays `q` verbatim — it adds no rewriting of its own. In the
+search bars the typed prefixes are the surface: the **2026-11-27 bar law** retires the `names`
+toggle and the folder-scope control — the only extra control right of the kind chips is the
+**People** dropdown (`person`, above); `code` stays a box, and `name: …` / `code: …` typed in
+the field do what the flags and prefixes do. The verb fields the retired controls rode
+(`under`, `ext`) stay published — CLI and API clients keep them.
 
 ```sh
 curl -s -X POST http://127.0.0.1:8787/api/v1/search \
@@ -391,7 +395,8 @@ curl -s http://127.0.0.1:8787/api/v1/faces/persons
 # → 200 {"ok": true, "persons": [{"id": 3, "name": "Angela", "count": 2,
 #         "cover": 0.9999, "cover_face": {"id": 5, "path": "/…/photo.jpg",
 #         "box": [736.5, 250.9, 1256.3, 904.6], "kps": [[…], …],
-#         "width": 1600, "height": 1067, "score": 0.884, "media_id": "07cbe86e5775"}}, …]}
+#         "width": 1600, "height": 1067, "score": 0.884, "media_id": "07cbe86e5775"},
+#         "cover_render": "/…/faces/<home>/covers/3.jpg", "cover_media": "1a2c…"}]}
 ```
 
 Person cards: `name` is `null` for an unnamed cluster (the UI shows "Person NN");
@@ -401,13 +406,25 @@ Person cards: `name` is `null` for an unnamed cluster (the UI shows "Person NN")
 recorded before face.sqlite schema 3 carries `width: 0` — the honest fallback (the card
 shows the uncropped photo; a re-scan fills the map).
 
+**The pre-rendered cover card (round eleven, 2026-11-27).** `cover_render` is the engine's
+card file, stored inside the faces home beside `face.sqlite` (`<config>/faces/<home>/covers/
+<id>.jpg`): the scan fills the cards as a byproduct at the cluster tail (the photos it
+decodes are the decodes it pays for detection), and unload / delete / merge / confirm sweep
+the card files with the rows they dissolve — no store reset is ever needed, the first Scan
+press fills cards for a store that has none. When the server can read the card it mints a
+`cover_media` handle like every media row, and `GET /api/v1/media/{id}/file` serves it with
+**zero render** — the People grid reads plain files. The card is faces data: it rides the
+consent wall (only the persons relay mints it, behind the consent guard), not the roots
+wall; the `/file` exception is the cards folder and nothing wider.
+
 `?limit=N` answers the paintable window: the top N people by photo count (ties by id),
-covers included, and the cover is paid for the returned rows only. The verb pays one
-cover query per person (measured 34 s cold for 8,868 people on the live store), and the
-People tab paints at most its grid cap — the window is exactly what the client paints.
-Absent `limit` answers every person in the store's id order (the full list, the shape
-this route has always answered). A present limit outside 1..=1000000 is a 422, the
-`similar?limit=` law restated.
+covers included, and the cover is paid for the returned rows only. With the cards filled
+the read is a file read (the 34 s cold cover-query cost measured pre-round-eleven is what
+the cards remove); a card the store has not filled yet pays the engine's one cover query
+for that row, and the People tab paints at most its grid cap — the window is exactly what
+the client paints. Absent `limit` answers every person in the store's id order (the full
+list, the shape this route has always answered). A present limit outside 1..=1000000 is
+a 422, the `similar?limit=` law restated.
 
 ### `GET /api/v1/faces/person/{id}`
 
@@ -424,20 +441,26 @@ answer every row (the shape this route has always answered). Validation: limit
 first — the autocomplete list of the People tab's name box (picking one of these names on
 another card is the human's merge act). `named=0`/absent answers the full list.
 
-### `POST /api/v1/faces/name` · `merge` · `delete` · `confirm` (admin operations)
+### `POST /api/v1/faces/name` · `merge` · `delete` · `unload` · `confirm` (admin operations)
 
 ```sh
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/name   -d '{"person": 3, "name": "Angela"}' -H 'content-type: application/json'
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/merge  -d '{"into": 3, "from": 4}' -H 'content-type: application/json'
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/delete -d '{"person": 1}' -H 'content-type: application/json'
+curl -s -X POST http://127.0.0.1:8787/api/v1/faces/unload -d '{}' -H 'content-type: application/json'
 curl -s -X POST http://127.0.0.1:8787/api/v1/faces/confirm -d '{"face": 5, "person": 3}' -H 'content-type: application/json'
-# → 200 {"ok": true} on each
+# → 200 {"ok": true} on each; `unload` answers {"ok": true, "persons": N, "faces": M}
 ```
 
 Naming is a label. `merge` joins two clusters. `delete` dissolves a person — its faces go to
 the pending queue (deleting a person is **not** deleting photos; the faces re-cluster).
+`unload` is the bulk `delete` over the whole unnamed group: every person without a name is
+dissolved, their faces requeue, the named people stay — the next scan re-clusters onto the
+names (the engine relays its own counts, `{"ok": true, "persons": N, "faces": M}`).
 `confirm` is the human answer to a collision: a queued face joins the named person and is
 pinned there. `name` is 1–120 characters; ids are integers > 0; bad bodies answer `422`.
+These mutating acts also sweep the pre-rendered cover-card files with the rows they dissolve
+(round eleven) — the cache follows the store, and a scan fills fresh cards at the cluster tail.
 
 ### `GET /api/v1/faces/pending` and `GET /api/v1/faces/similar?face=N&limit=M`
 

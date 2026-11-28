@@ -85,16 +85,22 @@ def test_root_serves_the_lit_ui(media_client):
     assert media_client.get("/style.css").status_code == 200
     # Stage-10 parity with the desktop panel: appearance choice, kind filters, code mode,
     # keyword-first typing (prefix_last then the meaning upgrade), the keys footer.
-    # The names box (issue #190's surface gap, 2026-11-10) joins the code box in the search row.
+    # The names box (issue #190's surface gap, 2026-11-10) joined the code box in the
+    # search row; the search-bar law (2026-11-27, the user) RETIRED it — the typed
+    # prefixes stay ("code: …", "name: …" in the field), and the ONLY extra control
+    # right of the kind chips is the People dropdown. The retired ids must stay OUT
+    # of the bundle: their return is the bar growing controls back.
     assert 'data-theme="system"' in html                    # the thin shell carries it
     assert 'id="theme"' in bundle and "system" in bundle
     assert '"screenshot","Screenshots"' in bundle and 'id="code"' in bundle
-    assert 'id="names"' in bundle and 'id="names-label"' in bundle
-    # The scope selects (#206/#132/#188, 2026-11-25): folder scope + file type ride the
-    # chips row beside the People select — the web keeps NATIVE selects (real browsers
-    # open those; the shell's webview cannot, and builds its own panel there).
-    assert 'id="scope"' in bundle and 'id="ext"' in bundle
-    assert 'aria-label="Search scope"' in bundle and 'aria-label="File type"' in bundle
+    assert 'id="names"' not in bundle and 'id="names-label"' not in bundle
+    assert 'id="scope"' not in bundle and 'id="ext"' not in bundle
+    # The People dropdown (round six, 2026-11-23; the pool relay round twelve, 2026-11-27):
+    # the native select right of the chips, relaying the verb's `person` (the web keeps
+    # NATIVE selects — real browsers open those; the shell's webview cannot, and builds
+    # its own panel there).
+    assert 'id="people-filter"' in bundle and 'aria-label="Search by person"' in bundle
+    assert '"person"' in bundle
     assert "prefix_last" in bundle and "embed_ahead" in bundle
     assert "localStorage" in bundle                          # the theme is kept in the browser
     assert "↑↓" in bundle and "Space" in bundle

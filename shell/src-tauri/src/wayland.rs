@@ -43,7 +43,10 @@ pub fn set_area(panel: &tauri::WebviewWindow, area: (i32, i32, i32, i32)) {
 
 #[cfg(target_os = "linux")]
 fn apply(window: &impl IsA<gtk::Widget>) {
-    let Some((x, y, width, height)) = *AREA.lock().unwrap() else { return };
-    let region = gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(x, y, width, height));
+    let Some((x, y, width, height)) = *AREA.lock().unwrap() else {
+        return;
+    };
+    let region =
+        gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(x, y, width, height));
     window.input_shape_combine_region(Some(&region));
 }

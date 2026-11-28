@@ -8,8 +8,12 @@ use std::path::Path;
 pub fn copy_file(window: &tauri::WebviewWindow, path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{GlobalFree, POINT};
-    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
     use windows_sys::Win32::UI::Shell::DROPFILES;
     const CF_HDROP: u32 = 15;
     // DROPFILES, then the paths, each ending in a NUL and the list in another; written as Windows writes them (the helper
@@ -26,8 +30,17 @@ pub fn copy_file(window: &tauri::WebviewWindow, path: &Path) -> Result<(), Strin
             return Err("no memory for the clipboard".into());
         }
         let start = GlobalLock(memory) as *mut u8;
-        start.cast::<DROPFILES>().write(DROPFILES { pFiles: header as u32, pt: POINT { x: 0, y: 0 }, fNC: 0, fWide: 1 });
-        std::ptr::copy_nonoverlapping(names.as_ptr().cast::<u8>(), start.add(header), names.len() * 2);
+        start.cast::<DROPFILES>().write(DROPFILES {
+            pFiles: header as u32,
+            pt: POINT { x: 0, y: 0 },
+            fNC: 0,
+            fWide: 1,
+        });
+        std::ptr::copy_nonoverlapping(
+            names.as_ptr().cast::<u8>(),
+            start.add(header),
+            names.len() * 2,
+        );
         GlobalUnlock(memory);
         // The window owns the clipboard: without an owner, Windows won't take the data.
         if OpenClipboard(owner) == 0 {
@@ -86,10 +99,17 @@ pub fn copy_file(_: &tauri::WebviewWindow, _: &Path) -> Result<(), String> {
 pub fn copy_text(window: &tauri::WebviewWindow, text: &str) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::GlobalFree;
-    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
     const CF_UNICODETEXT: u32 = 13;
-    let wide: Vec<u16> = std::ffi::OsStr::new(text).encode_wide().chain([0]).collect();
+    let wide: Vec<u16> = std::ffi::OsStr::new(text)
+        .encode_wide()
+        .chain([0])
+        .collect();
     let owner = window.hwnd().map_err(|error| error.to_string())?.0 as _;
     // SAFETY: the block is sized for the text and its NUL and written within that; once the
     // clipboard takes it, it owns it (freed here only when it didn't).
@@ -98,7 +118,11 @@ pub fn copy_text(window: &tauri::WebviewWindow, text: &str) -> Result<(), String
         if memory.is_null() {
             return Err("no memory for the clipboard".into());
         }
-        std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), GlobalLock(memory) as *mut u8, wide.len() * 2);
+        std::ptr::copy_nonoverlapping(
+            wide.as_ptr().cast::<u8>(),
+            GlobalLock(memory) as *mut u8,
+            wide.len() * 2,
+        );
         GlobalUnlock(memory);
         // The window owns the clipboard: without an owner, Windows won't take the data.
         if OpenClipboard(owner) == 0 {

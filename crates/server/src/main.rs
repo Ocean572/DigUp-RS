@@ -332,6 +332,8 @@ impl App {
             models_dir: self.cfg.models_dir.clone(),
             encoder_idle: self.cfg.encoder_idle,
             include_datasets: self.cfg.include_datasets,
+            faces_dir: Some(self.cfg.config.join("faces")),
+            faces_consent: Some(faces::consent_path(&self.cfg.config, name)),
         };
         // os.makedirs(target.index, exist_ok=True) in scope_for: a failure raises
         // through the lifespan (same class as the job-log folder above).
@@ -422,6 +424,8 @@ impl App {
             models_dir: self.cfg.models_dir.clone(),
             encoder_idle: config::DEFAULT_ENCODER_IDLE,
             include_datasets: self.cfg.include_datasets,
+            faces_dir: Some(self.cfg.config.join("faces")),
+            faces_consent: Some(faces::consent_path(&self.cfg.config, &target.name)),
         };
         match self.status.get(&cfg) {
             Ok(facts) => {
@@ -1654,7 +1658,20 @@ async fn search(
         Err(errors) => return detail_response(errors),
     };
     let target = request_target(&ctx);
-    let filter_target = target.clone();
+    // The People-scoped search (round twelve, 2026-11-27, the user's pool law):
+    // `person` POOLS the verb inside the engine — the candidate files are that
+    // person's photos and the z-gate is computed over that pool, the engine's
+    // honest numbers for the query among her photos. Round six's post-filter (ask
+    // faces which of the global field's winners carry the face) is retired: it
+    // kept only global winners through an intersection — the crowding the user
+    // named. The consent wall rides unchanged: no record → 400, the same body
+    // every faces route answers, BEFORE any daemon call; the daemon enforces the
+    // same file engine-side (`--faces-consent`), GUI wall and engine wall alike.
+    if req.person.is_some() {
+        if let Err(error) = faces_consent_guard(&app, &target) {
+            return error.into_response();
+        }
+    }
     let result = in_scope(app.clone(), target, move |scope| {
         let reply = scope.service.search(&service::SearchParams {
             q: &req.q,
@@ -1666,6 +1683,7 @@ async fn search(
             name_only: req.name_only,
             under: req.under.unwrap_or_default(),
             ext: req.ext.unwrap_or_default(),
+            person: req.person,
         })?;
         let mut row = match strip(reply) {
             Value::Object(row) => row,
@@ -1683,58 +1701,9 @@ async fn search(
             Some(rows) => rows.clone(),
             None => return Err(ApiError::Internal),
         };
-        // The People filter (round six, 2026-11-23, the user's design): the semantic
-        // search stays PURE — the engine answers its ranking untouched (every search
-        // pin stays byte-identical with the field absent). The face store answers
-        // which of THOSE paths carry the person's face; membership is relayed,
-        // nothing is re-scored. The filter runs BEFORE the media-id mint, so dropped
-        // rows never flood the LRU. No consent record is the faces wall — 400,
-        // the same body every faces route answers (never a silent unfiltered pass).
-        let rows = match req.person {
-            None => rows,
-            Some(person) => {
-                let (consent, record) = faces_consent_guard(&app, &filter_target)?;
-                let mut fields = Map::new();
-                fields.insert("person".into(), json!(person));
-                fields.insert(
-                    "paths".into(),
-                    Value::Array(
-                        rows.iter()
-                            .filter_map(|hit| hit.get("path").and_then(Value::as_str))
-                            .map(|path| json!(path))
-                            .collect(),
-                    ),
-                );
-                let reply = faces::faces_call(
-                    &scope.cfg,
-                    &app.cfg,
-                    &consent,
-                    &record,
-                    "paths",
-                    fields,
-                    Duration::from_secs(120),
-                )
-                .map_err(faces_call_error)?;
-                let keep: std::collections::HashSet<String> = reply
-                    .get("paths")
-                    .and_then(Value::as_array)
-                    .map(|paths| {
-                        paths
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                rows.into_iter()
-                    .filter(|hit| {
-                        hit.get("path")
-                            .and_then(Value::as_str)
-                            .is_some_and(|path| keep.contains(path))
-                    })
-                    .collect()
-            }
-        };
+        // The People law (round twelve, 2026-11-27): `person` is relayed into the verb
+        // above and the daemon answers the POOLED ranking — no post-filter runs here
+        // anymore (round six's intersection is retired; the engine's pool is the filter).
         let hits = rows
             .iter()
             .map(|hit| {
@@ -2401,6 +2370,26 @@ async fn faces_persons(
                     }
                 }
             }
+            // The pre-rendered card (round eleven): minted like every media row, so
+            // the panel loads it through `/api/v1/media/{id}` with zero render cost.
+            let cover_render = person
+                .as_object()
+                .and_then(|p| p.get("cover_render"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if let Some(path) = cover_render {
+                let entry = HitEntry {
+                    path,
+                    kind: "image".to_string(),
+                    segment_id: 0,
+                    loc: None,
+                    code: false,
+                };
+                let media_id = app.hit_cache.put(entry).map_err(|_| ApiError::Internal)?;
+                if let Some(p) = person.as_object_mut() {
+                    p.insert("cover_media".into(), json!(media_id));
+                }
+            }
         }
         if let Some(map) = row.as_object_mut() {
             map.insert("persons".into(), Value::Array(persons));
@@ -2684,6 +2673,41 @@ async fn faces_delete(
         )
         .map_err(faces_call_error)?;
         Ok(json!({"ok": true}))
+    })
+    .await;
+    match outcome {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// `POST /api/v1/faces/unload` — the bulk `delete` over the unnamed group (the
+/// user's law 2026-11-27, the "Unload unnamed" button on both frontends):
+/// unnamed persons drop, their faces requeue for the next clustering pass,
+/// named persons are never touched. The reply relays the engine's own counts.
+async fn faces_unload(
+    State(app): State<Shared>,
+    Extension(ctx): Extension<Ctx>,
+    body: Bytes,
+) -> Response {
+    let value = match parse_body(&body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let _ = value;
+    let target = request_target(&ctx);
+    let outcome = in_scope(app.clone(), target.clone(), move |scope| {
+        let (consent, record) = faces_consent_guard(&app, &target)?;
+        faces::faces_call(
+            &scope.cfg,
+            &app.cfg,
+            &consent,
+            &record,
+            "unload",
+            Map::new(),
+            Duration::from_secs(120),
+        )
+        .map_err(faces_call_error)
     })
     .await;
     match outcome {
@@ -2992,7 +3016,25 @@ async fn media_file(
         .iter()
         .map(|root| targets::resolve(root))
         .any(|root| resolved == root || resolved.starts_with(&format!("{root}/")));
-    if !inside {
+    // The cover-card seam (round eleven, 2026-11-27): the People grid's pre-rendered
+    // cards are the faces home's files (`<config>/faces/<home-hash>/covers/<person>.jpg`),
+    // beside face.sqlite — faces data, not crawl data. They ride the CONSENT wall (only
+    // the persons relay mints them, behind the consent guard and the faces principals),
+    // not the roots wall: the store's home is the deployment's config folder, never a
+    // crawl root. The exception is the cards folder and nothing wider — the store file
+    // beside it is never servable, and an id for a card can only be minted by a principal
+    // that already reads the whole face store.
+    let faces_cover = {
+        let home = targets::resolve(&app.cfg.config.join("faces").to_string_lossy());
+        match resolved.strip_prefix(&format!("{home}/")) {
+            Some(relative) => {
+                let segments: Vec<&str> = relative.split('/').collect();
+                segments.len() == 3 && segments[1] == "covers"
+            }
+            None => false,
+        }
+    };
+    if !(inside || faces_cover) {
         return ApiError::http(
             StatusCode::NOT_FOUND,
             "file is outside the server's media roots",
@@ -3630,6 +3672,7 @@ async fn main() -> ExitCode {
         .route("/api/v1/faces/name", post_only(faces_name))
         .route("/api/v1/faces/merge", post_only(faces_merge))
         .route("/api/v1/faces/delete", post_only(faces_delete))
+        .route("/api/v1/faces/unload", post_only(faces_unload))
         .route("/api/v1/faces/confirm", post_only(faces_confirm))
         .route("/api/v1/faces/pending", get_only(faces_pending))
         .route("/api/v1/faces/similar", get_only(faces_similar))

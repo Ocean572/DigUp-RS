@@ -27,14 +27,11 @@ export function createSearchController({ api, store, pause = TYPING_PAUSE }) {
     if (!s.isCode) {
       const kinds = f.kinds;
       body.kinds = (kinds.length === 0 || kinds.length === 6) ? null : kinds;   // none ticked = all
-      // The People filter (round six, 2026-11-23): the server keeps only hits whose photo
-      // carries the person's face (faces-store membership, relayed — the z's ride verbatim).
+      // The People search (round twelve, 2026-11-27, the user's pool law): relayed
+      // verbatim — the ENGINE pools the search into that person's photos (candidates
+      // are her photos, the z-gate computed in that pool; consent-gated server-side,
+      // the faces 400 body). An absent field keeps the byte-parity verb.
       if (f.person) body.person = f.person;
-      // The scope keeps (#206/#132/#188, 2026-11-25): relayed verbatim — the engine
-      // narrows the scope inside its roots and keeps rows after the ranking. Absent
-      // fields keep the byte-parity verb for every pre-round pin.
-      if (f.under) body.under = f.under;
-      if (f.ext) body.ext = f.ext;
     }
     return body;
   }
@@ -47,8 +44,10 @@ export function createSearchController({ api, store, pause = TYPING_PAUSE }) {
     const prefixCode = /^code:/i.test(trimmed);
     const prefixNames = /^name:/i.test(trimmed);
     const code = prefixCode || filters.code;
-    // One prefix per query, the engine's own order ("code:" leads a text that carries both).
-    const names = !code && (prefixNames || filters.names === true);
+    // One prefix per query, the engine's own order ("code:" leads a text that carries
+    // both). The names TOGGLE is retired from the bar (2026-11-27); the typed "name:"
+    // prefix is the engine's own path and rides the text untouched.
+    const names = !code && prefixNames;
     const text = prefixCode ? trimmed.slice(5).trim() : typed;
     store.set({ isCode: code, isNames: names, text });
     const generation = ++seq.generation;

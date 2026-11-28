@@ -6,7 +6,7 @@
 //! The verbs are the compiled list in `handle`: `scan` (crawl roots → decode →
 //! SCRFD detect → embed → record, streaming `face-scan` events, then one online
 //! clustering pass), `cluster`, `persons`, `person`, `faces`, `name`, `merge`,
-//! `delete`, `confirm`, `pending`, `similar`, `prune`, `counts`, `quit`.
+//! `delete`, `unload`, `confirm`, `pending`, `similar`, `prune`, `counts`, `quit`.
 //! The store law (FACES.md §2/§3): piggyback freshness is `(path, size, mtime)`
 //! — a file already recorded with those exact facts is not re-decoded; the
 //! models load once per batch and unload after `--model-idle` seconds (FACES.md
@@ -20,16 +20,18 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value};
 
 use digup_core::crawler;
-use digup_core::face_store::{FaceRecord, FaceRow, FaceStore, ScanOf};
+use digup_core::face_store::{FaceRecord, FaceRow, FaceStore, ScanOf, FACE_FILE};
 use digup_core::options::IndexOptions;
 use digup_core::paths;
 use digup_native::rgb::RgbImage;
 use digup_runtime::face::{Embedder, Scrfd};
+use sha2::{Digest, Sha256};
 
 use crate::emit::emit;
 
-/// The daemon's start shape. `index` is the index folder (face.sqlite rides
-/// beside index.sqlite, its own file — FACES.md §2); `models` carries the ONNX
+/// The daemon's start shape. `index` is the index folder (its anchors hash the
+/// device-side faces home — the #195 privacy move; the legacy beside-index.sqlite
+/// shape moves on first open); `models` carries the ONNX
 /// pins; the thresholds are the clustering knobs from the config.
 #[derive(Clone)]
 pub struct FaceServiceConfig {
@@ -64,6 +66,13 @@ pub struct FaceServiceConfig {
     /// skip background faces from low-confidence detections.
     /// `--faces-min-score` moves it; default 0.5 changes nothing.
     pub min_score: f32,
+    /// The device-side faces root (#195, the privacy boundary): the faces' file
+    /// rides `<faces_dir>/<anchor-hash>/face.sqlite`, NOT the index folder — an
+    /// in-tree `.digup` carries index + previews only, so a folder carried away
+    /// carries its index, never its faces. The store's anchors hash the folder
+    /// (a v6 store's faces hash by index path); a legacy `face.sqlite` beside
+    /// index.sqlite moves to the new home on first open.
+    pub faces_dir: PathBuf,
 }
 
 struct State {
@@ -101,6 +110,53 @@ pub fn face_service(config: FaceServiceConfig) -> i32 {
     }
 }
 
+/// The faces' home on the device (#195, the privacy boundary): 16 hex of the sha256 of the
+/// index folder's path — the store's DEVICE-LOCAL identity. The anchor set is NOT a usable
+/// key (measured 2026-11-27 on the app's live 173k store: the v6→v7 migration creates one
+/// anchor per row cluster — dozens of deep folders — and every folder the user adds to the
+/// roots is a new anchor, so an anchor-keyed home MOVES under the running app: the People
+/// tab empties and 195k faces re-scan). The privacy law needs no anchor: the home lives
+/// under the faces root, OUTSIDE the `.digup`, so a store carried to another device computes
+/// its own home from its own path and the faces never travel. The faces key rows by
+/// `(path, size, mtime)`, which is the same spelling on the same device. `pub` for the
+/// seam's pins (`tests/faces_move.rs`).
+pub fn faces_store_dir(index: &Path, faces_root: &Path) -> PathBuf {
+    let digest = Sha256::digest(index.to_string_lossy().as_bytes());
+    let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    faces_root.join(hex)
+}
+
+/// The legacy move: a `face.sqlite` beside index.sqlite (the FACES.md §2 shape)
+/// rides to the device-side home on first open — sidecars (`-wal`/`-shm`) with
+/// it. Never destructive: a file already at the new home wins (the old copy
+/// stands untouched for the operator), and the move is a rename on the same
+/// volume when possible, a copy+delete across volumes. `pub` for the pins.
+pub fn move_legacy_faces(index: &Path, dir: &Path) {
+    let old = index.join(FACE_FILE);
+    let new = dir.join(FACE_FILE);
+    if !old.exists() || new.exists() {
+        return;
+    }
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let from = index.join(format!("{FACE_FILE}{suffix}"));
+        if !from.exists() {
+            continue;
+        }
+        let to = dir.join(format!("{FACE_FILE}{suffix}"));
+        if std::fs::rename(&from, &to).is_ok() {
+            continue;
+        }
+        // Cross-volume fallback: copy, delete the source on success — the WAL
+        // rides with the main file, so the trio moves whole.
+        if std::fs::copy(&from, &to).is_ok() {
+            let _ = std::fs::remove_file(&from);
+        }
+    }
+}
+
 fn run(config: FaceServiceConfig) -> Result<i32, String> {
     // The consent gate is the engine's own law (FACES.md Phase 1 §5 — the
     // license posture is "user-supplied-only, consented"): the daemon refuses
@@ -123,8 +179,13 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             }
         }
     }
+    // The privacy law (#195): faces ride the device, not the folder. The store's
+    // anchors hash the device-side home; a legacy face.sqlite beside index.sqlite
+    // moves there on first open (the daemon is the only opener).
+    let faces_home = faces_store_dir(&config.index, &config.faces_dir);
+    move_legacy_faces(&config.index, &faces_home);
     let store = Arc::new(Mutex::new(
-        FaceStore::open(&config.index).map_err(|e| e.to_string())?,
+        FaceStore::open(&faces_home).map_err(|e| e.to_string())?,
     ));
     let state = State {
         store,
@@ -141,6 +202,7 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
             excluded_folders: config.excluded_folders.clone(),
             min_faces: config.min_faces,
             min_score: config.min_score,
+            faces_dir: config.faces_dir.clone(),
         },
         scrfd: None,
         embedder: None,
@@ -149,9 +211,17 @@ fn run(config: FaceServiceConfig) -> Result<i32, String> {
     // The store's own model law (FACES.md tiers): a face.sqlite is embedded by
     // exactly ONE embedder pin; a scan under a different pin is a hard refusal.
     stamp_models(&state)?;
+    let faces_home = {
+        let s = state.store.lock().unwrap();
+        s.directory.to_string_lossy().into_owned()
+    };
     write_out(serde_json::json!({
         "event": "ready",
         "index": config.index.to_string_lossy().into_owned(),
+        // The device-side home the store landed on (the path-keyed home, #195):
+        // the thin clients scope their asset readers to it — the cover cards
+        // (round eleven) are files inside it, beside face.sqlite.
+        "faces": faces_home,
         "det_model": config.det_model,
         "emb_model": config.emb_model,
     }));
@@ -297,6 +367,88 @@ fn decode_photo(path: &str) -> Result<RgbImage, String> {
     Ok(img.oriented(orientation))
 }
 
+/// The pre-rendered cover card (the user's law 2026-11-27, round eleven): the
+/// card crops the best-scoring face out of a 512 px preview on EVERY visit —
+/// the panel's render cache is memory-only, so a big store re-decodes its whole
+/// grid at every daemon start. The scan already walks every photo, so the covers
+/// are its free byproduct: the fill at the end of a scan (and of a `cluster`
+/// pass) renders ONLY the missing ones, beside the store in the faces home
+/// (`<person>.jpg`), and `delete`/`unload` remove the files of the people they
+/// dissolve — the cache follows the store. A photo that will not decode keeps
+/// its card on the `render` path (the panel falls back), and the fill retries
+/// at the next scan.
+fn render_cover(store: &std::sync::Arc<Mutex<FaceStore>>, person: i64) -> Result<(), String> {
+    let face = {
+        let s = store.lock().unwrap();
+        s.person_faces(person)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    };
+    let Some(face) = face else {
+        return Ok(());
+    };
+    let out = {
+        let s = store.lock().unwrap();
+        s.cover_file(person)
+    };
+    let dir = out
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let prepared = digup_native::image::prepare(Path::new(&face.path), 512, 0, &dir, false)
+        .map_err(|e| format!("{person}: {e}"))?;
+    std::fs::rename(&prepared.path, &out).map_err(|e| e.to_string())
+}
+
+/// Fill the cover cache for every person missing its file (parallel FILES, the
+/// scan's own pool; the covers of existing cards are never touched).
+fn fill_covers(state: &State) {
+    let persons: Vec<i64> = {
+        let s = state.store.lock().unwrap();
+        match s.list_persons() {
+            Ok(all) => all
+                .into_iter()
+                .filter(|p| p.count > 0 && !s.cover_file(p.id).exists())
+                .map(|p| p.id)
+                .collect(),
+            Err(_) => return,
+        }
+    };
+    if persons.is_empty() {
+        return;
+    }
+    let workers = workers_for(state.config.workers, persons.len());
+    let chunk = persons.len().div_ceil(workers).max(1);
+    std::thread::scope(|scope| {
+        for part in persons.chunks(chunk) {
+            let store = state.store.clone();
+            let part: Vec<i64> = part.to_vec();
+            scope.spawn(move || {
+                for id in part {
+                    let _ = render_cover(&store, id);
+                }
+            });
+        }
+    });
+}
+
+/// The cover files of dissolved people go with them (the same law as the store:
+/// an unload of 8,800 people takes their 8,800 cards with it, the named ones
+/// stand).
+fn drop_cover(store: &std::sync::Arc<Mutex<FaceStore>>, person: i64) {
+    let file = {
+        let s = store.lock().unwrap();
+        s.cover_file(person)
+    };
+    let _ = std::fs::remove_file(file);
+}
+
 fn row_json(r: &FaceRow) -> Value {
     serde_json::json!({
         "id": r.id,
@@ -342,6 +494,7 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                     break;
                 }
             }
+            fill_covers(state);
             Ok(serde_json::json!({"ok": true, "assigned": assigned}))
         }
         "persons" => {
@@ -393,6 +546,14 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                             .into_iter()
                             .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
                         row["cover_face"] = face.map(|f| row_json(&f)).unwrap_or(Value::Null);
+                        // The pre-rendered card, when the scan has filled it
+                        // (round eleven): the thin client serves THIS file and skips
+                        // the render entirely; the path rides the row, the panel decides.
+                        let cover_file = state.store.lock().unwrap().cover_file(p.id);
+                        row["cover_render"] = match cover_file.to_str() {
+                            Some(p) if cover_file.exists() => Value::String(p.to_string()),
+                            _ => Value::Null,
+                        };
                     }
                     Ok(row)
                 })
@@ -486,6 +647,10 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .unwrap()
                 .merge_persons(into, from)
                 .map_err(|e| e.to_string())?;
+            // The merged card's best face can change with the merge — both cards
+            // drop and the next scan/cluster fill re-renders the survivor's.
+            drop_cover(&state.store, into);
+            drop_cover(&state.store, from);
             Ok(serde_json::json!({"ok": true}))
         }
         "delete" => {
@@ -496,7 +661,34 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .unwrap()
                 .delete_person(id)
                 .map_err(|e| e.to_string())?;
+            drop_cover(&state.store, id);
             Ok(serde_json::json!({"ok": true}))
+        }
+        "unload" => {
+            // The bulk `delete` over the unnamed group (the app/server "Unload
+            // unnamed" button, the user's law 2026-11-27): unnamed persons are
+            // dropped, their faces requeue onto the named centroids' pass;
+            // named persons are never touched. The reply relays the engine's
+            // own counts — no invented numbers.
+            let unnamed: Vec<i64> = {
+                let s = state.store.lock().unwrap();
+                s.list_persons()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .filter(|p| p.name.as_deref().is_none_or(|n| n.is_empty()))
+                    .map(|p| p.id)
+                    .collect()
+            };
+            let (persons, faces) = state
+                .store
+                .lock()
+                .unwrap()
+                .unload_unnamed()
+                .map_err(|e| e.to_string())?;
+            for id in unnamed {
+                drop_cover(&state.store, id);
+            }
+            Ok(serde_json::json!({"ok": true, "persons": persons, "faces": faces}))
         }
         "confirm" => {
             let face = need_num(request, "face")?;
@@ -508,6 +700,9 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
                 .unwrap()
                 .confirm_face(face, person, now)
                 .map_err(|e| e.to_string())?;
+            // The confirmed face can be the new best-scoring one — the card
+            // drops and the next fill re-renders it.
+            drop_cover(&state.store, person);
             Ok(serde_json::json!({"ok": true}))
         }
         "pending" => {
@@ -831,6 +1026,7 @@ fn scan(state: &mut State, request: &Map<String, Value>) -> Result<Value, String
     write_out(
         serde_json::json!({"event": "cluster", "assigned": assigned, "persons": c.persons, "pending": c.pending}),
     );
+    fill_covers(state);
     Ok(serde_json::json!({
         "ok": true, "files": scanned, "faces": faces_total, "skipped": skipped,
         "fresh": fresh, "assigned": assigned,

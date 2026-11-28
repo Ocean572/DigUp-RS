@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::types::Value;
-use rusqlite::{ffi, Connection, Row, ToSql};
+use rusqlite::{ffi, Connection, OpenFlags, Row, ToSql};
 use thiserror::Error;
 
 pub const BUSY_TIMEOUT_MS: u64 = 5000;
@@ -140,6 +140,26 @@ impl Database {
     pub fn set_busy_timeout_ms(&self, ms: u64) -> Result<()> {
         self.conn.busy_timeout(Duration::from_millis(ms))?;
         Ok(())
+    }
+
+    /// The READ-ONLY window (round twelve, 2026-11-27, the People-scoped search): the
+    /// search daemon reads the face store's membership without ever touching it — a WAL
+    /// reader rides the writer's journal, the faces daemon never blocks and never sees a
+    /// second writer. No write pragmas: `journal_mode` is persistent (setting it from a
+    /// read-only connection is the "attempt to write a readonly database" this seam must
+    /// never trigger), and `foreign_keys` is a write-enforcement knob reads don't use.
+    /// A store that does not exist yet answers the open error — the caller says "no
+    /// faces store" in its own words.
+    pub fn open_read_only(path: &Path) -> Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        conn.busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))?;
+        Ok(Self {
+            conn,
+            depth: Cell::new(0),
+        })
     }
 
     pub fn user_version(&self) -> Result<i64> {

@@ -51,16 +51,19 @@ function findView() {
 
 const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 
-test('findLike sends the reference path with the Scope keeps and fills the rows', async () => {
+test('findLike sends the plain verb for the reference path and fills the rows', async () => {
   const f = findView();
-  f.call('state.scope = "/data/photos/trip"; state.ext = "jpg"; state.filter = null;');
+  f.call('state.filter = null;');
   f.call('findLike({ path: "/data/photos/trip/IMG_1.jpg", kind: "image" })');
   const [all] = f.requests;
   assert.equal(all.op, 'find_similar');
   assert.equal(all.path, '/data/photos/trip/IMG_1.jpg');
   assert.equal(all.limit, 40);
-  assert.deepEqual([...all.under], ['/data/photos/trip']);
-  assert.deepEqual([...all.ext], ['jpg']);
+  // The bar law (2026-11-27): the retired controls' fields never ride from the UI,
+  // and the People dropdown does not pool a reference search — the plain verb.
+  assert.equal(all.under, undefined);
+  assert.equal(all.ext, undefined);
+  assert.equal(all.person, undefined);
   assert.equal(all.q, undefined);   // the picture IS the query — no words ride
   all.resolve({ hits: [{ path: '/data/photos/trip/IMG_2.jpg', kind: 'image', score: 0.6, z: 3.1 },
                         { path: '/data/photos/trip/IMG_3.jpg', kind: 'image', score: 0.4 }],

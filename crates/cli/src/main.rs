@@ -33,7 +33,7 @@ struct Arguments {
 }
 
 /// `Arguments.valued`: flags that need a value.
-const VALUED: [&str; 27] = [
+const VALUED: [&str; 28] = [
     "--index",
     "--limit",
     "--kind",
@@ -49,6 +49,7 @@ const VALUED: [&str; 27] = [
     "--to",
     "--memory-limit",
     "--faces-models",
+    "--faces-dir",
     "--det-model",
     "--emb-model",
     "--faces-consent",
@@ -220,6 +221,13 @@ fn main() {
                     .value("--encoder-idle")
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(300.0),
+                // The People-scoped search (round twelve): the faces home + consent
+                // record ride the SAME flag spellings the faces daemon takes. Named =
+                // the `person:` field can pool a search (read-only window, consent
+                // re-checked per request); unnamed = the field refuses, plain searches
+                // never touch the store.
+                faces_dir: args.value("--faces-dir").map(url_path),
+                faces_consent: args.value("--faces-consent").map(PathBuf::from),
             };
             std::process::exit(digup_services::search_service::serve(config));
         }
@@ -230,8 +238,9 @@ fn main() {
         }
         #[cfg(feature = "faces")]
         Some("faces-service") => {
-            // The faces verbs daemon (FACES.md Phase 2 §2): face.sqlite rides in the
-            // index folder, the ONNX pins are user-supplied in the models folder
+            // The faces verbs daemon (FACES.md Phase 2 §2): the faces' file rides
+            // the device-side home `--faces-dir/<anchor-hash>/face.sqlite` (#195
+            // privacy move), the ONNX pins are user-supplied in the models folder
             // (the license gate's posture), thresholds are the clustering knobs,
             // and the models unload after their idle window (Phase 2 §4).
             let models = args
@@ -251,6 +260,7 @@ fn main() {
             }
             let config = digup_services::face_service::FaceServiceConfig {
                 index: args.index_folder(),
+                faces_dir: faces_root(&args),
                 models,
                 det_model: args
                     .value("--det-model")
@@ -516,6 +526,30 @@ impl Arguments {
         };
         url_path(&base.join("digup").join("index").to_string_lossy())
     }
+}
+
+/// The device-side faces root (#195, the privacy boundary): `--faces-dir`, the
+/// `DIGUP_FACES_DIR` env, or the default index's sibling
+/// (`$XDG_DATA_HOME/digup/faces`). Faces never ride in-tree — `.digup` carries
+/// index + previews only, so carrying a folder carries its index, never its faces.
+#[cfg(feature = "faces")]
+fn faces_root(args: &Arguments) -> PathBuf {
+    if let Some(chosen) = args.value("--faces-dir") {
+        return url_path(chosen);
+    }
+    if let Ok(value) = std::env::var("DIGUP_FACES_DIR") {
+        if !value.is_empty() {
+            return url_path(&value);
+        }
+    }
+    let base = match std::env::var("XDG_DATA_HOME") {
+        Ok(value) if !value.is_empty() => PathBuf::from(value),
+        _ => std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".local/share"),
+    };
+    base.join("digup").join("faces")
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -919,7 +953,10 @@ fn index(args: &Arguments) -> Result<(), String> {
     indexer.store.read_again_once().map_err(|e| e.to_string())?;
     indexer.check_model().map_err(|e| e.to_string())?;
     let sync = indexer
-        .sync(&folders, &mut |_| {})
+        // #110: the index verb rides the gated sync — full crawl (and snapshot fill)
+        // on a fresh store, the prefilter + gated walk + row-check once the snapshot
+        // speaks. The sync laws are shared verbatim.
+        .sync_gated(&folders, &mut |_| {})
         .map_err(|e| e.to_string())?;
     let home = std::env::var("HOME").unwrap_or_default();
     println!(
@@ -2027,6 +2064,7 @@ fn search(args: &Arguments) -> Result<(), String> {
             word_weight: p.word_weight,
             prefix_last: false,
             under: scope_of(p.scope),
+            person_files: None,
         };
         let mut paired: Vec<(usize, SearchHit)> = Vec::new();
         let main_hits = searchers[0]
@@ -2089,6 +2127,7 @@ fn search(args: &Arguments) -> Result<(), String> {
             word_weight: p.word_weight,
             prefix_last: false,
             under: scope_of(p.scope),
+            person_files: None,
         };
         let hits = searchers[0]
             .search(p.query, vector.as_deref(), &opts)
@@ -2358,6 +2397,9 @@ fn find(args: &Arguments) -> Result<(), String> {
         word_weight: None,
         prefix_last: false,
         under: scope.as_deref(),
+        // Find like this answers pictures across the field: the People pool (#195-era
+        // round twelve) is a text-search act, the CLI's find verb carries no pool.
+        person_files: None,
     };
     let mut paired: Vec<SearchHit> = searcher
         .search("", Some(&vector), &opts)
@@ -2726,6 +2768,7 @@ fn evaluate(args: &Arguments) -> Result<(), String> {
             word_weight,
             prefix_last: false,
             under: None,
+            person_files: None,
         };
         let hits = searcher
             .search(&texts[i], vectors[i].as_deref(), &opts)

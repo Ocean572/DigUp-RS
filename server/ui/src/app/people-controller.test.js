@@ -42,6 +42,7 @@ function routes(over = {}) {
     "POST /api/v1/faces/name": mockReply(200, { ok: true }),
     "POST /api/v1/faces/merge": mockReply(200, { ok: true }),
     "POST /api/v1/faces/delete": mockReply(200, { ok: true }),
+    "POST /api/v1/faces/unload": mockReply(200, { ok: true, persons: 2, faces: 4 }),
     "POST /api/v1/faces/confirm": mockReply(200, { ok: true }),
     "DELETE /api/v1/faces/consent": mockReply(200, { ok: true, consented: false, removed: true }),
     // The autocomplete list (names = merge targets) and the painted gallery page
@@ -157,6 +158,7 @@ describe("people-controller", () => {
     await ctl.namePerson(1, "  Angela  ");
     await ctl.merge(1, 2);
     await ctl.deletePerson(3);
+    await ctl.unloadUnnamed(2);
     await ctl.confirmFace(9, 1);
     const bodies = calls.filter((c) => c.options.method === "POST"
                                   && c.path.startsWith("/api/v1/faces/")
@@ -166,6 +168,7 @@ describe("people-controller", () => {
       ["/api/v1/faces/name", { person: 1, name: "Angela" }],
       ["/api/v1/faces/merge", { into: 1, from: 2 }],
       ["/api/v1/faces/delete", { person: 3 }],
+      ["/api/v1/faces/unload", {}],
       ["/api/v1/faces/confirm", { face: 9, person: 1 }],
     ]);
   });
@@ -176,7 +179,9 @@ describe("people-controller", () => {
     const denied = createPeopleController({ api: fetchApi(), store: createStore({ people: null }),
                                             confirm: () => false });
     expect(await denied.deletePerson(1)).toBe(false);
+    expect(await denied.unloadUnnamed(2)).toBe(false);
     expect(calls.filter((c) => c.path === "/api/v1/faces/delete").length).toBe(0);
+    expect(calls.filter((c) => c.path === "/api/v1/faces/unload").length).toBe(0);
   });
 
   it("openPerson() loads a gallery page; closePerson() drops it", async () => {

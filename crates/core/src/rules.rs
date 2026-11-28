@@ -203,11 +203,20 @@ fn has_prefix(name: &str, prefixes: &[&str]) -> bool {
 
 /// `classify` as on macOS, by extension (`Files+Portable.swift:26-46`). `dataless` is the
 /// iCloud/OneDrive placeholder check for the `.ts` rule; the crawl leaves placeholders alone.
+/// Issue #8: the secret rule fires here too, not only in `classify_code` — `is_secret`'s own
+/// comment reads "never read, wherever they are", and by extension a `secrets.txt` or a
+/// `credentials.docx` IS a document: indexing it put the key material's text into search.
+/// The reason string is the code path's, relayed verbatim by the apps. Deliberate divergence
+/// from the Swift reference (its `classify` has no secret check, its `classifyCode` has —
+/// `Rules.swift:80`), on user direction, disclosed in `docs/RUST_PORT_AUDIT.md`.
 pub fn classify(path: &str, dataless: bool, options: &IndexOptions) -> Classification {
     let name = paths::last_component(path);
     let ext = paths::extension(name).to_lowercase();
     if options.excluded_extensions.contains(&ext) {
         return Classification::Skip("excluded type".to_string());
+    }
+    if is_secret(name) {
+        return Classification::Skip("key or password file".to_string());
     }
     if in_set(&PROTECTED_EXTENSIONS, &ext) {
         return Classification::Skip("copy-protected".to_string());

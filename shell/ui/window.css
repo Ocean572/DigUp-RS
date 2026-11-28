@@ -237,7 +237,6 @@ svg { display: block; }
   border: 1px solid var(--line);
   border-radius: 10px;
 }
-.dropdown-menu.scope-menu { min-width: 230px; }
 .dropdown-title {
   padding: 6px 10px 2px;
   font-size: 10px;

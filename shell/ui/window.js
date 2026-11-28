@@ -32,11 +32,8 @@ const $query = $("query"), $content = $("content"), $side = $("side"), $kinds = 
 const state = {
   query: "",
   filter: null,         // a FILTERS key, "code", or null for everything
-  namesOnly: false,     // #66 (2026-11-25): the Names chip — the engine's names-only path, no model
-  scope: null,          // #206/#132/#188: the folder-scope chip — one folder path, null = all folders
-  ext: null,            // the file-type chip part — one extension, null = all types
-  exts: [],             // the extensions the last answer found (the scope panel's file-types list)
-  person: null,         // the People filter (round six, 2026-11-23): a person id, null = everyone
+  person: null,         // the People search (round twelve, 2026-11-27): a person id, null =
+                        // everyone — the engine POOLS the search into that person's photos
   people: [],           // the store's NAMED people (the dropdown's list; empty = no consent, hidden)
   text: "",             // what was searched (without "code:")
   ranked: [],           // the strong results, best first
@@ -67,18 +64,6 @@ function isCode() {
   return state.filter === "code" || /^code:/i.test(state.query.trim());
 }
 
-/// A file's extension as the engine spells it (lowercase, no dot); "" when there is none.
-function extensionOf(path) {
-  const base = path.split(/[\\/]/).pop() || "";
-  const dot = base.lastIndexOf(".");
-  return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
-}
-
-/// A folder path's basename for the chips and the Scope panel ("…/Vienna" → "Vienna").
-function baseName(path) {
-  return path.split(/[\\/]/).filter(Boolean).pop() || path;
-}
-
 /// The query or the filter changed: after a short pause in typing, the search (and the same search of one kind, for a
 /// filter), all at once. The query's meaning is embedded on every keystroke, so the pause is the whole wait.
 function run() {
@@ -104,14 +89,12 @@ function run() {
   renderBar();
   if (!state.hasResults) renderContent();
   const filter = FILTERS.find((item) => item.key === state.filter);
-  // The scope chips (#206/#132/#188, 2026-11-25): the folder + file-type keeps ride the
-  // verb fields — the daemon narrows the scope INSIDE its roots and drops rows after the
-  // ranking (the engine's z's ride verbatim; the UI invents no filter of its own). A
-  // folder the Settings dropped leaves scope automatically (the chip shows All folders).
-  if (state.scope && !state.info.folders.includes(state.scope)) state.scope = null;
-  const scope = { name_only: state.namesOnly || undefined,
-                  under: state.scope ? [state.scope] : undefined,
-                  ext: state.ext ? [state.ext] : undefined };
+  // The People search (round twelve, 2026-11-27, the user's pool law): the person's id
+  // rides the verb's `person` field, and the ENGINE pools the search — candidates are
+  // that person's photos, z computed inside that pool, the store's membership its own
+  // consent-gated read. The UI invents no filter; a closed store (no consent) leaves
+  // the dropdown out and the field out (plain search, byte-parity).
+  const scope = { person: code ? undefined : (state.person || undefined) };
   state.timer = setTimeout(async () => {
     try {
       const all = await ask({ op: "search", q: text, code, meaning: true, limit: LIMIT, ...scope });
@@ -125,30 +108,10 @@ function run() {
         const key = FILTER_OF_KIND[hit.kind];
         counts[key] = (counts[key] || 0) + 1;
       }
-      let ranked = shown.hits.slice(0, shown.strong);
-      let weaker = shown.hits.slice(shown.strong);
-      // The People filter (round six): ask the face store which of THESE paths carry the
-      // person's face and drop the whole rows it does not name. The engine's z's ride
-      // verbatim — membership relayed, numbers untouched. A closed store (no consent)
-      // is a plain search: the dropdown is gone and the filter quietly steps aside.
-      if (state.person && !code) {
-        try {
-          const reply = await invoke("faces_paths",
-                                     { person: state.person, paths: shown.hits.map((hit) => hit.path) });
-          const keep = new Set(reply.paths || []);
-          ranked = ranked.filter((hit) => keep.has(hit.path));
-          weaker = weaker.filter((hit) => keep.has(hit.path));
-        } catch (error) {
-          state.person = null;
-        }
-        if (generation !== state.generation) return;
-      }
-      // The Scope panel's file-type list (2026-11-25): the extensions the answer's rows
-      // carry, in answer order — observed engine rows, invented nothing. (#206/#132/#188)
-      const exts = code ? []
-        : [...new Set(all.hits.map((hit) => extensionOf(hit.path)).filter(Boolean))].slice(0, 12);
+      const ranked = shown.hits.slice(0, shown.strong);
+      const weaker = shown.hits.slice(shown.strong);
       Object.assign(state, { counts, text, meaning: shown.meaning, hasResults: true, showWeaker: false,
-                             ranked, weaker, exts });
+                             ranked, weaker });
       if (!rows().some((hit) => hit.path === state.selection)) state.selection = rows()[0]?.path ?? null;
       render();
       if (debugPending) report();
@@ -178,7 +141,6 @@ function queryChanged(event) {
 function setFilter(key) {
   if (key === state.filter) return;
   state.filter = key;
-  if (key === "code") state.namesOnly = false;   // names-only is a file search, never a code one
   if (key !== "code") leaveCodeField();          // leaving code for files: "code:" goes from the field
   run();
 }
@@ -193,32 +155,10 @@ function leaveCodeField() {
   }
 }
 
-/// The scope chips' acts (2026-11-25): each re-runs the search riding the verb fields —
-/// the daemon scopes and keeps, the engine's z's ride verbatim (the UI invents no filter).
-function setScope(folder) {
-  if (state.scope === folder) return;
-  state.scope = folder;
-  run();
-}
-
-function setExtension(ext) {
-  if (state.ext === ext) return;
-  state.ext = ext;
-  run();
-}
-
-function setNamesOnly(on) {
-  if (state.namesOnly === on) return;
-  state.namesOnly = on;
-  if (on && state.filter === "code") state.filter = null;   // the Names chip is for files
-  leaveCodeField();
-  run();
-}
-
-/// The People dropdown's act (round six, the user's design): the search itself stays PURE —
-/// the same query re-runs and the face store filters the rows it answers. faces_paths relays
-/// the store's own membership fact (which of THESE paths carry the person's face); the z's
-/// ride verbatim, nothing is re-scored.
+/// The People dropdown's act (round twelve, 2026-11-27, the user's pool law): the same
+/// query re-runs POOLED — the verb's `person` field makes the face store's photos the
+/// candidate set, and the engine's z is computed inside that pool. The query vector is
+/// identical, nothing is re-scored by the UI, and the crowded-out frames answer.
 function setPerson(id) {
   if (state.person === id) return;
   state.person = id;
@@ -239,8 +179,9 @@ async function loadPeople() {
   renderBar();
 }
 
-/* The dropdown chips' OWN panels (the native-select cure, 2026-11-24; one shared law
-   since 2026-11-25: People + Scope): one panel on the page, anchored under the chip by
+/* The dropdown chip's OWN panel (the native-select cure, 2026-11-24; the shared law
+   since 2026-11-25, the Scope panel retired 2026-11-27 with the search-bar cleanup):
+   one panel on the page, anchored under the chip by
    its real rectangle, closed by every exit: a pick, an outside click, Escape, a page
    scroll, a re-render. */
 let anchored = null;   // { button, menu, dismiss }
@@ -292,33 +233,6 @@ function openPeopleMenu(button) {
   openAnchored(button, menu);
 }
 
-/* The Scope panel (2026-11-25, #206/#132/#188): one folder + one file type, single picks.
-   The folders are the Settings' chosen ones (window_info law); the file types are the
-   extensions the LAST ANSWER carried — observed engine rows, invented nothing. */
-function openScopeMenu(button) {
-  const menu = element("div", "dropdown-menu scope-menu");
-  menu.setAttribute("role", "listbox");
-  const section = (title) => menu.append(element("div", "dropdown-title", title));
-  const row = (label, selected, act) => {
-    const item = element("button", "dropdown-row" + (selected ? " selected" : ""), label);
-    item.setAttribute("role", "option");
-    item.setAttribute("aria-selected", String(selected));
-    item.onclick = () => { closeAnchored(); act(); };
-    menu.append(item);
-  };
-  section("Search in");
-  row("All folders", !state.scope, () => setScope(null));
-  for (const folder of state.info.folders) {
-    row(baseName(folder), folder === state.scope, () => setScope(folder));
-  }
-  section("File types");
-  row("All types", !state.ext, () => setExtension(null));
-  for (const ext of state.exts) {
-    row(`.${ext}`, ext === state.ext, () => setExtension(ext));
-  }
-  openAnchored(button, menu);
-}
-
 /// Every result shown, in order: the strong ones, then the weaker ones once they're unfolded.
 function rows() {
   return [...state.ranked, ...(state.showWeaker ? state.weaker : [])];
@@ -352,30 +266,13 @@ function renderBar() {
     $kinds.append(chip(filter.title, filter.icon, code ? null : state.counts[filter.key], selected,
                        () => setFilter(selected ? null : filter.key), index + 2));
   });
-  // The Names + Scope chips (2026-11-25, #66 + #206/#132/#188): Names-only rides the
-  // daemon's typed name: composition (no model); the Scope panel carries the folder +
-  // file-type keeps — the daemon narrows inside its roots, drops rows after the ranking,
-  // the engine's z's ride verbatim. Code keeps its own search: these chips are for files.
-  if (!code) {
-    $kinds.append(element("span", "divider"));
-    $kinds.append(chip("Names", null, null, state.namesOnly, () => setNamesOnly(!state.namesOnly), 8));
-    const summary = [state.scope && baseName(state.scope),
-                     state.ext && `.${state.ext}`].filter(Boolean).join(" · ");
-    const scopeBox = element("button", "chip dropdown-chip" + (summary ? " selected" : ""));
-    scopeBox.append(element("span", "", summary || "Anywhere"),
-                    element("span", "dropdown-caret", "▾"));
-    scopeBox.title = "Search only in a folder, only among these file types";
-    scopeBox.setAttribute("aria-label", "Search scope");
-    scopeBox.setAttribute("aria-haspopup", "listbox");
-    scopeBox.setAttribute("aria-expanded", String(anchored?.button === scopeBox));
-    scopeBox.onclick = () => (anchored?.button === scopeBox ? closeAnchored() : openScopeMenu(scopeBox));
-    $kinds.append(scopeBox);
-  }
-  // Round six (2026-11-23, the user's design): the People filter sits RIGHT OF THE KIND
-  // CHIPS. It lists the store's named people; picking one filters THIS SEARCH's rows down
-  // to the photos whose faces the store says are that person's. The engine's ranking rides
-  // untouched (faces_paths relays membership); no consent → loadPeople found nothing →
-  // the control is not rendered at all.
+  // Round twelve (2026-11-27, the user's search-bar law): the ONLY extra control is
+  // the People dropdown, RIGHT OF THE KIND CHIPS (right of Audio). The Names chip
+  // (#66) and the Anywhere scope panel (#206/#132/#188) are retired from the bar —
+  // the typed prefixes stay ("name: …" in the field), the dropdowns left nothing
+  // useful on the bar. The People dropdown lists the store's named people; picking
+  // one POOLS this search into their photos (the verb's `person`, the engine's
+  // in-pool z); no consent → loadPeople found nothing → the control is not rendered.
   // The measured law (2026-11-24, the user's live check): the native <select> popup is a
   // dead seam in this app's webview — WebKitGTK's combo popup does not open in this
   // app's webview on this box (measured under the pins-era config; the rendering config
@@ -389,8 +286,8 @@ function renderBar() {
     const box = element("button", "chip dropdown-chip" + (picked ? " selected" : ""));
     box.append(element("span", "", picked ? picked.name : "People: everyone"),
                element("span", "dropdown-caret", "▾"));
-    box.title = "Show only the photos with this person's face";
-    box.setAttribute("aria-label", "Filter by person");
+    box.title = "Search this person's photos (the search re-runs among their photos only)";
+    box.setAttribute("aria-label", "Search by person");
     box.setAttribute("aria-haspopup", "listbox");
     box.setAttribute("aria-expanded", String(anchored?.button === box));
     box.onclick = () => (anchored?.button === box ? closeAnchored() : openPeopleMenu(box));
@@ -684,12 +581,15 @@ async function findLike(hit) {
   state.error = null;
   state.warning = null;
   const filter = FILTERS.find((item) => item.key === state.filter);
-  const scope = { under: state.scope ? [state.scope] : undefined,
-                  ext: state.ext ? [state.ext] : undefined };
+  // The bar law (2026-11-27): the Scope panel and its keeps left the bar, so the
+  // reference search rides the plain verb — and the People dropdown does not pool
+  // it (the web UI states the same law: find-like answers pictures, the pool is a
+  // text-search act). The verb's `under`/`ext` fields stay published for CLI/API
+  // clients; the UI sends neither.
   try {
-    const all = await ask({ op: "find_similar", path: hit.path, limit: LIMIT, ...scope });
+    const all = await ask({ op: "find_similar", path: hit.path, limit: LIMIT });
     const shown = filter
-      ? await ask({ op: "find_similar", path: hit.path, limit: LIMIT, ...scope,
+      ? await ask({ op: "find_similar", path: hit.path, limit: LIMIT,
                     kinds: filter.kinds }) : all;
     if (generation !== state.generation) return;
     const counts = {};
@@ -697,10 +597,9 @@ async function findLike(hit) {
       const key = FILTER_OF_KIND[row.kind];
       counts[key] = (counts[key] || 0) + 1;
     }
-    const exts = [...new Set(all.hits.map((row) => extensionOf(row.path)).filter(Boolean))].slice(0, 12);
     Object.assign(state, { counts, meaning: shown.meaning, hasResults: true, showWeaker: false,
                            ranked: shown.hits.slice(0, shown.strong),
-                           weaker: shown.hits.slice(shown.strong), exts,
+                           weaker: shown.hits.slice(shown.strong),
                            findFrom: shown.found_from || { path: hit.path, kind: hit.kind },
                            warning: shown.warning || null });
     state.selection = null;
@@ -1353,14 +1252,11 @@ document.addEventListener("keydown", (event) => {
       setFilter("code");
       return;
     }
-    if (number === 8) {
-      event.preventDefault();
-      setNamesOnly(!state.namesOnly);   // #66: the Names chip (2026-11-25)
-      return;
-    }
     if (number === 9) {
       // Find like this (#162/#121): the selected picture. findLike guards the
       // kind itself — a document/sound row declines, the key stays calm.
+      // (8 was the Names chip's key, #66 — the bar law retired the chip, 2026-11-27,
+      // and the key went with it; the kind chips stay 1..6, Code 7.)
       event.preventDefault();
       findLike(state.hasResults && state.query.trim() ? selectedHit() : null);
       return;
