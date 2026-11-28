@@ -111,7 +111,8 @@ struct State {
     /// The faces home and consent record from the launch (round twelve): `person:` reads
     /// the store through `face_reader`, the read-only window opened lazily on the first
     /// People-scoped request that cleared the consent check.
-    #[cfg_attr(not(feature = "faces"), allow(dead_code))] // the plain-build stub refuses before reading
+    #[cfg_attr(not(feature = "faces"), allow(dead_code))]
+    // the plain-build stub refuses before reading
     faces_dir: Option<PathBuf>,
     #[cfg_attr(not(feature = "faces"), allow(dead_code))]
     faces_consent: Option<PathBuf>,
