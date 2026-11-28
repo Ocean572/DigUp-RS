@@ -38,6 +38,7 @@ pub mod search_text;
 pub mod searcher;
 pub mod uuid;
 pub mod vectors;
+pub mod word;
 pub mod xmlscan;
 /// `pub` on purpose: the core integration test `crates/core/tests/doc.rs` opens a zip through
 /// it (an integration test is a separate crate, so `pub(crate)` would not reach it).
