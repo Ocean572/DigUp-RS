@@ -18,3 +18,4 @@ pub mod pdf;
 pub mod raw;
 pub mod rgb;
 pub mod stb;
+pub mod svg;
