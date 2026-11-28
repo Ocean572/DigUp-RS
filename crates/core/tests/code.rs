@@ -396,6 +396,7 @@ fn the_language_table_is_the_engines() {
         ("mk", "Makefile"),
         ("pyi", "Python"),
         ("s", "Assembly"),
+        ("typ", "Typst"),
     ] {
         assert_eq!(
             code::known_language(extension),

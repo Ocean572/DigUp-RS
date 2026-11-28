@@ -689,6 +689,8 @@ static LANGUAGES: LazyLock<std::collections::BTreeMap<&'static str, &'static str
             ("rst", "reStructuredText"),
             ("adoc", "AsciiDoc"),
             ("org", "Org"),
+            // #127: Typst source — plain UTF-8 text in the md/rst/adoc group, its own language.
+            ("typ", "Typst"),
             ("txt", "Text"),
             ("yaml", "YAML"),
             ("yml", "YAML"),
