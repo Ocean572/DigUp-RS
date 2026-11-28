@@ -110,3 +110,7 @@ deploy/docker-compose.rust.yml
 # `git add -A` ships a local path into the pushed history (measured 2026-11-26: one commit
 # carried `target -> /home/dude/...`). Bare `/target` covers the symlink form too.
 /target
+
+# Dated local progress logs (the user's round-run files: 2026-11-28-ROADMAP-RUN.md and its
+# future siblings). Local working notes, same family as AGENTS.md/.agent-journal.md.
+20??-??-??-*.md

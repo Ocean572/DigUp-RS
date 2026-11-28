@@ -10,6 +10,7 @@
 //! `UNIQUE(anchor, path)`, answers assembled at the row edge. A v6 store opens and reads
 //! verbatim (`StoreMode::V6`); its first WRITE verb runs the migration (`migrate_portable`).
 
+pub mod charset;
 pub mod code;
 pub mod code_lookup;
 pub mod costs;

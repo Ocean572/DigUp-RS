@@ -289,11 +289,13 @@ pub fn parameter(name: &str, value: Option<&str>) -> Option<String> {
 /// The bytes of a decoded body (or of an RFC 2047 encoded-word) read in the charset its header
 /// declares. UTF-8 is the default and the fallback; the two families mail before ~2008 sends are
 /// named here because reading their high bytes as UTF-8 gives the replacement character for every
-/// accented letter, and an accented word is a word keyword search cannot find. Any other
-/// declared charset reads as UTF-8.
+/// accented letter, and an accented word is a word keyword search cannot find. Any OTHER declared
+/// charset reads in its own label (#169: the header's own name is a fact, not a sniff — the whole
+/// WHATWG label table decodes it); an undeclared body takes the same decline-by-default sniff as
+/// the text readers, and the pinned UTF-8 answer when the sniff declines.
 pub fn decoded(bytes: &[u8], charset: Option<&str>) -> String {
     match charset_name(charset).as_str() {
-        "iso88591" | "latin1" => bytes.iter().map(|byte| char::from(*byte)).collect(),
+        "iso88591" | "latin1" => crate::charset::latin1(bytes),
         "windows1252" | "cp1252" | "1252" => bytes
             .iter()
             .map(|byte| {
@@ -307,7 +309,29 @@ pub fn decoded(bytes: &[u8], charset: Option<&str>) -> String {
                 }
             })
             .collect(),
-        _ => String::from_utf8_lossy(bytes).into_owned(),
+        _ => {
+            // #169. A declared charset is a FACT, not a guess: `encoding_rs` knows the label
+            // (GBK, GB2312, CP936, Big5, Shift-JIS, EUC-KR, KS_C_5601, windows-1251, KOI8-R,
+            // ISO-2022-KR, the whole WHATWG label table), so the body reads in the charset its
+            // own header names. With NO declared charset, the bytes go through the same
+            // decline-by-default sniff as the text readers — legacy 8-bit bodies (the shape
+            // pre-2008 mail wrote with `Content-Type: text/plain` and no charset) decode as
+            // their own script. Undeclared bytes the sniff declines keep the pinned answer.
+            if let Some(charset) = charset.filter(|name| !name.trim().is_empty()) {
+                if let Some(encoding) = encoding_rs::Encoding::for_label(charset.as_bytes()) {
+                    return encoding
+                        .decode_without_bom_handling_and_without_replacement(bytes)
+                        .map(|text| text.into_owned())
+                        .unwrap_or_else(|| {
+                            encoding.decode_without_bom_handling(bytes).0.into_owned()
+                        });
+                }
+            }
+            match crate::charset::sniff(bytes) {
+                Some(sniffed) => sniffed.text,
+                None => String::from_utf8_lossy(bytes).into_owned(),
+            }
+        }
     }
 }
 

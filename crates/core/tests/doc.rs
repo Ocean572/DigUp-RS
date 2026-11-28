@@ -445,6 +445,26 @@ fn read_text_sniffs_the_bom_then_falls_back_to_latin1() {
 }
 
 #[test]
+fn a_gbk_text_file_answers_its_own_script() {
+    // #169 on the seam, end to end: 中文 written in GB2312/GBK core bytes (the #169 corpus
+    // shape) reads as its own script, not as Latin-1 mojibake. The encoding table's own
+    // classic pairings: 中 = D6 D0, 文 = CE C4.
+    let folder = temp_folder("gbk-seam");
+    let bytes: Vec<u8> = vec![
+        0xD6, 0xD0, 0xCE, 0xC4, 0x20, 0x6D, 0x65, 0x65, 0x74, 0x69, 0x6E, 0x67, 0x20, 0x32, 0x30,
+        0x32, 0x34, 0x0A,
+    ];
+    let path = write(&folder, "note.txt", &bytes);
+    assert_eq!(doc::text_of(&path).unwrap(), "中文 meeting 2024\n");
+    // Latin-1's own turf is untouched: an accented word the CJK tables cannot read keeps the
+    // pinned every-byte-a-character answer.
+    assert_eq!(
+        doc::text_of(&write(&folder, "cafe.txt", b"caf\xe9\n")).unwrap(),
+        "caf\u{00E9}\n"
+    );
+}
+
+#[test]
 fn plain_files_answer_their_own_text() {
     let folder = temp_folder("plain");
     let (text, chunks, small, excerpt) = answers(&write(&folder, "plain.txt", PLAIN_BYTES));

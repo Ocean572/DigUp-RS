@@ -74,9 +74,16 @@ pub fn read(path: &Path, options: &IndexOptions) -> Result<File, ExtractError> {
             why: "not text".into(),
         });
     }
-    // Swift's read: strict UTF-8, else ISO-Latin-1 (every byte a character), else nothing.
-    let text = String::from_utf8(data.clone())
-        .unwrap_or_else(|_| data.iter().map(|byte| char::from(*byte)).collect());
+    // Swift's read: strict UTF-8, else ISO-Latin-1 (every byte a character), else nothing —
+    // with #169's sniff in between: a legacy family the bytes decode cleanly in reads as its
+    // own text (a GBK source file is a source file, not Latin-1 mojibake).
+    let text = match String::from_utf8(data.clone()) {
+        Ok(text) => text,
+        Err(_) => match crate::charset::sniff(&data) {
+            Some(sniffed) => sniffed.text,
+            None => crate::charset::latin1(&data),
+        },
+    };
     check(
         &text,
         rules::SOURCE_EXTENSIONS.contains(&extension.as_str()),
