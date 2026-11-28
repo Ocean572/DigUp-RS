@@ -16,6 +16,7 @@ use digup_core::uuid::uuid_string;
 
 use crate::exif;
 use crate::ffmpeg;
+use crate::raw;
 use crate::rgb::RgbImage;
 use crate::stb;
 
@@ -126,6 +127,16 @@ pub fn prepare(
         image = decoded.oriented(orientation);
         width = stored_width;
         height = stored_height;
+    } else if raw::supported(&lower_extension(path)) {
+        // #152: camera RAW through the vendored LibRaw (pinned ffmpeg 9.0.2 probe, 2026-11-28:
+        // no DNG/camera-RAW decoder — `rawvideo` is raw RGB, not camera RAW). The bitmap lands
+        // UPRIGHT (dcraw applies the shot's own orientation), so no EXIF turn on top of it.
+        image = raw::decode(path)?;
+        width = image.width as i64;
+        height = image.height as i64;
+        if width.max(height) < min_side {
+            return Err(ExtractError::TooSmall { width, height });
+        }
     } else {
         if let Some(note) = not_read_yet(&lower_extension(path)) {
             return Err(ExtractError::Unreadable { why: note });

@@ -71,4 +71,37 @@ fn main() {
             pdfium.display()
         );
     }
+
+    // LibRaw (#152, camera RAW): the static library `scripts/build-libraw.sh` builds beside
+    // its source tree. The shim is compiled with the C++ compiler here and the archive links
+    // after it (the archive depends on the C++ runtime and zlib); static, so the payload
+    // carries no extra file. Windows keeps the notReadYet decline: no shim, no link, and the
+    // `digup_libraw` cfg — the raw module's single answer — stays off.
+    println!("cargo::rustc-check-cfg=cfg(digup_libraw)");
+    println!("cargo::rerun-if-changed=rawshim.cpp");
+    println!("cargo::rerun-if-changed=../../Vendor/libraw/lib/libraw.a");
+    let libraw = root.join("Vendor/libraw");
+    let host = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if host != "windows" && libraw.join("lib/libraw.a").is_file() {
+        let mut raw = cc::Build::new();
+        raw.cpp(true)
+            .warnings(false)
+            .flag_if_supported("-w")
+            .flag_if_supported("-std=c++11")
+            .include(&libraw)
+            .file("rawshim.cpp");
+        raw.compile("rawshim");
+        println!(
+            "cargo:rustc-link-search=native={}",
+            libraw.join("lib").display()
+        );
+        println!("cargo:rustc-link-lib=static=raw");
+        println!("cargo:rustc-link-lib=dylib=z"); // the deflate decompressor (Makefile.devel's)
+                                                  // The C++ runtime, same naming as the PDFium block above: MSVC links its own.
+        #[cfg(target_os = "macos")]
+        println!("cargo:rustc-link-lib=dylib=c++");
+        #[cfg(target_os = "linux")]
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+        println!("cargo:rustc-cfg=digup_libraw");
+    }
 }

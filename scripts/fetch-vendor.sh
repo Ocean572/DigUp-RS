@@ -1,7 +1,9 @@
 #!/bin/bash
 # Linux and Windows: the C libraries the engine needs where Apple's frameworks aren't there, at pinned versions, laid out
 # in Vendor/ (out of git): SQLite with FTS5 (storage), stb (images), miniz (docx/odt, xlsx/pptx/ods/odp), PDFium
-# (PDF text and page renders; prebuilt by bblanchon/pdfium-binaries; a fat arm64+x86_64 dylib on macOS). The Rust engine's
+# (PDF text and page renders; prebuilt by bblanchon/pdfium-binaries; a fat arm64+x86_64 dylib on macOS), LibRaw
+# (camera RAW, #152; source tree built by scripts/build-libraw.sh — Linux/macOS; Windows keeps the notReadYet decline).
+# The Rust engine's
 # portable readers (crates/native) call the same vendored libraries on every platform, so
 # the Rust macOS payload fetches them too. Does nothing when the pinned set is already there. Needs curl, tar and python3 (to unzip);
 # on Windows, Git for Windows' bash; on macOS, lipo and codesign (Xcode's) for the fat PDFium.
@@ -11,6 +13,7 @@ SQLITE_ZIP=2026/sqlite-amalgamation-3540000.zip       # SQLite 3.54.0
 STB_COMMIT=2c980bb59875b0d32144a71867fbdebb2f77cd20   # nothings/stb, 2026-08-02
 MINIZ_VERSION=3.1.2
 PDFIUM_TAG=chromium/8086
+LIBRAW_VERSION=0.22.3                                  # LibRaw/LibRaw (camera RAW, #152); built by scripts/build-libraw.sh
 # Hashes in vendor-checksums.json are reviewed pins, never fetched alongside the downloads.
 # Update the version and its hashes together when upgrading a dependency.
 
@@ -30,7 +33,7 @@ esac
 PYTHON=python3
 python3 -c 'import zipfile' 2>/dev/null || PYTHON=python
 PINS=$("$PYTHON" -c 'import hashlib; print(hashlib.sha256(open("scripts/vendor-checksums.json", "rb").read()).hexdigest())')
-STAMP="verified-v1 $PDFIUM sqlite $SQLITE_ZIP stb $STB_COMMIT miniz $MINIZ_VERSION pdfium $PDFIUM_TAG $PINS"
+STAMP="verified-v1 $PDFIUM sqlite $SQLITE_ZIP stb $STB_COMMIT miniz $MINIZ_VERSION libraw $LIBRAW_VERSION pdfium $PDFIUM_TAG $PINS"
 if [[ "$(cat Vendor/VENDOR 2>/dev/null)" == "$STAMP" ]]; then exit 0; fi
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
@@ -85,6 +88,15 @@ unzip_py "$T/miniz.zip" "$T/miniz"
 rm -rf Vendor/miniz && mkdir -p Vendor/miniz/include
 cp "$T"/miniz/miniz.c Vendor/miniz/ && cp "$T"/miniz/*.h Vendor/miniz/include/ && cp "$T"/miniz/LICENSE Vendor/miniz/
 
+# LibRaw (#152 camera RAW): the source tree — headers, sources and its own Makefile.devel.
+# scripts/build-libraw.sh compiles the static library from this tree (like the llama seam:
+# fetch here, build there). The un-archived tarball root is named LibRaw-<version>.
+echo "LibRaw ($LIBRAW_VERSION)"
+download "LibRaw-$LIBRAW_VERSION.tar.gz" "https://github.com/LibRaw/LibRaw/archive/refs/tags/$LIBRAW_VERSION.tar.gz"
+rm -rf Vendor/libraw && mkdir -p Vendor/libraw
+tar -xzf "$T/LibRaw-$LIBRAW_VERSION.tar.gz" -C "$T"
+cp -R "$T/LibRaw-$LIBRAW_VERSION/." Vendor/libraw/
+
 echo "PDFium ($PDFIUM_TAG, $PDFIUM)"
 for name in $PDFIUM; do
   download "$name.tgz" "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG/\//%2F}/$name.tgz"
@@ -113,4 +125,4 @@ ls Vendor/pdfium/lib
 
 rm -rf "$T"
 echo "$STAMP" > Vendor/VENDOR
-echo "Fetched into Vendor/: sqlite, stb, miniz, pdfium"
+echo "Fetched into Vendor/: sqlite, stb, miniz, libraw, pdfium"

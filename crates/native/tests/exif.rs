@@ -669,9 +669,23 @@ fn prepare_writes_the_copy_the_engine_writes() {
                         "{} {}: the engine wrote a copy, the port refused: {why}",
                         fixture.name, scenario.label
                     );
+                    // #152: the pinned refusal text is the DECLINING build's answer. A build
+                    // that links libraw takes the RAW file to the decoder, and the fake's
+                    // refusal is the decoder's own — the status (`failed`) is the same on
+                    // both fronts, which is what the cross-engine gate compares.
+                    let is_raw = fixture
+                        .name
+                        .rsplit('.')
+                        .next()
+                        .is_some_and(digup_native::raw::supported);
+                    let expected = if is_raw {
+                        "unreadable: can't decode image"
+                    } else {
+                        scenario.why
+                    };
                     assert_eq!(
                         why.to_string(),
-                        scenario.why,
+                        expected,
                         "{}: the refusal text",
                         fixture.name
                     );

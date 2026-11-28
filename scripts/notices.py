@@ -121,6 +121,7 @@ def main():
         sys.exit(__doc__)
     platform, out = sys.argv[1], Path(sys.argv[2])
     ffmpeg, dav1d = build_ffmpeg_versions()
+    libraw = re.search(r"^LIBRAW_VERSION=(\S+)", read(ROOT / "scripts/build-libraw.sh"), re.M).group(1)
     llama = VENDOR / "llama.cpp"
     pdfium = VENDOR / "pdfium"
     ffmpeg_licenses = VENDOR / "ffmpeg/licenses"
@@ -166,6 +167,18 @@ def main():
                 "and forgive others. May you share freely, never taking more than you give.\""),
         section("stb (https://github.com/nothings/stb), reads and writes pictures", stb_license()),
         section("miniz (https://github.com/richgel999/miniz), reads docx and odt files", miniz_license()),
+        # LibRaw (#152 camera RAW) links into the Linux and macOS binaries; the Windows build
+        # keeps the notReadYet decline, so nothing of it ships there.
+        *([] if windows else [
+            section(f"LibRaw {libraw} (https://www.libraw.org), reads camera RAW pictures (CR2, NEF, ARW, DNG, …); "
+                    "dual-licensed LGPL 2.1 and CDDL 1.0",
+                    f"Built unmodified from https://github.com/LibRaw/LibRaw/archive/refs/tags/{libraw}.tar.gz by "
+                    "scripts/build-libraw.sh in DigUp's repository (https://github.com/ARahim3/DigUp); its static "
+                    "archive is linked into the binaries.",
+                    need(VENDOR / "libraw/LICENSE.LGPL"),
+                    need(VENDOR / "libraw/LICENSE.CDDL"),
+                    need(VENDOR / "libraw/COPYRIGHT")),
+        ]),
         section("ICU (https://icu.unicode.org), in PDFium (the same license, printed with PDFium's above)",
                 need(pdfium / "licenses/icu.txt")),
     ]
