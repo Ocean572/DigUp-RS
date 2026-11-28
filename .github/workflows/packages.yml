@@ -94,6 +94,10 @@ jobs:
         with:
           path: Vendor/ffmpeg
           key: ffmpeg-linux-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: Vendor/libraw
+          key: libraw-linux-${{ hashFiles('scripts/build-libraw.sh', 'scripts/fetch-vendor.sh', 'scripts/vendor-checksums.json') }}
       - name: Build
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1   # Tauri's AppImage tools are AppImages, and a container has no FUSE
@@ -102,6 +106,7 @@ jobs:
         run: |
           scripts/fetch-vendor.sh
           scripts/build-llama.sh
+          scripts/build-libraw.sh
           scripts/package-linux.sh
       - name: Check the glibc asked for
         run: |
@@ -302,6 +307,7 @@ jobs:
           export PATH="$(dirname "$(command -v cl)"):$PATH"
           scripts/fetch-vendor.sh
           scripts/build-llama.sh
+          scripts/build-libraw.sh   # exits with a note on Windows: camera RAW keeps the notReadYet decline
           scripts/package-windows.sh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -369,6 +375,13 @@ jobs:
         env:
           DIGUP_UNIVERSAL: 1
         run: scripts/fetch-vendor.sh
+      - name: LibRaw (camera RAW, #152)
+        # Fat static archives: the universal payload links the arm64 AND the x86_64 slice out
+        # of one libraw.a, the same law the fat llama archive follows.
+        shell: bash
+        env:
+          DIGUP_UNIVERSAL: 1
+        run: scripts/build-libraw.sh
       - name: The app
         shell: bash
         env:

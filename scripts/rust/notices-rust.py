@@ -141,6 +141,7 @@ def main():
         sys.exit(__doc__)
     platform, out = sys.argv[1], Path(sys.argv[2])
     ffmpeg, dav1d = ffmpeg_versions()
+    libraw = re.search(r"^LIBRAW_VERSION=(\S+)", read(ROOT / "scripts/build-libraw.sh"), re.MULTILINE).group(1)
     llama = VENDOR / "llama.cpp"
     pdfium = VENDOR / "pdfium"
     ffmpeg_licenses = VENDOR / "ffmpeg/licenses"
@@ -201,6 +202,17 @@ def main():
                    if platform == "macos" else ""),
                 if_present(VENDOR / "miniz/LICENSE", "miniz is MIT-licensed: https://github.com/richgel999/miniz.")
                 if platform == "macos" else miniz_license()),
+        # LibRaw (#152 camera RAW): the Linux and macOS payloads link its static archive (the
+        # macOS one fat, like the fat llama archive); the Windows build keeps the notReadYet
+        # decline, so nothing of it ships there.
+        section(f"LibRaw {libraw} (https://www.libraw.org), reads camera RAW pictures (CR2, NEF, ARW, DNG, …), "
+                "dual-licensed LGPL 2.1 and CDDL 1.0"
+                + (" — the Windows build declines camera RAW, so this payload ships no LibRaw; its licenses are "
+                   "recorded for the builds the other systems ship" if platform == "windows" else ""),
+                *(if_present(VENDOR / "libraw/LICENSE.LGPL", "LibRaw is LGPL 2.1-licensed: https://www.libraw.org.")
+                  if platform == "windows"
+                  else [need(VENDOR / "libraw/LICENSE.LGPL"), need(VENDOR / "libraw/LICENSE.CDDL"),
+                        need(VENDOR / "libraw/COPYRIGHT")])),
         section("ICU (https://icu.unicode.org), in PDFium (the same license, printed with PDFium's above)",
                 if_present(pdfium / "licenses/icu.txt", "ICU is ICU License-licensed: https://icu.unicode.org.")),
         rust_section(platform),
