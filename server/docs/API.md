@@ -138,6 +138,52 @@ curl -s -X POST http://127.0.0.1:8787/api/v1/embed_ahead \
   -H 'content-type: application/json' -d '{"q": "wakeboa"}'
 ```
 
+## `POST /api/v1/find-like`
+
+**#162/#121 "Find like this photo"** — the reference is a picture, not words. The client
+sends the clicked hit's minted `media_id` (the law that `hits[].path` is never an input — the
+server resolves the handle through its HitCache, exactly like `/preview` and `/text` do); the
+engine embeds the reference with the **full media encoder** at the budget its stored twin used
+(photo 140 / screenshot 280 tokens) and ranks the indexed vector pool by cosine. This is the
+search pipeline minus the words: the same **2.0σ z-gate**, the same filter chain, the same
+verbatim rows, z-scores and timings.
+
+| field | type | default | notes |
+|---|---|---|---|
+| `media_id` | string 1–64 chars | required | the clicked hit's handle (a search answer minted it); an **unknown handle is `404`** like the media routes, not a 422 |
+| `kinds` | array (as `/search`) | all kinds | kind filter on the answer rows |
+| `limit` | int 1–100 | **40** | the engine's own default |
+| `under` | array of paths | unscoped | the `/search` scope law, same field |
+| `ext` | array of extensions | all | the `/search` extension keep, same field |
+
+```sh
+curl -s -X POST http://127.0.0.1:8787/api/v1/find-like \
+  -H 'content-type: application/json' \
+  -d '{"media_id": "9f2c1a7b3e04", "limit": 5}' | jq '{strong, found_from, n: (.hits|length)}'
+```
+
+```json
+{"hits": [{"path": "/media/photos/IMG_2043.jpg", "kind": "image", "segment": 1,
+           "segment_id": 87, "score": 0.512, "z": 3.02, "cosine": 0.71,
+           "modified": 1730000000.0, "size": 2097152, "info": {},
+           "media_id": "3d91c0a7e512"}],
+ "strong": 1, "meaning": true,
+ "ms": {"embed": 3850, "search": 12},
+ "found_from": {"media_id": "9f2c1a7b3e04", "kind": "image"}, "warning": null}
+```
+
+* The **reference never answers its own search**: its own row drops out of the hits (the
+  People-tab `similar` law — you don't want the photo you clicked).
+* `found_from` echoes the request's handle and the engine's kind for the reference — the
+  reference's **local path is never relayed** (the daemon answers it internally; the server
+  strips it, the media handle is the public name for it).
+* The **first call loads the picture encoder** (the 555 MB media model on top of the text
+  model; `ms.embed` of seconds on a cold daemon), after that it stays warm and rides the
+  daemon's idle stop with the text model.
+* A non-picture handle (video/document/audio) and a dead file answer `hits: []` with the
+  engine's own `warning` words relayed — `200` with an honest warning beats an invented answer.
+* Few hits on a thin pool is the 2.0σ gate, exactly like text search (§ above).
+
 ## `POST /api/v1/estimate`
 
 The engine's own forecast for the configured roots — per folder: readable, kind counts, PDF
@@ -704,9 +750,10 @@ what its REST admin routes answer key-free.
 
 | tool | scope | what it relays |
 |---|---|---|
-| `search` | read | the `POST /api/v1/search` answer: `hits` (path, kind, segment, score, z, loc, excerpt…), `strong`, `meaning`. `limit` defaults to **10** (max 100 — the engine's own cap) to keep agent context small; `kinds`, `code`, `name_only` ride the REST model |
+| `search` | read | the `POST /api/v1/search` answer: `hits` (path, kind, segment, score, z, loc, excerpt…), `strong`, `meaning`. `limit` defaults to **10** (max 100 — the engine's own cap) to keep agent context small; `kinds`, `code`, `name_only`, `under`, `ext` ride the REST model; the API surface adds `person` (the People filter) |
 | `status` | read | the `GET /api/v1/status` counts, verbatim |
 | `show` | read | one segment's stored full text by its `segment_id` (from a hit row) — the search daemon's `text` verb |
+| `find_like` | read | **#162/#121**: the `POST /api/v1/find-like` answer relayed. The API surface names the reference by the clicked hit's `media_id` (REST: paths never cross the API); the stdio surface is local and names it by `path`. Same gate, same rows, `found_from` relayed (stdio: with its path, local only) |
 | `people` | read (HTTP only) | the faces surface (FACES.md): `action` = `status` (the default) / `persons` / `pending` / `person` (needs `person`) / `scan`. The reads relay the `GET /api/v1/faces/…` answers verbatim; `scan` rides the REST admin wall (a read key lands on 403 words) and runs synchronously on the engine's clock, busy answers the `409` text; every action answers the consent wall's `400` words until the deployment records the acceptance. Stdio has no faces seam (the consent record lives in the server's config), so the tool is invisible there |
 | `estimate` | admin | the engine's crawl forecast, `{"folders": […]}` |
 | `index` | admin, HTTP only | queue one crawl: the job record (`202` shape); a running writer answers the `409` text, relayed as `isError` |

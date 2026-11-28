@@ -172,6 +172,8 @@ fn mcp_stdio_answers_initialize_tools_and_verb_calls() {
         json!({"jsonrpc": "2.0", "id": 5, "method": "ping"}),
         json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
                "params": {"name": "index", "arguments": {}}}), // stdio-invisible tool
+        json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+               "params": {"name": "find_like", "arguments": {"path": "/no-such-photo.jpg"}}}),
     ];
     for request in &requests {
         writeln!(stdin, "{request}").expect("the request line lands");
@@ -196,8 +198,8 @@ fn mcp_stdio_answers_initialize_tools_and_verb_calls() {
     let status = child.wait().expect("the mcp run ends");
     assert_eq!(status.code(), Some(0), "digup mcp exit");
 
-    // Six answered requests, six lines: the notification answered nothing.
-    assert_eq!(replies.len(), 6, "{replies:?}",);
+    // Seven answered requests, seven lines: the notification answered nothing.
+    assert_eq!(replies.len(), 7, "{replies:?}",);
     let initialize = &replies[&1];
     assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(initialize["result"]["serverInfo"]["name"], "digup");
@@ -209,9 +211,9 @@ fn mcp_stdio_answers_initialize_tools_and_verb_calls() {
         .iter()
         .map(|def| def["name"].as_str().expect("a named tool").to_string())
         .collect::<Vec<_>>();
-    // The stdio surface: the three read tools; `index` has no job runner to reach,
-    // `estimate` waits for --allow-admin.
-    assert_eq!(tools, vec!["search", "status", "show"]);
+    // The stdio surface: the read tools + find_like (a read verb on the daemon);
+    // `index` has no job runner to reach, `estimate` waits for --allow-admin.
+    assert_eq!(tools, vec!["search", "status", "show", "find_like"]);
 
     let search = &replies[&3];
     assert_eq!(search["result"]["isError"], json!(false), "{search}");
@@ -246,5 +248,18 @@ fn mcp_stdio_answers_initialize_tools_and_verb_calls() {
         refused["error"]["code"],
         json!(-32602),
         "the stdio surface has no index tool: {refused}"
+    );
+
+    // find_like on the stdio surface (#162/#121): the reference rides its local path
+    // (the shell IS local). A missing reference is the engine's honest answer relayed
+    // verbatim — empty hits + the warning, not an error.
+    let found = &replies[&7];
+    assert_eq!(found["result"]["isError"], json!(false), "{found}");
+    let answer = &found["result"]["structuredContent"];
+    assert_eq!(answer["hits"], json!([]), "{answer}");
+    assert_eq!(
+        answer["warning"],
+        json!("find like this: no such file: /no-such-photo.jpg"),
+        "{answer}"
     );
 }

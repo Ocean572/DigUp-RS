@@ -158,6 +158,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("find") => {
+            // `digup find <photo>` (#162/#121): "find like this".
+            if let Err(e) = find(&args) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("show") => {
             // `show(...)` (main.swift #178): the stored segment text, no model.
             if let Err(e) = show(&args) {
@@ -2292,6 +2299,187 @@ fn search(args: &Arguments) -> Result<(), String> {
             search_ms.max(0.0)
         );
     }
+    Ok(())
+}
+
+/// `digup find <photo>` (#162/#121, 2026-11-25): "find like this". The
+/// reference picture — an indexed photo/screenshot (kind read off its index
+/// row, the budget its stored twin embedded at) or any picture on disk
+/// (the engine's own screenshot name/folder law) — becomes the query
+/// vector through the FULL-shape media encoder; the pool is ranked by
+/// cosine. It is the search pipeline minus the words: `search("")` skips
+/// the FTS scan, so the z gate, `--kind`, `--in`/`--here`, `--ext`,
+/// `--strong` and `--json` all ride exactly as `search`'s do. The
+/// reference's own row drops out of its answer (the faces `similar` law).
+fn find(args: &Arguments) -> Result<(), String> {
+    use digup_core::model::FileKind;
+    use digup_core::searcher::{SearchHit, SearchOptions, Searcher};
+    use digup_core::IndexStore;
+    use digup_runtime::worker::Embedder;
+    let Some(reference) = args
+        .positional
+        .get(1)
+        .map(|p| folder_url(p).to_string_lossy().into_owned())
+        .filter(|p| !p.is_empty())
+    else {
+        return Err("find like what? digup find <photo>".to_string());
+    };
+    let reference = digup_core::folder_selection::upper_drive(&reference, cfg!(windows));
+    if !std::path::Path::new(&reference).is_file() {
+        return Err(format!("no such file: {reference}"));
+    }
+    let limit = args
+        .value("-n")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|n| n.max(0) as usize)
+        .unwrap_or(10);
+    let kinds = search_kinds(args)?;
+    let scope = args.scope_paths();
+    let ext = extensions_allow(&args.list("--ext"));
+    let z_gate = args.z_gate();
+    let started = Instant::now();
+
+    let index = args.index_folder();
+    let store = IndexStore::open(&index, digup_core::MAIN_FILE).map_err(|e| e.to_string())?;
+    let mut searcher = Searcher::new(&store, true).map_err(|e| e.to_string())?;
+    let kind = match searcher.indexed_kind(&reference) {
+        Some(kind @ (FileKind::Image | FileKind::Screenshot)) => kind,
+        Some(other) => {
+            return Err(format!(
+                "find like this: a {} is not a picture",
+                other.as_str()
+            ))
+        }
+        None if digup_core::rules::is_screenshot(&reference) => FileKind::Screenshot,
+        None => FileKind::Image,
+    };
+    let options = digup_core::options::IndexOptions::default();
+    let budget = match kind {
+        FileKind::Screenshot => options.screenshot_budget,
+        _ => options.photo_budget,
+    };
+    // The FULL shape: a picture takes up to 1120 tokens, the text-only 512
+    // context cannot serve it (embedder.rs:101-104). The log rides beside
+    // the index, as `query_vectors`' text-only worker's does.
+    let log = std::path::PathBuf::from(format!(
+        "{}/{}",
+        store.directory.to_string_lossy(),
+        "worker-query.log"
+    ));
+    let models = digup_runtime::LlamaModels::locate().map_err(|e| e.to_string())?;
+    let embedder = digup_runtime::LlamaEmbedder::new(&models, false, Some(2048), Some(&log))
+        .map_err(|e| e.to_string())?;
+    // The same source-match gate as `query_vectors`: two pipelines' vectors
+    // must never meet.
+    if let Some(source) = &searcher.vector_source {
+        let mine = embedder.info().vector_source();
+        if *source != mine {
+            return Err(format!(
+                "index vectors come from {source} but the media encoder is {mine}"
+            ));
+        }
+    }
+    let vector = embedder
+        .embed_images(std::slice::from_ref(&reference), budget as i32)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .and_then(|row| row.vector)
+        .ok_or_else(|| format!("the media encoder gave no vector for {reference}"))?;
+    // One-shot process: the model's memory goes back before the answer prints.
+    drop(embedder);
+    let encoded_ms = started.elapsed().as_secs_f64();
+
+    let opts = SearchOptions {
+        kinds: kinds.as_ref(),
+        limit,
+        z_gate,
+        word_weight: None,
+        prefix_last: false,
+        under: scope.as_deref(),
+        // Find like this answers pictures across the field: the People pool (#195-era
+        // round twelve) is a text-search act, the CLI's find verb carries no pool.
+        person_files: None,
+    };
+    let mut paired: Vec<SearchHit> = searcher
+        .search("", Some(&vector), &opts)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|hit| hit.path != reference)
+        .collect();
+    // `--ext` rides the same post-ranking KEEP as `search`'s: the engine's
+    // ranked rows stay verbatim, nothing is re-scored.
+    if !ext.is_empty() {
+        paired
+            .retain(|hit| ext.contains(&digup_core::code::extension_of(&hit.path).to_lowercase()));
+    }
+    let scores: Vec<f64> = paired.iter().map(|hit| hit.score).collect();
+    let strong_cutoff = digup_core::scoring::strong_count(&scores, 0.5);
+    if args.strong_only() {
+        let keep = strong_cutoff.min(paired.len());
+        paired.truncate(keep);
+    }
+    let search_ms = (started.elapsed().as_secs_f64() - encoded_ms) * 1000.0;
+
+    if args.flag("--json") {
+        let rows: Vec<serde_json::Value> = paired
+            .iter()
+            .enumerate()
+            .map(|(index, hit)| {
+                digup_services::search_service::hit_fields_text(
+                    hit,
+                    Some(index < strong_cutoff),
+                    None,
+                )
+            })
+            .collect();
+        println!("{}", swift_json(&rows));
+        return Ok(());
+    }
+    let name = std::path::Path::new(&reference)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or(reference.clone());
+    println!("find like: {name} ({} · {budget} tokens)", kind.as_str());
+    if paired.is_empty() {
+        println!("no good matches");
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for (rank, hit) in paired.iter().enumerate() {
+        let mut why: Vec<String> = Vec::new();
+        if let Some(z) = hit.z {
+            why.push(format!("z {:.1}", z));
+        }
+        why.push(format!("seg {}", hit.segment_id));
+        let place = location(hit);
+        let hit_name = std::path::Path::new(&hit.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| hit.path.clone());
+        println!(
+            "{}. {} {}{}   ({})",
+            formats::lpad(&(rank + 1).to_string(), 2),
+            formats::pad(hit.kind.as_str(), 10),
+            hit_name,
+            if place.is_empty() {
+                String::new()
+            } else {
+                format!("  [{place}]")
+            },
+            why.join(", ")
+        );
+        let folder = std::path::Path::new(&hit.path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        println!("      {}", formats::tilde(&folder, &home));
+    }
+    println!(
+        "({} vectors · media encoder {:.2} s incl. start-up · search {:.0} ms)",
+        searcher.vector_count(),
+        encoded_ms,
+        search_ms.max(0.0)
+    );
     Ok(())
 }
 

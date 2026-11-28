@@ -125,8 +125,49 @@ pub fn tool_defs(surface: Surface, allow_admin: bool) -> Vec<Value> {
                 &["segment_id"],
             ),
         ),
+        tool(
+            "find_like",
+            "Find like this photo (#162/#121): the reference picture is embedded with the full \
+             media encoder at the budget its stored twin used (photo 140 / screenshot 280) and the \
+             indexed vector pool is ranked by cosine — the same 2.0σ z-gate, the same filter chain, \
+             the same verbatim rows, z-scores and timings as a text search. The reference never \
+             answers its own search (its row drops out); found_from names what the ranking was \
+             built from. The first call loads the picture encoder (seconds), after that it stays \
+             warm; the answer can be shorter than limit — the gate is honest on thin pools.",
+            object(
+                vec![
+                    ("path", serde_json::json!({"type": "string", "description": "the reference picture: an indexed photo/screenshot (its stored budget is reused) or any picture file on disk (classified by the engine's screenshot law)"})),
+                    ("limit", serde_json::json!({"type": "integer", "minimum": 1, "maximum": 100, "default": 10, "description": "max answer rows (the engine caps at 100)"})),
+                    ("kinds", serde_json::json!({"type": "array", "items": {"type": "string", "enum": ["screenshot", "image", "pdf", "doc", "audio", "video"]}, "description": "kind filter on the answer rows; omit = all kinds"})),
+                    ("under", serde_json::json!({"type": "array", "items": {"type": "string"}, "description": "Folder scope (#206/#132/#188): keep only rows inside these folder/file paths, narrowed inside the server's own roots; omit = unscoped"})),
+                    ("ext", serde_json::json!({"type": "array", "items": {"type": "string"}, "description": "Extension allow-list: keep only rows whose file carries one of these extensions (mp4, .pdf, …); omit = all"})),
+                ],
+                &["path"],
+            ),
+        ),
     ];
     if surface == Surface::Api {
+        // `find_like` on the API surface (#162/#121): paths never cross the REST
+        // law — the clicked hit rides as its minted media handle (the media
+        // routes' id, 404 when unknown), the server resolves it through the
+        // HitCache exactly like preview/render do.
+        if let Some(find) = defs
+            .iter_mut()
+            .find(|def| def.get("name").and_then(Value::as_str) == Some("find_like"))
+        {
+            if let Some(schema) = find.get_mut("inputSchema") {
+                if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+                    props.remove("path");
+                    props.insert(
+                        "media_id".to_string(),
+                        serde_json::json!({"type": "string", "description": "the clicked hit's server-issued media handle (a search answer mints it); an unknown handle answers 404-shape text"}),
+                    );
+                }
+                if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
+                    *required = vec![serde_json::json!("media_id")];
+                }
+            }
+        }
         // Round six (2026-11-23, the user's design): the People filter rides the
         // API's search — `person` keeps only the rows whose photo carries that
         // person's face (the face store's own membership facts, relayed; the
@@ -252,7 +293,7 @@ fn summary(name: &str, outcome: &CallOutcome) -> String {
         };
     }
     match name {
-        "search" => {
+        "search" | "find_like" => {
             let empty: Vec<Value> = Vec::new();
             let rows = value
                 .get("hits")
@@ -464,7 +505,10 @@ mod tests {
             .iter()
             .map(|def| def["name"].as_str().expect("a name"))
             .collect();
-        assert_eq!(read, vec!["search", "status", "show", "people"]);
+        assert_eq!(
+            read,
+            vec!["search", "status", "show", "find_like", "people"]
+        );
         let admin = tool_defs(Surface::Api, true);
         let admin: Vec<&str> = admin
             .iter()
@@ -472,7 +516,15 @@ mod tests {
             .collect();
         assert_eq!(
             admin,
-            vec!["search", "status", "show", "people", "estimate", "index"]
+            vec![
+                "search",
+                "status",
+                "show",
+                "find_like",
+                "people",
+                "estimate",
+                "index"
+            ]
         );
         // The stdio surface has no job runner to reach: index is invisible there,
         // estimate rides --allow-admin. Faces is server config (the consent record
@@ -482,13 +534,16 @@ mod tests {
             .iter()
             .map(|def| def["name"].as_str().expect("a name"))
             .collect();
-        assert_eq!(stdio, vec!["search", "status", "show"]);
+        assert_eq!(stdio, vec!["search", "status", "show", "find_like"]);
         let stdio_admin_defs = tool_defs(Surface::Stdio, true);
         let stdio_admin: Vec<&str> = stdio_admin_defs
             .iter()
             .map(|def| def["name"].as_str().expect("a name"))
             .collect();
-        assert_eq!(stdio_admin, vec!["search", "status", "show", "estimate"]);
+        assert_eq!(
+            stdio_admin,
+            vec!["search", "status", "show", "find_like", "estimate"]
+        );
     }
 
     #[test]

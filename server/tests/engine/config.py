@@ -76,6 +76,13 @@ class EngineConfig:
     def status_argv(self) -> list[str]:
         return [self.binary, "status", "--index", self.index]
 
+    def find_argv(self, reference: str, flags: tuple[str, ...] = ()) -> list[str]:
+        # `digup find <photo> [--in DIR]... [--ext EXT] [--strong] [--json]` (#162/#121):
+        # the roots ride --in (the shared parser's list flag), the reference is positional.
+        return [self.binary, "find", reference,
+                *sum([["--in", r] for r in self.roots], []),
+                "--index", self.index, *flags]
+
     def estimate_argv(self) -> list[str]:
         # `estimate --json` is a ParentWatch helper: it exits at once when its parent is
         # PID 1 ("the app is gone"). The server is the app — it spawns helpers as its own

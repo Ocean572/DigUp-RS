@@ -752,6 +752,19 @@ impl<'a> Searcher<'a> {
         ))
     }
 
+    /// `find like this` (#162/#121, 2026-11-25): the indexed kind of the reference
+    /// file. The reference picture must be embedded at the media budget its stored
+    /// twin used at index time (photo/screenshot — the `IndexOptions` pair the
+    /// indexer embeds with), so the cosine lands on the same scale as its twin's
+    /// vector. `reloadFiles` (#189) fills both maps, so this answers with the file
+    /// map alone — no vectors loaded, no model.
+    pub fn indexed_kind(&self, path: &str) -> Option<crate::model::FileKind> {
+        self.file_path
+            .iter()
+            .find(|(_, stored)| *stored == path)
+            .and_then(|(id, _)| self.file_kind.get(id).copied())
+    }
+
     /// The whole query pipeline (Searcher.swift:115): meaning + words + fusion + hits.
     pub fn search(
         &mut self,

@@ -104,6 +104,12 @@ struct State {
     code_skipped: Vec<String>,
     encoder: Option<Box<dyn Embedder>>,
     encoder_state: String,
+    /// `find like this` (#162/#121, 2026-11-25): the FULL-shape media encoder
+    /// (text + mmproj), loaded by the first picture query and kept warm — issue
+    /// #155's stickiness law, mirrored on this daemon: the 555 MB picture model
+    /// is paid ONCE, the idle watch releases it with the text model's memory.
+    media_encoder: Option<Box<dyn Embedder>>,
+    media_encoder_state: String,
     vector_cache: HashMap<String, Vec<f32>>,
     last_query: Instant,
     warned_about_source: bool,
@@ -141,6 +147,22 @@ fn stop_encoder(state: &mut State) {
     if state.encoder_state != "unavailable" {
         state.encoder_state = "stopped".to_string();
     }
+    // `find like this` (#162/#121): the media encoder rides the same idle law —
+    // the picture memory goes back to the system together with the text model's.
+    stop_media_encoder(state);
+}
+
+/// The media encoder's own stop. The embed-error path uses it alone (the
+/// vector_for law: a failed embed stops the encoder, the next call starts a
+/// new one); the idle watch stops both through `stop_encoder`.
+fn stop_media_encoder(state: &mut State) {
+    if let Some(encoder) = state.media_encoder.as_mut() {
+        encoder.close();
+    }
+    state.media_encoder = None;
+    if state.media_encoder_state != "unavailable" {
+        state.media_encoder_state = "stopped".to_string();
+    }
 }
 
 /// `runningEncoder()`: the warm encoder, loading it once when needed and
@@ -174,6 +196,93 @@ fn running_encoder(state: &mut State) -> bool {
                 "error": error.to_string().chars().take(300).collect::<String>(),
             }));
             false
+        }
+    }
+}
+
+/// `runningMediaEncoder()` (#162/#121): the FULL shape — text + mmproj media
+/// encoders with the 2048-token context, because a picture takes up to 1120
+/// tokens and the text-only 512 context cannot serve it (embedder.rs:101-104).
+/// Loaded once by the first picture query, kept warm by the stickiness law,
+/// stopped by the same idle watch as the text encoder. The `media: true` field
+/// marks the new event lines; the text encoder's lines keep their pre-round bytes.
+fn running_media_encoder(state: &mut State) -> bool {
+    if state.media_encoder.is_some() {
+        return true;
+    }
+    if state.media_encoder_state == "unavailable" {
+        return false;
+    }
+    state.media_encoder_state = "starting".to_string();
+    let started = Instant::now();
+    let made = LlamaModels::locate()
+        .and_then(|models| LlamaEmbedder::new(&models, false, Some(2048), Some(&state.log)));
+    match made {
+        Ok(worker) => {
+            let source = worker.info().vector_source();
+            state.media_encoder = Some(Box::new(worker));
+            state.media_encoder_state = "ready".to_string();
+            let seconds = (started.elapsed().as_secs_f64() * 100.0).round() / 100.0;
+            write_out(serde_json::json!({
+                "event": "encoder", "state": "ready", "seconds": seconds, "source": source,
+                "media": true,
+            }));
+            true
+        }
+        Err(error) => {
+            state.media_encoder_state = "unavailable".to_string();
+            write_out(serde_json::json!({
+                "event": "encoder", "state": "unavailable", "media": true,
+                "error": error.to_string().chars().take(300).collect::<String>(),
+            }));
+            false
+        }
+    }
+}
+
+/// `find like this` (#162/#121): the reference picture's query vector, embedded
+/// at the media budget its stored twin used at index time — photo 140 /
+/// screenshot 280, the `IndexOptions` pair the indexer embeds with
+/// (`vector_for`'s cache law rides: the same reference re-clicked re-embeds
+/// nothing). Same L2-normalized 768-d space as the pool, so the dots the matrix
+/// scores are cosines and the 2.0σ gate means what it always means. An embed
+/// failure stops the media encoder (the vector_for law) — the next picture
+/// query starts a new one.
+fn reference_vector(state: &mut State, path: &str, kind: FileKind) -> Option<Vec<f32>> {
+    state.last_query = Instant::now();
+    let options = digup_core::options::IndexOptions::default();
+    let budget = match kind {
+        FileKind::Screenshot => options.screenshot_budget,
+        _ => options.photo_budget,
+    };
+    let key = format!("media\u{0}{}\u{0}{path}", kind.as_str());
+    if let Some(cached) = state.vector_cache.get(&key) {
+        return Some(cached.clone());
+    }
+    if !running_media_encoder(state) {
+        return None;
+    }
+    let made = state
+        .media_encoder
+        .as_ref()
+        .expect("the encoder running_media_encoder just made")
+        .embed_images(&[path.to_string()], budget as i32);
+    match made {
+        Ok(rows) => rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.vector)
+            .inspect(|values| {
+                if state.vector_cache.len() > 256 {
+                    state.vector_cache.clear();
+                }
+                state.vector_cache.insert(key, values.clone());
+            }),
+        Err(error) => {
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr(), "media encoder: {error}");
+            stop_media_encoder(state);
+            None
         }
     }
 }
@@ -744,6 +853,162 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
             }
             Ok(Value::Object(reply))
         }
+        "find_similar" => {
+            // `find like this` (#162/#121, 2026-11-25): the reference picture
+            // rides the daemon as a server-supplied `path` — the `render` op's
+            // law: REST never carries paths; the thin client sends its minted
+            // media id, the server resolves it to the path and supplies it here.
+            // The picture's own vector (full media encoder, its indexed budget)
+            // replaces the query text: `search("")` skips the FTS scan, the
+            // pool's cosines and the 2.0σ gate mean exactly what they mean for
+            // a text query, and the same post-ranking filter chain rides
+            // verbatim. The reference's own row drops out of its answer (the
+            // faces `similar` law — you don't want the photo you clicked).
+            // `found_from` names what the answer was built from.
+            let path = request.get("path").and_then(Value::as_str).unwrap_or("");
+            if path.is_empty() {
+                return Err("find like this needs a reference path".to_string());
+            }
+            let kinds: Option<HashSet<FileKind>> =
+                request.get("kinds").and_then(Value::as_array).map(|rows| {
+                    rows.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter_map(FileKind::parse)
+                        .collect()
+                });
+            let limit = request.get("limit").and_then(Value::as_i64).unwrap_or(40) as usize;
+            let under: Vec<String> = request
+                .get("under")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let ext: std::collections::HashSet<String> = request
+                .get("ext")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(Value::as_str)
+                        .map(|value| value.trim().trim_start_matches('.').to_lowercase())
+                        .filter(|value| !value.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let started = Instant::now();
+            let mut vector: Option<Vec<f32>> = None;
+            let mut warning: Option<String> = None;
+            let mut found_from: Option<(String, &'static str)> = None;
+            // The reference must be a picture: the kind from its index row when
+            // it is indexed (the budget its stored twin embedded at), the
+            // engine's own screenshot name/folder law for an off-index file.
+            let kind = if !Path::new(path).is_file() {
+                warning = Some(format!("find like this: no such file: {path}"));
+                None
+            } else {
+                match state.searcher.indexed_kind(path) {
+                    Some(kind @ (FileKind::Image | FileKind::Screenshot)) => Some(kind),
+                    Some(other) => {
+                        warning = Some(format!(
+                            "find like this: a {} is not a picture",
+                            other.as_str()
+                        ));
+                        None
+                    }
+                    None if digup_core::rules::is_screenshot(path) => Some(FileKind::Screenshot),
+                    None => Some(FileKind::Image),
+                }
+            };
+            if let Some(kind) = kind {
+                found_from = Some((path.to_string(), kind.as_str()));
+                vector = reference_vector(state, path, kind);
+                // The same source-match gate as text search: vectors from
+                // another model must never meet the pool — no hits, and say so.
+                if vector.is_some() {
+                    let indexed = state.searcher.vector_source.clone();
+                    let source = state
+                        .media_encoder
+                        .as_ref()
+                        .map(|e| e.info().vector_source());
+                    if let (Some(indexed), Some(source)) = (indexed, source) {
+                        if indexed != source {
+                            vector = None;
+                            if !state.warned_about_source {
+                                warning = Some(format!(
+                                    "find like this is off: the index was built with {indexed}, the encoder is {source}"
+                                ));
+                                state.warned_about_source = true;
+                            }
+                        }
+                    }
+                }
+            }
+            let embedded = Instant::now();
+            let opts = SearchOptions {
+                kinds: kinds.as_ref(),
+                limit,
+                z_gate: digup_core::scoring::Z_GATE,
+                word_weight: None,
+                prefix_last: false,
+                under: (!under.is_empty()).then_some(under.as_slice()),
+                // Find like this answers PICTURES across the field — the People pool is a
+                // text-search act (round twelve), and the merged bar law sends no pool here
+                // on any front (the shell and web panels document the same law).
+                person_files: None,
+            };
+            let reference = path.to_string();
+            let (roots, skipped, types) = (
+                state.roots.clone(),
+                state.skipped.clone(),
+                state.types.clone(),
+            );
+            let hits: Vec<SearchHit> = state
+                .searcher
+                .search("", vector.as_deref(), &opts)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|hit| {
+                    let extension = digup_core::code::extension_of(&hit.path).to_lowercase();
+                    hit.path != reference
+                        && folder_selection::is_searched(&hit.path, &roots, &skipped)
+                        && !types.contains(&extension)
+                        && keeps_extension(&extension, &ext)
+                        && Path::new(&hit.path).exists()
+                })
+                .collect();
+            let scores: Vec<f64> = hits.iter().map(|hit| hit.score).collect();
+            let mut reply = Map::new();
+            reply.insert(
+                "hits".into(),
+                Value::Array(hits.iter().map(hit_fields).collect()),
+            );
+            reply.insert(
+                "strong".into(),
+                serde_json::json!(digup_core::scoring::strong_count(&scores, 0.5)),
+            );
+            reply.insert("meaning".into(), Value::Bool(vector.is_some()));
+            reply.insert(
+                "ms".into(),
+                serde_json::json!({
+                    "embed": (started.elapsed().as_secs_f64() - embedded.elapsed().as_secs_f64()) as i64,
+                    "search": (embedded.elapsed().as_secs_f64() * 1000.0) as i64,
+                }),
+            );
+            if let Some((path, kind)) = found_from {
+                reply.insert(
+                    "found_from".into(),
+                    serde_json::json!({"path": path, "kind": kind}),
+                );
+            }
+            if let Some(warning) = warning {
+                reply.insert("warning".into(), Value::String(warning));
+            }
+            Ok(Value::Object(reply))
+        }
         "embed_ahead" => {
             let typed = request.get("q").and_then(Value::as_str).unwrap_or("");
             if NameQuery::text_of(typed).is_none() {
@@ -879,6 +1144,13 @@ fn handle(state: &mut State, op: &str, request: &Map<String, Value>) -> Result<V
         "status" => {
             let mut reply = Map::new();
             reply.insert("encoder".into(), Value::String(state.encoder_state.clone()));
+            // `find like this` (#162/#121): the media encoder's own state rides
+            // as an additive field — field-less replies stay byte-parity, the
+            // server's status parser reads keys, not positions.
+            reply.insert(
+                "media_encoder".into(),
+                Value::String(state.media_encoder_state.clone()),
+            );
             reply.insert(
                 "vectors".into(),
                 serde_json::json!(if state.searcher.vectors_loaded {
@@ -936,7 +1208,11 @@ fn idle_watch(shared: Arc<Shared>, idle_seconds: f64) {
             // which the main thread holds in the line read, for ever.
             unsafe { libc::_exit(0) };
         }
-        if (state.encoder.is_some() || state.searcher.vectors_loaded) && idle > idle_seconds {
+        if (state.encoder.is_some()
+            || state.media_encoder.is_some()
+            || state.searcher.vectors_loaded)
+            && idle > idle_seconds
+        {
             stop_encoder(&mut state);
             state.searcher.release_vectors();
             if let Some(code_searcher) = state.code_searcher.as_mut() {
@@ -978,6 +1254,8 @@ fn run(config: SearchConfig) -> Result<i32, String> {
         code_skipped: config.code_skipped.clone(),
         encoder: None,
         encoder_state: "stopped".to_string(),
+        media_encoder: None,
+        media_encoder_state: "stopped".to_string(),
         vector_cache: HashMap::new(),
         last_query: Instant::now(),
         warned_about_source: false,
@@ -1358,6 +1636,10 @@ mod tests {
             code_skipped: vec![],
             encoder: None,
             encoder_state: "stopped".to_string(),
+            // The find-like media seam rides the same law as the text one: the pool test
+            // never asks a picture, so both stay unloaded.
+            media_encoder: None,
+            media_encoder_state: "stopped".to_string(),
             vector_cache: HashMap::new(),
             last_query: Instant::now(),
             warned_about_source: false,

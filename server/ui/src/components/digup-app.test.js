@@ -47,7 +47,7 @@ async function mount() {
   document.body.append(el);
   await el.updateComplete;
   await vi.advanceTimersByTimeAsync(0);              // the boot status poll
-  return { el, store, calls, theme };
+  return { el, store, calls, theme, controllers };
 }
 
 const key = (target, k) => target.dispatchEvent(
@@ -65,7 +65,7 @@ describe("digup-app", () => {
     expect(ctx.el.renderRoot.querySelector("digup-search")).not.toBeNull();
     expect(ctx.el.renderRoot.querySelector("h1").textContent).toBe("DigUp");
     expect(ctx.el.renderRoot.getElementById("keys").textContent)
-      .toBe("↑↓ pick · ↩ open · Space preview · Esc clear · type to search");
+      .toBe("↑↓ pick · ↩ open · Space preview · F find-like · Esc clear · type to search");
     expect(ctx.calls.map((c) => c.path)).toContain("/api/v1/status");
   });
 
@@ -149,5 +149,61 @@ describe("digup-app", () => {
     ctx.el.noteMissingKey();
     await ctx.el.updateComplete;
     expect(ctx.el.renderRoot.getElementById("gear").className).toContain("attention");
+  });
+
+  // Find like this (#162/#121, 2026-11-25): the row's ⌕ and the F hotkey both land
+  // on the controller's findLike (the ONE route), and an empty find-like relays the
+  // engine's own sentence with its warning quoted — the #151 honesty hint rides with it.
+  it("the row's ⌕ bubbles to the controller's findLike", async () => {
+    ctx = await mount();
+    const spy = vi.spyOn(ctx.controllers.search, "findLike");
+    ctx.store.set({ results: { phase: "meaning", strong: [hit], weaker: [],
+      groups: [{ title: "Images", rows: [hit] }], hitsById: new Map([hit].map((h) => [h.media_id, h])),
+      showWeaker: false, selection: "a", lastReply: { hits: [hit], strong: 1, meaning: true, ms: {} } } });
+    await ctx.el.updateComplete;
+    const results = ctx.el.renderRoot.querySelector("digup-results");
+    await results.updateComplete;
+    results.shadowRoot.querySelector("li.row button.row-find").click();
+    expect(spy).toHaveBeenCalledWith("a");
+  });
+
+  it("F finds like the selected picture; document rows and typing fields decline", async () => {
+    ctx = await mount();
+    const spy = vi.spyOn(ctx.controllers.search, "findLike");
+    const shown = (h) => ctx.store.set({ navigated: true, results: { phase: "meaning",
+      strong: [h], weaker: [], groups: [{ title: "Images", rows: [h] }],
+      hitsById: new Map([h].map((x) => [x.media_id, x])), showWeaker: false,
+      selection: h.media_id, lastReply: { hits: [h], strong: 1, meaning: true, ms: {} } } });
+    shown(hit);
+    await ctx.el.updateComplete;
+    key(document, "f");
+    expect(spy).toHaveBeenCalledWith("a");
+    spy.mockClear();
+    shown({ media_id: "d1", kind: "pdf", path: "/x/report.pdf" });
+    await ctx.el.updateComplete;
+    key(document, "f");
+    expect(spy).not.toHaveBeenCalled();          // the engine has no picture vector for a doc
+    spy.mockClear();
+    const field = document.createElement("input");
+    document.body.append(field);
+    field.focus();
+    key(field, "f");
+    expect(spy).not.toHaveBeenCalled();          // typing an f is typing
+    field.remove();
+  });
+
+  it("an empty find-like relays the engine's answer with its warning, #151 hint riding", async () => {
+    ctx = await mount();
+    ctx.store.set({ results: { phase: "findLike", strong: [], weaker: [], groups: [],
+      hitsById: new Map(), showWeaker: false, selection: null,
+      lastReply: { hits: [], strong: 0, meaning: true, ms: {},
+                   warning: "find like this: no such file: /x/gone.jpg" } } });
+    await ctx.el.updateComplete;
+    expect(ctx.el.dataset.page).toBe("none");
+    const why = ctx.el.renderRoot.getElementById("no-results-why").textContent;
+    expect(why).toContain("the engine found no pictures that stand out next to this one");
+    expect(why).toContain("find like this: no such file: /x/gone.jpg");
+    expect(ctx.el.renderRoot.getElementById("no-results").textContent)
+      .toContain("only strong matches");
   });
 });

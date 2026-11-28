@@ -79,6 +79,36 @@ export function createSearchController({ api, store, pause = TYPING_PAUSE }) {
     store.set({ error: String(error.message || error) });
   }
 
+  /** `find like this` (#162/#121, 2026-11-25): the clicked photo rides as its
+   *  minted media handle — the REST law keeps paths out of the API; the server
+   *  resolves the handle and the engine embeds the reference (media encoder) and
+   *  ranks the pool by cosine: the same 2.0σ gate, the same filter chain, the
+   *  same verbatim rows. The current kind/scope/ext filters ride the same fields
+   *  as a text search (the People filter does not: find-like answers pictures).
+   *  The generation law rides (a late answer never overwrites newer typing), and
+   *  the rows land in the SAME results machinery — groups, the weaker fold, the
+   *  selection bookkeeping. */
+  function findLike(mediaId) {
+    if (!mediaId) return;
+    const s = store.get();
+    const f = s.filters;
+    const body = {media_id: mediaId, limit: f.limit};
+    const kinds = f.kinds;
+    body.kinds = (kinds.length === 0 || kinds.length === 6) ? null : kinds;   // none ticked = all
+    if (f.under) body.under = f.under;
+    if (f.ext) body.ext = f.ext;
+    const generation = ++seq.generation;
+    clearTimeout(seq.timer);
+    store.set({navigated: false, error: null});
+    api("/api/v1/find-like", {method: "POST", body: JSON.stringify(body)})
+      .then((reply) => {
+        if (generation !== seq.generation) return;
+        seq.finalGeneration = generation;
+        show(reply, "findLike");
+      })
+      .catch((error) => { if (generation === seq.generation) failed(error); });
+  }
+
   // The hits: strong results grouped by kind, the rest folded ("N weaker matches").
   function show(reply, phase) {
     const hits = reply.hits || [];
@@ -135,5 +165,5 @@ export function createSearchController({ api, store, pause = TYPING_PAUSE }) {
 
   const selectedHit = () => { const s = store.get(); return s.results.hitsById.get(s.results.selection) ?? null; };
 
-  return { queryChanged, move, select, toggleWeaker, selectedHit, rowIDs, failed };
+  return { queryChanged, move, select, toggleWeaker, selectedHit, rowIDs, failed, findLike };
 }

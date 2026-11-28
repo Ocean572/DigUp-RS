@@ -80,6 +80,14 @@ export function factsTemplate(hit) {
     hit.keyword_rank !== undefined && hit.keyword_rank !== null ? `keyword #${hit.keyword_rank}` : null,
     hit.segment !== undefined ? `segment ${hit.segment}` : null].filter(Boolean);
   const { fileURL } = mediaUrls(hit);
+  // `Find like this` (#162/#121, 2026-11-25): the photo rides the REST law as its
+  // minted media handle — the shell listens for digup:find-like and asks the
+  // server. The engine embeds the reference and ranks the pool: same gate, same
+  // rows, relayed verbatim. Pictures only — the engine has no picture vector for
+  // a document row, so a doc/audio/video facts block carries no dead button.
+  const findable = ["image", "screenshot"].includes(hit.kind) && hit.media_id;
+  const findLike = (e) => e.currentTarget.dispatchEvent(new CustomEvent("digup:find-like",
+    { bubbles: true, composed: true, detail: { mediaId: hit.media_id } }));
   return html`<div class="facts">
     <div class="title">${baseName(hit.path)}</div>
     <div class="line">${folderOf(hit.path)}</div>
@@ -89,6 +97,8 @@ export function factsTemplate(hit) {
       <!-- server-issued handle, inline media: "Open" is the desktop's Open, over HTTP -->
       <a class="button-like" href=${fileURL} target="_blank" rel="noopener">Open</a>
       <a class="button-like" href=${fileURL} download=${baseName(hit.path)}>Download</a>
+      ${findable ? html`<button class="button-like" type="button"
+        title="Ask the engine for pictures like this one" @click=${findLike}>Find like this</button>` : null}
     </div>
   </div>`;
 }

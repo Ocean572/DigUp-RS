@@ -68,6 +68,18 @@ pub struct EmbedAheadReq {
     pub code: bool,
 }
 
+/// `POST /find-like` (#162/#121, 2026-11-25): the clicked hit rides as its
+/// minted `media_id` — the REST law that paths never cross the API (the client
+/// sends the handle the search minted; the server resolves it via the HitCache,
+/// like `preview`). Field order: media_id, kinds, limit, under, ext.
+pub struct FindLikeReq {
+    pub media_id: String,
+    pub kinds: Option<Vec<String>>,
+    pub limit: i64,
+    pub under: Option<Vec<String>>,
+    pub ext: Option<Vec<String>>,
+}
+
 /// `q: str = Field(max_length=512)` + `code: bool` — shared by both models.
 fn check_q(body: &Value, errors: &mut Vec<Value>) -> Option<String> {
     match body.get("q") {
@@ -369,6 +381,73 @@ pub fn embed_ahead(body: &Value) -> Result<EmbedAheadReq, Vec<Value>> {
     Ok(EmbedAheadReq {
         q: q.expect("no errors means q was a string"),
         code,
+    })
+}
+
+/// `media_id: str = Field(min_length=1, max_length=64)` — the clicked hit's
+/// minted handle (12 hex chars by design; the width is pydantic-shaped slack,
+/// an unknown handle is the media routes' 404, not a 422).
+fn check_media_id(body: &Value, errors: &mut Vec<Value>) -> Option<String> {
+    match body.get("media_id") {
+        None => {
+            errors.push(item(
+                "missing",
+                vec![json!("body"), json!("media_id")],
+                "Field required",
+            ));
+            None
+        }
+        Some(Value::String(text)) => {
+            let chars = text.chars().count();
+            if chars < 1 {
+                errors.push(item(
+                    "string_too_short",
+                    vec![json!("body"), json!("media_id")],
+                    "String should have at least 1 character",
+                ));
+                None
+            } else if chars > 64 {
+                errors.push(item(
+                    "string_too_long",
+                    vec![json!("body"), json!("media_id")],
+                    "String should have at most 64 characters",
+                ));
+                None
+            } else {
+                Some(text.clone())
+            }
+        }
+        Some(_) => {
+            errors.push(item(
+                "string_type",
+                vec![json!("body"), json!("media_id")],
+                "Input should be a valid string",
+            ));
+            None
+        }
+    }
+}
+
+/// POST /find-like — `FindLikeRequest`: media_id, kinds, limit, under, ext.
+pub fn find_like(body: &Value) -> Result<FindLikeReq, Vec<Value>> {
+    let mut errors = Vec::new();
+    if !body_is_object(body, &mut errors) {
+        return Err(errors);
+    }
+    let media_id = check_media_id(body, &mut errors);
+    let kinds = check_kinds(body, &mut errors);
+    let limit = check_limit(body, &mut errors);
+    let under = check_string_list(body, "under", &mut errors);
+    let ext = check_string_list(body, "ext", &mut errors);
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(FindLikeReq {
+        media_id: media_id.expect("no errors means media_id was a string"),
+        kinds,
+        limit,
+        under,
+        ext,
     })
 }
 
