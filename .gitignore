@@ -114,3 +114,21 @@ deploy/docker-compose.rust.yml
 # Dated local progress logs (the user's round-run files: 2026-11-28-ROADMAP-RUN.md and its
 # future siblings). Local working notes, same family as AGENTS.md/.agent-journal.md.
 20??-??-??-*.md
+
+# Test fixtures + vendor binaries (user's standing rule, 2026-11-28): the env-gated suites
+# read camera-RAW, tiled-TIFF, legacy-Word and SVG sample fixtures from folders OUTSIDE git
+# (this box uses /tmp/opencode), and vendor tools are built outside the tree. Tests fetch
+# NOTHING from the network; every build-time download is hash-pinned in
+# scripts/vendor-checksums.json. scripts/gate-staged.sh enforces this on the staged tree.
+# Files already tracked are unaffected by these patterns (the app icons, the byte-pinned
+# crates/runtime/tests/fixtures/index-photo-gray.tif); adopting a NEW fixture into the
+# pinned corpus on purpose is `git add -f` + a line in the gate's exception list.
+*.doc
+*.tif
+*.tiff
+rawfix/
+svgfix/
+docfix/
+decodefix/
+# A stray antiword binary in the tree (the F-D fallback experiment; Vendor/ is ignored).
+/antiword

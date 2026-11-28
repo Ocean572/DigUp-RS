@@ -14,9 +14,9 @@
 # DIGUP_FFMPEG=<the pinned 4.4.2 folder> — without them the media suites measure the wrong
 # ffmpeg and the cross-engine index test dies.
 #
-# The port's scope (the tree this audits): crates/, scripts/rust/, deploy/, server/,
-# .github/, docs/, Cargo.*, LICENSE, README, CONTRIBUTING. The Swift/Python/shell trees are
-# upstream's; AGENTS.md keeps them read-only here, so they are out of this battery's scope.
+# The port's scope (the tree this audits): crates/, scripts/rust/, scripts/gate-staged.sh,
+# deploy/, server/, .github/, docs/, Cargo.*, LICENSE, README, CONTRIBUTING. The Swift/Python/shell
+# trees are upstream's; AGENTS.md keeps them read-only here, so they are out of this battery's scope.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 ROOT="$PWD"
@@ -28,7 +28,7 @@ note() { echo "note:  $*"; }
 have() { command -v "$1" > /dev/null 2>&1; }
 
 # Files the port owns, as git sees them (a battery must measure the repo, not a folder).
-PORT_PATHS='crates scripts/rust deploy server .github docs Cargo.toml Cargo.lock LICENSE README.md CONTRIBUTING.md'
+PORT_PATHS='crates scripts/rust scripts/gate-staged.sh deploy server .github docs Cargo.toml Cargo.lock LICENSE README.md CONTRIBUTING.md'
 port_files() { git ls-files -z -- $PORT_PATHS; }
 
 echo "== 1. formatting =="
@@ -146,8 +146,8 @@ else note "no built payload yet: run scripts/rust/package-linux.sh to check noti
 
 echo "== 8. scripts (shell + python) =="
 if have shellcheck; then
-  if shellcheck -S warning scripts/rust/*.sh > /dev/null 2>&1; then pass "shellcheck -S warning: scripts/rust clean"
-  else fail "shellcheck findings:"; shellcheck -S warning scripts/rust/*.sh 2>&1 | sed -n '1,25p'; fi
+  if shellcheck -S warning scripts/rust/*.sh scripts/gate-staged.sh > /dev/null 2>&1; then pass "shellcheck -S warning: port scripts clean"
+  else fail "shellcheck findings:"; shellcheck -S warning scripts/rust/*.sh scripts/gate-staged.sh 2>&1 | sed -n '1,25p'; fi
 else fail "shellcheck not installed (uv tool install shellcheck-py) — NOT MEASURED"; fi
 if have ruff; then
   if ruff check --quiet scripts/rust > /dev/null 2>&1; then pass "ruff: scripts/rust clean"
@@ -181,8 +181,18 @@ trail=$(port_files | grep -zv -v "$fixtures" | xargs -0 -r grep -IlE ' +$' 2>/de
 if [ "${trail:-0}" = 0 ]; then pass "no trailing whitespace in text files (byte-pinned fixtures excluded)"
 else fail "$trail text files with trailing whitespace: $(port_files | grep -zv -v "$fixtures" | xargs -0 -r grep -lIE ' +$' 2>/dev/null | head -6 | tr '\n' ' ')"; fi
 # Shell scripts the port ships must be executable (mode 100755 in the index).
-nonexec=$(git ls-files -s -- 'scripts/rust' 'deploy' | awk '$4 ~ /\.sh$/ && $1 != "100755"' | wc -l || true)
+nonexec=$(git ls-files -s -- 'scripts/rust' 'deploy' scripts/gate-staged.sh | awk '$4 ~ /\.sh$/ && $1 != "100755"' | wc -l || true)
 if [ "${nonexec:-0}" = 0 ]; then pass "shell scripts carry the exec bit"; else fail "$nonexec scripts without the exec bit"; fi
+# Fixture/vendor-binary gate (the user's standing rule, 2026-11-28): the env-gated suites
+# read RAW / tiled-TIFF / legacy-Word / SVG fixtures from folders OUTSIDE git, tests fetch
+# NOTHING from the network, and every build-time download is hash-pinned in
+# scripts/vendor-checksums.json. The tracked tree carries no sample fixtures and no vendor
+# binaries — gate-staged.sh --all measures it; the law's full text is the gate's header.
+if out=$(scripts/gate-staged.sh --all 2>&1); then
+  pass "gate-staged --all: tracked tree carries no fixtures/vendor binaries"
+else
+  fail "fixture/vendor shapes in the tracked tree:"; printf %s "$out" | sed -n '1,12p'
+fi
 
 echo "== 11. privacy (the standing rule: personal data never reaches a remote) =="
 # What is personal: this machine's real home, the harness's scratch root, full hardware
