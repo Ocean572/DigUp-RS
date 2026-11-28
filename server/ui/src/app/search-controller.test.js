@@ -143,16 +143,12 @@ describe("search-controller — the name: prefix rides the text", () => {
     expect(JSON.parse(calls[2].options.body).q).toBe("name: in");
   });
 
-  it("the names box composes the prefix the engine parses", async () => {
-    const { calls, c } = setup();
-    c.queryChanged("in", { ...filters, names: true });
-    expect(JSON.parse(calls[0].options.body).q).toBe("name: in");
-    expect(JSON.parse(calls[1].options.body).q).toBe("name: in");
-  });
+  // (The names BOX composition test retired 2026-11-27: the toggle left the bar; the
+  // typed prefix above is the engine's path and the ONLY one.)
 
-  // The People filter (round six, 2026-11-23): a person id rides the search body (both
-  // keyword-first calls); the SERVER answers which paths carry the face — the UI relays.
-  // Code mode drops it: faces live on photos, never on code rows.
+  // The People search (round twelve, 2026-11-27, the user's pool law): a person id rides
+  // the search body (both keyword-first calls); the ENGINE pools the search into her
+  // photos — the UI relays. Code mode drops it: faces live on photos, never on code rows.
   it("the person filter rides the search body; code mode drops it", async () => {
     const { calls, c } = setup();
     c.queryChanged("dog", { ...filters, person: 3 });
@@ -164,27 +160,9 @@ describe("search-controller — the name: prefix rides the text", () => {
     expect(JSON.parse(calls[0].options.body).person).toBe(undefined);
   });
 
-  // The scope keeps (#206/#132/#188, 2026-11-25): the detail's `under`/`ext` ride the
-  // search body (both keyword-first calls) — the server relays, the engine narrows the
-  // scope inside its OWN roots and keeps rows after the ranking. Unset fields keep the
-  // verb byte-identical; code mode drops them (the selects hide with the chips row).
-  it("the scope keeps ride the search body; unset fields and code mode drop them", async () => {
-    const { calls, c } = setup();
-    c.queryChanged("wakeboard", { ...filters, under: ["/photos/vienna"], ext: ["webm"] });
-    expect(JSON.parse(calls[0].options.body)).toMatchObject({ under: ["/photos/vienna"], ext: ["webm"] });
-    await vi.advanceTimersByTimeAsync(120);
-    expect(JSON.parse(calls[2].options.body)).toMatchObject({ under: ["/photos/vienna"], ext: ["webm"] });
-    calls.length = 0;
-    c.queryChanged("wakeboard", { ...filters });
-    const plain = JSON.parse(calls[0].options.body);
-    expect("under" in plain).toBe(false);
-    expect("ext" in plain).toBe(false);
-    calls.length = 0;
-    c.queryChanged("rope", { ...filters, code: true, under: ["/photos/vienna"], ext: ["webm"] });
-    const codeBody = JSON.parse(calls[0].options.body);
-    expect(codeBody.under).toBe(undefined);
-    expect(codeBody.ext).toBe(undefined);
-  });
+  // (The scope keeps test retired 2026-11-27: the scope/extension selects left the
+  // search bar; the verb fields they rode stay on the API for CLI clients, pinned
+  // server-side in test_api.py.)
 
   it("code wins a text carrying both prefixes: the code prefix is the flag, names is off", async () => {
     const { store, calls, c } = setup();

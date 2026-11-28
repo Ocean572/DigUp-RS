@@ -18,9 +18,18 @@ ROOT="$PWD"
 
 MODE=all
 [ "${1:-}" = "--cpu-only" ] && MODE=cpu-only
+[ "${1:-}" = "--gpu-only" ] && MODE=gpu-only   # Gate A already measured; re-run the card legs
 OUT="server/data/gpu-handoff-$(date +%Y%m%d-%H%M).log"
 mkdir -p server/data
 exec > >(tee -a "$OUT") 2>&1
+
+# Project identity (measured 2026-11-27, the cost of not knowing it): deploy/docker-compose.yml
+# declares `name: digup-server`, so a gate run from deploy/ shares the LIVE stack's compose
+# project — its `up -d --build` RECREATES the running pilot container (gate env: a different
+# index/media/port) and the leg's `down -v` REMOVES it. The gate's compose legs therefore run
+# under their own project name (`docker compose config` proves COMPOSE_PROJECT_NAME outranks
+# the file's `name:`), so a live stack on the box is never touched.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-digup-gate}"
 
 fails=0
 gpus_used=0
@@ -32,6 +41,11 @@ DATA="${DIGUP_DATA:-$HOME/digup-data}"
 REV=bfcd298762cc34d0357ece5ebdd31791a3a374d8
 CUDA_BASE="${CUDA_BASE:-nvidia/cuda:12.4.1-devel-ubuntu22.04}"
 ARCH=$(uname -m)
+# Host-side port the gate's own Compose legs publish on: `docker compose` reads
+# DIGUP_PUBLISH_PORT, and the gate's host-side curls must ask the SAME port (measured
+# 2026-11-27 on this box: a live stack already holds 8787 — a gate that hardcodes it
+# measures the neighbour's API, not the one it just built).
+PORT="${DIGUP_PUBLISH_PORT:-8787}"
 
 echo "== DigUp Stage-9 handoff · mode=$MODE · arch=$ARCH · log=$OUT"
 echo
@@ -51,12 +65,20 @@ gate_a_corpus() {
 }
 
 gate_a_models() {
-  local want got
-  want=$(grep -oE 'sha256: "[0-9a-f]{64}"' Sources/DigUpKit/ModelFiles.swift | grep -oE '[0-9a-f]{64}' | sort)
-  got=$(sha256sum "$DATA"/models/*.gguf 2>/dev/null | awk '{print $1}' | sort)
-  if [ -z "$got" ]; then fail "no model files in $DATA/models (docs/implementation/gpu-handoff.md Gate A has the download lines)"; return; fi
-  if [ "$want" != "$got" ]; then fail "model sha256s do not match Sources/DigUpKit/ModelFiles.swift: engine=$want files=$got"; return; fi
-  pass "model files verified against the engine's own pins"
+  # Rust-era pins (the Swift ModelFiles.swift left main 2026-11-18): the engine's own
+  # crates/runtime/src/models.rs is the pin set — every pinned hash must be present among
+  # the model files on disk. Extra files (a user's additional faces models) are not a failure.
+  local want missing=0
+  want=$(grep -oE 'sha256: "[0-9a-f]{64}"' crates/runtime/src/models.rs | grep -oE '[0-9a-f]{64}' | sort -u)
+  if [ -z "$want" ]; then fail "crates/runtime/src/models.rs carries no sha256 pins"; return; fi
+  if ! ls "$DATA"/models/* > /dev/null 2>&1; then fail "no model files in $DATA/models (docs/implementation/gpu-handoff.md Gate A has the download lines)"; return; fi
+  sha256sum "$DATA"/models/* 2>/dev/null | awk '{print $1}' | sort -u > "$OUT.pins"
+  while read -r hash; do
+    grep -q "^$hash" "$OUT.pins" || { echo "  pinned hash absent: $hash"; missing=1; }
+  done <<< "$want"
+  [ "$missing" -eq 0 ] && pass "model files verified against the engine's own pins ($(printf '%s\n' "$want" | wc -l) pins)" \
+    || { fail "model sha256s do not match crates/runtime/src/models.rs (absent pins above)"; rm -f "$OUT.pins"; return; }
+  rm -f "$OUT.pins"
 }
 
 gate_a_bind_dirs() {
@@ -102,7 +124,7 @@ gate_a_compose() {
   done
   [ $alive -eq 1 ] && pass "the CPU-only stack boots and its own healthcheck answers" \
     || fail "healthcheck never answered (the API is the healthcheck: /health 503 counts as alive, so this means the API is not there)"
-  local body; body=$(curl -sf -X POST localhost:8787/api/v1/search -H 'content-type: application/json' -d '{"q":"wakeboarding"}' || true)
+  local body; body=$(curl -sf -X POST "localhost:$PORT/api/v1/search" -H 'content-type: application/json' -d '{"q":"wakeboarding"}' || true)
   [ -n "$body" ] && pass "a search over HTTP answers" || fail "POST /api/v1/search answered nothing (index it first: POST /index {})"
   # The id must be captured BEFORE the stop: `compose ps -q` does not list a stopped service,
   # so inspecting after the stop is how this gate used to report "unknown".
@@ -118,7 +140,12 @@ gate_a_compose() {
   ( cd deploy && docker compose down -v ) > /dev/null 2>&1
 }
 
-gate_a_toolchain; gate_a_corpus; gate_a_models; gate_a_bind_dirs; gate_a_suite; gate_a_compose
+gate_a_toolchain; gate_a_corpus; gate_a_models; gate_a_bind_dirs
+if [ "$MODE" = gpu-only ]; then
+  note "Gate A's contract-suite and compose legs SKIPPED (--gpu-only): measured in an earlier run"
+else
+  gate_a_suite; gate_a_compose
+fi
 
 if [ "$MODE" = cpu-only ]; then
   echo
@@ -141,15 +168,19 @@ gate_b_cuda_build() {
   # numbers — "6.1" and "native" both fail configure there (native needs cmake >= 3.24 and a
   # GPU the builder container does not have). Pass the card's plain number: 61 for Pascal
   # sm_61, 89 for Ada sm_89. The default stays native for toolchains that speak it.
+  # The payload stage's Rust-era name (measured 2026-11-27): the stage is `rust-engine-payload`
+  # (Dockerfile:140). The Swift-era name `engine-payload` no longer exists, so a build asking
+  # for it fails in SECONDS with `target stage "engine-payload" could not be found` — which
+  # reads exactly like the disk death it is often mistaken for.
   DOCKER_BUILDKIT=1 docker build --build-arg BASE_IMAGE="$CUDA_BASE" \
-    --build-arg CUDA_ARCHS="${CUDA_ARCHS:-native}" --target engine-payload \
+    --build-arg CUDA_ARCHS="${CUDA_ARCHS:-native}" --target rust-engine-payload \
     -f server/docker/Dockerfile -t digup-payload:cuda . > /dev/null 2>&1 \
-    || { fail "CUDA engine-payload build on $CUDA_BASE (match the base's CUDA to the host driver: nvidia-smi's 'CUDA Version')"; return; }
+    || { fail "CUDA rust-engine-payload build on $CUDA_BASE (match the base's CUDA to the host driver: nvidia-smi's 'CUDA Version')"; return; }
   local listing; listing=$(docker run --rm digup-payload:cuda sh -c 'ls /out | grep -i cuda' || true)
   [ -n "$listing" ] && pass "payload carries the CUDA backend ($listing)" \
     || fail "payload has no CUDA backend: scripts/build-llama.sh did not find nvcc in $CUDA_BASE"
-  # /out, not /opt/digup: the engine-payload stage lands in /out; the runtime stages COPY it
-  # to /opt/digup. A check written against /opt/digup fails on the payload image (measured).
+  # /out, not /opt/digup: the rust-engine-payload stage lands in /out; the runtime stages COPY
+  # it to /opt/digup. A check written against /opt/digup fails on the payload image (measured).
   docker run --rm digup-payload:cuda sh -c 'ldd /out/libggml-cuda.so' | tee "$OUT.ldd"
   if grep -qE 'libcuda\.so\.1.*not found' "$OUT.ldd"; then note "libcuda.so.1 unresolved in the build stage — expected: it comes from the HOST driver through the toolkit at run time"; fi
   if grep -qE 'libcudart|libcublas' "$OUT.ldd"; then pass "CUDA runtime libs resolve in the payload (ship these, from a CUDA runtime base, never the toolkit)"; else fail "ldd shows CUDA runtime libs that do not resolve: add exactly them to the runtime stage"; fi
@@ -199,7 +230,7 @@ gate_b_utilization() {
   # is healthy, the API is honest. The index job needs the API up — count 200 as ready, not 503.
   local i code=000
   for i in $(seq 1 40); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' localhost:8787/api/v1/health 2>/dev/null || true)
+    code=$(curl -s -o /dev/null -w '%{http_code}' "localhost:$PORT/api/v1/health" 2>/dev/null || true)
     [ "$code" = 200 ] && break
     sleep 3
   done
@@ -210,10 +241,11 @@ gate_b_utilization() {
   fi
   local jobid
   jobid=$(python3 - <<'PYEOF'
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
+port = os.environ.get('DIGUP_PUBLISH_PORT', '8787')
 for attempt in range(40):
     try:
-        req = urllib.request.Request('http://127.0.0.1:8787/api/v1/index', data=b'{}',
+        req = urllib.request.Request(f'http://127.0.0.1:{port}/api/v1/index', data=b'{}',
                                      headers={'content-type': 'application/json'})
         with urllib.request.urlopen(req, timeout=10) as r:
             print(json.load(r)["job"]["id"]); sys.exit(0)
@@ -228,8 +260,9 @@ PYEOF
   fi
   local stats
   stats=$(python3 - "$jobid" "$gpu" <<'PYEOF'
-import json, subprocess, sys, time, urllib.request
+import json, os, subprocess, sys, time, urllib.request
 jid, gpu = sys.argv[1], sys.argv[2]
+port = os.environ.get('DIGUP_PUBLISH_PORT', '8787')
 busy = tot = peak = vram_hi = 0
 t0 = time.time()
 while time.time() - t0 < 300:
@@ -242,7 +275,7 @@ while time.time() - t0 < 300:
     peak = max(peak, u)
     vram_hi += m > 200
     try:
-        js = json.load(urllib.request.urlopen('http://127.0.0.1:8787/api/v1/jobs', timeout=5))
+        js = json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/api/v1/jobs', timeout=5))
         j = next((x for x in js['jobs'] if x['id'] == jid), None)
         if j and j.get('state') == 'done':
             break

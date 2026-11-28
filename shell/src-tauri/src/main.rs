@@ -57,6 +57,9 @@ struct Shell {
     options: Options,
     settings: Mutex<Settings>,
     settings_path: PathBuf,
+    /// The app handle once setup ran: the faces verb's cover scoping (round eleven) opens
+    /// the engine's `covers` folder to the webview, and only the daemon's `ready` names it.
+    app: Mutex<Option<AppHandle>>,
     /// How the panel's shortcut reaches DigUp on this desktop (hotkey.rs).
     shortcut: Method,
     /// The desktop places windows itself (GTK on Wayland), so the panel sits where it puts it unless the person has it
@@ -328,14 +331,36 @@ fn search_arguments(
     settings: &Settings,
     code_folders: &[String],
     roots: &[String],
+    faces_root: Option<&Path>,
+    faces_consent: Option<&Path>,
 ) -> Vec<String> {
     let mut args = vec!["search-service".to_string()];
     if let Some(index) = index {
         args.extend(["--index".to_string(), index.display().to_string()]);
     }
     args.extend(folder_arguments(settings, code_folders));
+    // The People-scope search (round twelve, 2026-11-27): the faces home and the consent
+    // record ride the faces daemon's own flag spellings — `person:` opens a READ-ONLY
+    // window on the store, gated on the same consent file the faces verbs gate on, and
+    // every plain search stays store-blind. The saved argv (#170's law) carries them
+    // into every restart, so a helper reborn from disk keeps the People tab answering.
+    if let Some(dir) = faces_root {
+        args.extend(["--faces-dir".to_string(), dir.display().to_string()]);
+    }
+    if let Some(consent) = faces_consent {
+        args.extend(["--faces-consent".to_string(), consent.display().to_string()]);
+    }
     args.extend(roots.iter().cloned());
     args
+}
+
+/// The faces paths of this install (round twelve): the same home `faces_launch` gives
+/// the faces daemon (`<config>/faces`) and the consent record beside `settings.json`.
+/// The search daemon gets them for the `person:` field; the engine enforces the same
+/// gate for both daemons.
+fn faces_scope(settings_path: &Path) -> (PathBuf, PathBuf) {
+    let config = settings_path.parent().unwrap_or(Path::new("."));
+    (config.join("faces"), faces::consent_path(config))
 }
 
 #[cfg(test)]
@@ -364,6 +389,8 @@ mod search_launch_tests {
             &s,
             &s.code_folders,
             &s.folders,
+            Some(Path::new("C:\\digup-config\\faces")),
+            Some(Path::new("C:\\digup-config\\faces-consent.json")),
         );
         let joined = args.join("|");
         assert_eq!(args.first().unwrap(), "search-service");
@@ -375,6 +402,13 @@ mod search_launch_tests {
             joined.contains("--code-exclude|D:\\code\\vendor"),
             "{joined}"
         );
+        // Round twelve: the faces home and consent record ride the saved argv too —
+        // a helper reborn from disk keeps the People-scoped search answering.
+        assert!(joined.contains("--faces-dir|C:\\digup-config\\faces"), "{joined}");
+        assert!(
+            joined.contains("--faces-consent|C:\\digup-config\\faces-consent.json"),
+            "{joined}"
+        );
         assert_eq!(args[args.len() - 2..], ["C:\\Initial", "E:\\AddedExternal"]);
     }
 
@@ -384,7 +418,7 @@ mod search_launch_tests {
             folders: vec!["/home/me/Pictures".into()],
             ..Settings::default()
         };
-        let args = search_arguments(None, &s, &[], &s.folders);
+        let args = search_arguments(None, &s, &[], &s.folders, None, None);
         assert_eq!(args, ["search-service", "/home/me/Pictures"]);
     }
 }
@@ -552,6 +586,7 @@ fn apply_setup_folders(
 /// shortcut on GNOME, and its window comes up.
 #[tauri::command]
 fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), String> {
+    *shell.app.lock().unwrap() = Some(app.clone());
     let first = !shell.is_set_up();
     if first {
         let mut settings = shell.settings.lock().unwrap();
@@ -1038,6 +1073,7 @@ fn main() {
             faces_name,
             faces_merge,
             faces_delete,
+            faces_unload,
             faces_confirm,
             faces_download,
             faces_paths
@@ -1090,7 +1126,15 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
             .map(|root| root.display().to_string())
             .collect()
     };
-    let search_args = search_arguments(options.index.as_deref(), &settings, &code_folders, &roots);
+    let (faces_dir, faces_consent) = faces_scope(&settings_path);
+    let search_args = search_arguments(
+        options.index.as_deref(),
+        &settings,
+        &code_folders,
+        &roots,
+        Some(&faces_dir),
+        Some(&faces_consent),
+    );
     let search = SearchService::new(
         Launch {
             program: options.helper.clone(),
@@ -1127,10 +1171,22 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     for root in &options.roots {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
+    // The cover cards (round eleven, 2026-11-27): the People grid reads the pre-rendered
+    // cards — files in the FACES home (`<config>/faces/<home>/covers/<id>.jpg`), which is
+    // no crawl root, so no folder grant ever reached it: an unscoped asset URL answers 403
+    // and the cards never painted (measured on the live store: 8,779 cards, an empty grid).
+    // The faces home is consent-scoped data — the People panel that reads it is behind the
+    // consent wall — so the grant is the whole faces home and nothing wider (the index and
+    // the media roots are scoped by their own rules above).
+    {
+        let (faces_dir, _faces_consent) = faces_scope(&settings_path);
+        let _ = app.asset_protocol_scope().allow_directory(&faces_dir, true);
+    }
     let shell = Arc::new(Shell {
         options,
         settings: Mutex::new(settings),
         settings_path,
+        app: Mutex::new(None),
         shortcut: hotkey::method(),
         wayland: wayland::active(),
         panel_label: Mutex::new(PANEL),
@@ -1281,11 +1337,14 @@ fn apply_folders(app: &AppHandle) {
     // rewrite of our own entry (the rest of the person's file is left where it is).
     let settings = shell.settings.lock().unwrap().clone();
     if settings.mcp_claude {
+        let (faces_dir, faces_consent) = faces_scope(&shell.settings_path);
         let args = search_arguments(
             shell.options.index.as_deref(),
             &settings,
             &shell.code_folders(),
             &folders,
+            Some(&faces_dir),
+            Some(&faces_consent),
         );
         if let Some(path) = mcp::config_file() {
             let _ = mcp::enable(&path, &shell.options.helper, &args);
@@ -1300,11 +1359,14 @@ fn apply_folders(app: &AppHandle) {
 fn send_folders_request(shell: &Arc<Shell>) {
     let (roots, code) = (shell.folders(), shell.code_folders());
     let settings = shell.settings.lock().unwrap().clone();
+    let (faces_dir, faces_consent) = faces_scope(&shell.settings_path);
     shell.search.set_launch_args(search_arguments(
         shell.options.index.as_deref(),
         &settings,
         &code,
         &roots,
+        Some(&faces_dir),
+        Some(&faces_consent),
     ));
     let request = folders_request(shell);
     let search = shell.clone();
@@ -2045,11 +2107,14 @@ fn turn_off_code(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Str
     // not reopen the code index the person just turned off (#170's mechanism, same staleness).
     let (roots, code) = (shell.folders(), shell.code_folders());
     let settings = shell.settings.lock().unwrap().clone();
+    let (faces_dir, faces_consent) = faces_scope(&shell.settings_path);
     shell.search.set_launch_args(search_arguments(
         shell.options.index.as_deref(),
         &settings,
         &code,
         &roots,
+        Some(&faces_dir),
+        Some(&faces_consent),
     ));
     let request = folders_request(&shell);
     tauri::async_runtime::spawn(async move {
@@ -2297,11 +2362,14 @@ fn set_include_datasets(
 #[tauri::command]
 fn set_mcp_claude(shell: State<'_, Arc<Shell>>, on: bool) -> Result<(), String> {
     let settings = shell.settings.lock().unwrap().clone();
+    let (faces_dir, faces_consent) = faces_scope(&shell.settings_path);
     let args = search_arguments(
         shell.options.index.as_deref(),
         &settings,
         &shell.code_folders(),
         &shell.folders(),
+        Some(&faces_dir),
+        Some(&faces_consent),
     );
     let path = mcp::config_file().ok_or("this computer names no user settings folder")?;
     if on {
@@ -2517,6 +2585,14 @@ async fn faces_delete(shell: State<'_, Arc<Shell>>, person: i64) -> Result<Value
         faces_fields(&[("person", &json!(person))]),
     )
     .await
+}
+
+/// The bulk dissolve over the unnamed group (the user's law 2026-11-27): unnamed persons
+/// drop, their faces land in the review queue, the named people stay — the next scan
+/// clusters matching faces into the named clusters. The engine relays its own counts.
+#[tauri::command]
+async fn faces_unload(shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
+    faces_verb(shell.inner().clone(), "unload", faces_fields(&[])).await
 }
 
 #[tauri::command]

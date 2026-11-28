@@ -1,10 +1,12 @@
-// digup-search — the search box row (input + limit + code + names), the kind chips, and the
-// ONE search route: every change emits `digup:query-change` with the full filter set
-// (text, code, names, kinds, limit) and the search-controller runs it. The code prefix and
-// the box are one state (the controller writes store.isCode; updated() reflects it
-// into the box, as app.js did `$("code").checked = code`). Code and names are mutually
-// exclusive boxes: the engine reads one prefix per query ("code:" leads, `NameQuery` under it),
-// so ticking one clears the other. In-field keys mirror the desktop panel: ↑↓ pick results
+// digup-search — the search box row (input + limit + code), the kind chips, the People
+// dropdown, and the ONE search route: every change emits `digup:query-change` with the
+// full filter set (text, code, kinds, limit, person) and the search-controller runs it.
+// The code prefix and the box are one state (the controller writes store.isCode;
+// updated() reflects it into the box, as app.js did `$("code").checked = code`).
+// The search-bar law (2026-11-27, the user): the ONLY extra control right of the kind
+// chips is the People dropdown — the names box and the scope/extension selects are
+// retired from the bar (the typed prefixes stay: "code: …" and "name: …" ride the
+// field, the engine's own parsing; the verb fields they rode stay for CLI/API clients). In-field keys mirror the desktop panel: ↑↓ pick results
 // (digup:nav), ↩ opens the pick (digup:activate), Space previews only after navigation
 // (digup:preview). Markup and strings ride the vanilla index.html verbatim — test_media_ui
 // greps them from the bundle.
@@ -14,25 +16,16 @@ import { controlCss } from "../styles/controls.js";
 const KINDS = [["screenshot", "Screenshots"], ["image", "Images"], ["pdf", "PDFs"],
                ["doc", "Documents"], ["video", "Video"], ["audio", "Audio"]];
 
-/// A root folder's basename for the scope select ("…/photos" → "photos").
-const folderName = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
-
 class DigupSearch extends LitElement {
   static properties = {
     isCode: {},
-    isNames: {},
     navigated: {},
     hasSelection: {},
-    names: {},
-    roots: {},
-    extensions: {},
+    names: {},                                  // the store's NAMED people (the People dropdown)
     _code: { state: true },
-    _names: { state: true },
     _limit: { state: true },
     _kinds: { state: true },
     _person: { state: true },
-    _scope: { state: true },
-    _ext: { state: true },
   };
 
   static styles = [controlCss, css`
@@ -51,7 +44,7 @@ class DigupSearch extends LitElement {
         transform: translateY(-50%); }
     }
     #q:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-    #code-label, #names-label { display: inline-flex; align-items: center; gap: 0.35rem;
+    #code-label { display: inline-flex; align-items: center; gap: 0.35rem;
       font-size: 0.85rem; color: var(--soft); white-space: nowrap; }
     /* the kind chips: themed per kind, filled when ticked, evenly spaced under the search. */
     #find { display: flex; gap: 0.5rem; margin: 0.5rem 0 0.2rem; justify-content: center; flex-wrap: wrap; }
@@ -67,15 +60,15 @@ class DigupSearch extends LitElement {
     #find .kind[data-kind="audio"] { --kc: var(--kind-audio); }
     #find .kind[data-kind="pdf"], #find .kind[data-kind="doc"] { --kc: var(--kind-doc); }
     #kinds-all { padding: 0.1rem 0.6rem; font-size: 0.78rem; border-radius: var(--radius-pill); }
-    /* The People dropdown (round six, 2026-11-23): a chip-shaped select right of the kind
-       chips. Names ride the faces store's own list; picking one filters the shown rows. */
-    /* The dropdown selects (round six People, 2026-11-25 + Scope/extension): chip-shaped
-       selects right of the kind chips. The web UI keeps NATIVE selects — real browsers
-       open those (the shell's webview cannot, see shell/ui/window.css). */
-    #people-filter, #scope, #ext { padding: 0.28rem 0.6rem; font-size: 0.85rem;
+    /* The People dropdown (round twelve, 2026-11-27): the ONE control right of the kind
+       chips (the user's search-bar law — the scope/extension selects are retired).
+       Names ride the faces store's own list; picking one POOLS the search into that
+       person's photos (the verb's "person", the engine's in-pool z). The web UI keeps
+       a NATIVE select — real browsers open those (the shell's webview cannot). */
+    #people-filter { padding: 0.28rem 0.6rem; font-size: 0.85rem;
       border-radius: var(--radius-pill);
       border: 1px solid var(--edge); background: var(--panel); color: var(--text); max-width: 14rem; }
-    #people-filter:hover, #scope:hover, #ext:hover { border-color: var(--accent); }
+    #people-filter:hover { border-color: var(--accent); }
     /* the all button is a TOGGLE (round-7 brief): pressed state while all six are on */
     #kinds-all[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
     @media (max-width: 720px) {
@@ -89,34 +82,24 @@ class DigupSearch extends LitElement {
   constructor() {
     super();
     this._code = false;
-    this._names = false;
     this._limit = 40;
     this._kinds = new Set(KINDS.map(([k]) => k));   // all ticked = null = all kinds
-    this._person = null;                            // round six: null = everyone
-    this._scope = null;                             // #206/#132/#188: null = all folders
-    this._ext = null;                               // null = all types
+    this._person = null;                            // round twelve: null = everyone
     this._text = "";
     this.names = [];
-    this.roots = [];
-    this.extensions = [];
   }
 
   #emit() {
     this.dispatchEvent(new CustomEvent("digup:query-change", {
       bubbles: true, composed: true,
-      detail: { text: this._text, code: this._code, names: this._names,
+      detail: { text: this._text, code: this._code,
                 kinds: KINDS.filter(([k]) => this._kinds.has(k)).map(([k]) => k),
                 limit: this._limit,
-                // The People filter (round six, the user's design): a person id or null —
-                // the search stays pure, the SERVER answers which of its paths carry the
-                // person's face (faces store membership, relayed; z's untouched).
-                person: this._person,
-                // The scope keeps (#206/#132/#188, 2026-11-25): relayed to the verb fields —
-                // the engine narrows the scope INSIDE its roots and drops rows after the
-                // ranking (z's ride verbatim). A scope path the roots no longer carry is
-                // dropped: the server answers only for its roots, so it can only answer empty.
-                under: this._scope && (this.roots || []).includes(this._scope) ? [this._scope] : null,
-                ext: this._ext ? [this._ext] : null },
+                // The People search (round twelve, 2026-11-27, the user's pool law): a
+                // person id or null — the ENGINE pools the search into that person's
+                // photos (candidates are her photos, z computed in that pool). The UI
+                // invents nothing; the consent wall answers the faces 400 body.
+                person: this._person },
     }));
   }
 
@@ -141,7 +124,6 @@ class DigupSearch extends LitElement {
 
   updated(changed) {
     if (changed.has("isCode")) this._code = this.isCode;   // prefix and box are one state
-    if (changed.has("isNames")) this._names = this.isNames;
   }
 
   render() {
@@ -162,13 +144,7 @@ class DigupSearch extends LitElement {
           </select>
           <label id="code-label" title="Search code by what it does (the “code:” prefix does the same)">
             <input id="code" type="checkbox" .checked=${this._code}
-                   @change=${(e) => { this._code = e.target.checked; if (e.target.checked) this._names = false;
-                                      this.#emit(); }}> code
-          </label>
-          <label id="names-label" title="Search file and folder names only (the “name:” prefix does the same)">
-            <input id="names" type="checkbox" .checked=${this._names}
-                   @change=${(e) => { this._names = e.target.checked; if (e.target.checked) this._code = false;
-                                      this.#emit(); }}> names
+                   @change=${(e) => { this._code = e.target.checked; this.#emit(); }}> code
           </label>
         </div>
       </section>
@@ -180,25 +156,12 @@ class DigupSearch extends LitElement {
                    @change=${(e) => { e.target.checked ? this._kinds.add(kind) : this._kinds.delete(kind);
                                       this._kinds = new Set(this._kinds); this.#emit(); }}> ${label}</label>`)}
         ${this.isCode || !(this.names || []).length ? nothing : html`
-          <select id="people-filter" title="Show only the photos with this person's face"
-                  aria-label="Filter by person" .value=${this._person ? String(this._person) : ""}
+          <select id="people-filter" title="Search this person's photos (the search re-runs among their photos only)"
+                  aria-label="Search by person" .value=${this._person ? String(this._person) : ""}
                   @change=${(e) => { this._person = Number(e.target.value) || null; this.#emit(); }}>
             <option value="">People: everyone</option>
             ${this.names.filter((n) => n.name).map((n) => html`
               <option value=${String(n.id)}>${`${n.name} (${n.count.toLocaleString()})`}</option>`)}
-          </select>`}
-        ${this.isCode || !(this.roots || []).length ? nothing : html`
-          <select id="scope" title="Search only inside a folder — the scope narrows, it never widens"
-                  aria-label="Search scope" .value=${(this.roots || []).includes(this._scope) ? this._scope : ""}
-                  @change=${(e) => { this._scope = e.target.value || null; this.#emit(); }}>
-            <option value="">All folders</option>
-            ${this.roots.map((root) => html`<option value=${root}>${folderName(root)}</option>`)}`}
-        ${this.isCode || !(this.extensions || []).length ? nothing : html`
-          <select id="ext" title="Search only files of these types (the engine keeps its ranked rows verbatim)"
-                  aria-label="File type" .value=${this._ext ?? ""}
-                  @change=${(e) => { this._ext = e.target.value || null; this.#emit(); }}>
-            <option value="">All types</option>
-            ${this.extensions.map((x) => html`<option value=${x}>.${x}</option>`)}
           </select>`}
         <button id="kinds-all" type="button" aria-pressed=${String(this._kinds.size === KINDS.length)}
                 title=${this._kinds.size === KINDS.length

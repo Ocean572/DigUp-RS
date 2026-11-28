@@ -21,7 +21,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::helper::Launch;
 use crate::Shell;
@@ -244,12 +244,20 @@ pub fn faces_arguments(
     consent: &Path,
     record: &ConsentRecord,
     models: Option<&Path>,
+    faces_dir: &Path,
     skipped: &[String],
 ) -> Vec<String> {
     let mut args = vec!["faces-service".to_string()];
     if let Some(index) = index {
         args.extend(["--index".to_string(), index.display().to_string()]);
     }
+    // The #195 privacy move: the faces ride the device-side faces home (the app's
+    // config folder), never the index folder — a portable `.digup` in a carried
+    // folder carries its index, never its faces.
+    args.extend([
+        "--faces-dir".to_string(),
+        faces_dir.join("faces").display().to_string(),
+    ]);
     args.extend([
         "--faces-consent".to_string(),
         consent.display().to_string(),
@@ -298,7 +306,13 @@ pub fn run_faces(
     let ready_by = Instant::now() + Duration::from_secs(60).min(timeout);
     loop {
         match rx.recv_timeout(ready_by.saturating_duration_since(Instant::now())) {
-            Ok(message) if message["event"] == "ready" => break,
+            Ok(message) if message["event"] == "ready" => {
+                // The home rides the ready line (round eleven): the caller scopes its
+                // asset reader to the cover folder — the shell keeps no private copy
+                // of the engine's home law.
+                on_event(message);
+                break;
+            }
             Ok(message) => on_event(message),
             Err(RecvTimeoutError::Timeout) => {
                 let _ = child.kill();
@@ -365,13 +379,33 @@ pub fn engine_answer(mut row: Value) -> Value {
 
 /// One faces verb: the launch built from this install's index, consent and packs, the reply relayed
 /// with its protocol fields stripped. Reads and mutations never take the writer lock (the server's
-/// rule — only the scan writes); events go nowhere for them (no stream asks on these verbs).
+/// rule — only the scan writes); the `ready` line scopes the cover reader (round eleven).
 pub fn verb(shell: &Shell, op: &str, fields: Map<String, Value>) -> Result<Value, String> {
     let (_consent, record) = consent_guard(shell)?;
     let launch = faces_launch(shell, &record, op)?;
     let timeout = verb_timeout(op);
-    let reply = run_faces(launch, &record, op, fields, timeout, &mut |_| {})?;
+    let reply = run_faces(launch, &record, op, fields, timeout, &mut |event| {
+        if let Some(app) = shell.app.lock().unwrap().clone() {
+            scope_faces(&app, &event);
+        }
+    })?;
     Ok(engine_answer(reply))
+}
+
+/// The asset reader's faces scope (round eleven): the cover cards are files beside
+/// `face.sqlite` inside the device-side home — the daemon's `ready` names that home,
+/// and only its `covers` folder is opened to the webview. The store itself never
+/// enters the asset scope; the panel reads the same rows it always read.
+pub fn scope_faces(app: &tauri::AppHandle, event: &Value) {
+    if event["event"] != "ready" {
+        return;
+    }
+    let Some(faces) = event.get("faces").and_then(Value::as_str) else {
+        return;
+    };
+    let _ = app
+        .asset_protocol_scope()
+        .allow_directory(Path::new(faces).join("covers"), false);
 }
 
 /// The Launch for one verb: the helper binary and env every helper gets (`DIGUP_MODELS`, the chosen
@@ -389,6 +423,10 @@ pub fn faces_launch(shell: &Shell, record: &ConsentRecord, op: &str) -> Result<L
         &consent,
         record,
         models_folder(shell).as_deref(),
+        shell
+            .settings_path
+            .parent()
+            .ok_or("faces: no config folder")?,
         &skipped,
     );
     let mut launch = shell.launch(args, "faces.log");
@@ -487,6 +525,7 @@ pub fn scan(app: &tauri::AppHandle, shell: &Shell, limit: Option<i64>) -> Result
     let timeout = verb_timeout("scan");
     let reply = run_faces(launch, &record, "scan", fields, timeout, &mut |event| {
         let _ = app.emit("faces", json!({"from": "faces-service", "event": event}));
+        scope_faces(app, &event);
     })?;
     Ok(json!({"ok": true, "scan": engine_answer(reply)}))
 }
@@ -512,11 +551,16 @@ mod faces_port_tests {
             Path::new("/home/me/.config/DigUp/faces-consent.json"),
             &record(),
             Some(Path::new("/home/me/digup-models")),
+            Path::new("/home/me/.config/DigUp"),
             &["/home/me/photos/appdata_secret".to_string()],
         );
         let joined = args.join("|");
         assert_eq!(args.first().unwrap(), "faces-service");
         assert!(joined.contains("--index|/home/me/digup-index"), "{joined}");
+        assert!(
+            joined.contains("--faces-dir|/home/me/.config/DigUp/faces"),
+            "the #195 privacy move: faces ride the device config folder: {joined}"
+        );
         assert!(
             joined.contains("--faces-consent|/home/me/.config/DigUp/faces-consent.json"),
             "{joined}"
@@ -543,6 +587,7 @@ mod faces_port_tests {
             Path::new("/cfg/faces-consent.json"),
             &record(),
             None,
+            Path::new("/cfg"),
             &[],
         );
         assert_eq!(args.first().unwrap(), "faces-service");
@@ -550,6 +595,7 @@ mod faces_port_tests {
             .iter()
             .any(|a| a == "--index" || a == "--faces-models" || a == "--exclude"));
         assert!(args.iter().any(|a| a == "--faces-consent"));
+        assert!(args.iter().any(|a| a == "--faces-dir"));
     }
 
     /// A record that parses but is not the server's shape reads as absent — a malformed record is

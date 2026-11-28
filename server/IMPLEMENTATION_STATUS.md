@@ -4996,3 +4996,164 @@ for multi-line globs — flatten before the flat scan), feeds-onto-main `TAG` en
 `set -eu` (`92402e8`), macOS sign at repo root with env key no-flags + `--app-version`
 binding (the conf's `requireSignedVersion` is true; a versionless sig is rejected by the
 updater) + hdiutil Resource-busy retry (`031b355`, `0b16515`).
+## 2026-11-27 — round ten (feature/index-portability, unpushed): schema v7 portable index + faces privacy move + the gated walk (#195/#110)
+
+Branch `feature/index-portability`, commits `a1ac54b … d309a20` on main tip `acea65e`. Unpushed;
+push/merge is user-driven. Everything below is measured on `ai-ubuntu-computer` (x86_64,
+Ryzen 9 7950X, driver 580.178.04; GPU facts elided).
+
+**Schema v7 (the portable store).** `anchors(id, abs UNIQUE, real)`; `files.anchor REFERENCES
+anchors`, `files.path` RELATIVE with `UNIQUE(anchor, path)`; bucket `"<anchor id>/<bucket of
+rel>"` — a distinct byte string per (anchor, folder), so the counters, the segcounters, and all
+eight triggers ride v6 VERBATIM. Every answer assembles `abs + '/' + rel` at the row edge; a v6
+store opens for a verbatim read with writes refused, and the FIRST write verb migrates
+(`write_guard → migrate_portable`), answering `MigrationReport{rows, migrated, pruned, anchors,
+rewritten}` for the relay to carry verbatim. Migration follows the spec law: anchors from the
+stored rows' bucket clusters, argv roots VALIDATE them (exact / inside / contains), a tail run
+matching exactly one root is the remount REWRITE (anchor rebases, name rows re-tokenize through
+`move_file`), an unvalidated/ambiguous cluster is PRUNED with its count, and the
+UNIQUE(anchor,path) pre-check rides the read-only plan so a collision refuses BEFORE any write
+(store stays verbatim v6, marker stands, re-runs refuse identically). Pins: portable 21/21
+(cluster/remount/prune/collision/multi-root), storage 14/14, twin gate 2/2.
+
+**Faces privacy move.** The faces' file lives at the device home `--faces-dir/<anchor-hash>/
+face.sqlite` (env `DIGUP_FACES_DIR`, default `$XDG_DATA_HOME/digup/faces`; the server passes
+`<DIGUP_SERVER_CONFIG>/faces`, the shell `<app config>/faces` — Windows/macOS ride the same
+code). The home is keyed by the store's identity: 16 hex of sha256 over the anchor spellings in
+id order (v6/anchorless → the index path); measured byte-identical between the Rust daemon and
+the python pin (56c009533657af07 / 20e5cb62a1afa2b6). A legacy `face.sqlite` beside index.sqlite
+moves on first open, sidecars with it, never destructive. An in-tree `.digup` carries index +
+previews, never faces; the crawler's hidden-entry law keeps it invisible to walks. Pins:
+services `faces_move` 3/3 (required-features), the server faces module's home-path asserts.
+
+**The gated walk (#110).** Measured first (Phase-M, bench HDD): full walk 1262.53 s / 1.7 M
+files (`digup estimate`, RC=0); row-stat proxy 7.51 s / 131,973 rows warm (≈102 s extrapolated
+to 1.8 M) → the gate ships. Inside the engine sync (verbs unchanged): prefilter `dir_facts`
+(readdir + stat per folder, the walk's own descent law), the rule walk enters only folders whose
+(mtime, entries) pair moved ∪ never-seen ∪ their ancestors ∪ roots, and the row-check stats the
+stored paths under skipped folders — the content-edit-in-place edge (file mtime moves, parent
+dir mtime does NOT) is caught there. A delete masked by a dir-mtime restore (`utimes`) is caught
+by the row-check; a file added inside an unchanged pair enters at the next FULL crawl (the
+gate's stated limitation, pinned). `dirs(anchor, rel, mtime, entries)` rides v7; the rules
+fingerprint lives in meta `dirs_rules` (mismatch = full sync + refill). Pins: gated_sync 6/6 —
+steady-state candidates = the root's own files ONLY with unchanged == total, rename moved == 1,
+deep add through closed ancestors, rules change forces the full crawl.
+
+**Container contract suite (checkpoint gates, `digup-server-test:local`, target
+`server-test-rust`).`** Run 1: 12 failed / 163 passed / 0 skipped (291.07 s) — two root causes,
+both environmental laws re-measured: (1) the CLI parses a valued flag ONLY if it rides the
+VALUED list — `--faces-dir` was silently ignored (fixed, `912691a`); (2) the suite's cached
+index sat over a corpus whose mtimes moved at the worktree checkout → all 15 rows requeued
+(the requeue parent-anchors: counters re-keyed to parent buckets `1/..3/`), the suite's clock
+embedded 8, `searchable 8 < files 15`, hits degraded — the 2026-11-22 staleness law; cure =
+wipe `/index` from INSIDE the container (uid-990 files) and let conftest refill fresh. Run 2
+with the fixes: 175 passed / 1 failed / 0 skipped (296.50 s) — the 1 failure was my own new
+pin asserting absolute paths on the relative v7 column (fixed, `d309a20`: store layer relative,
+assembled layer absolute). **Run 3 (full suite, fixed module riding the repo bind-mount):
+`176 passed, 0 failed, 0 skipped, 1 deselected` in 273.99 s, RC=0 — the contract gate is
+GREEN on this branch.** The v6→v7 migration on real bytes rode green in run 1 (the Nov-19 v6
+store: cluster anchors, counters re-key, parent-anchor requeue); post-migration store kept as a
+local backup (local-only, gitignored).
+
+**Gates on the branch tip:** fmt clean; clippy `--workspace --all-targets -D warnings` 0;
+workspace 46 suites ok / 0 failed (twin 2/2, 370.75 s); faces-feature gates plain + faces 0.
+Bench gated-vs-full seconds on the 1.8 M tree, app rebuild/relaunch: S7, next.
+
+## 2026-11-27 — round ten tail: S7 bench, GPU gates, app chain, the faces-home key fix, and the `unload` verb (branch `feature/index-portability`)
+
+**S7 bench (the HDD pilot tree, debug CLI, CPU).** Cold walk baseline (full sync over the
+1.8 M tree) **1262.53 s**; full fresh sync of the scoped roots **131,972 new files in
+53.49 s** warm; the gated walk (#110) steady-state **7.93 s** answering all 131,972 rows
+(dirs 3,973, anchors 1); deep add **8.43 s** → 1 new; remove **8.45 s** → 1 removed.
+
+**GPU gates (Stage 9 shape, the Pascal card).** Gate A green: suite **176 / 0 / 0**, CPU
+stack healthy, graceful lifespan exit 143 + `Application shutdown complete`. Gate B green
+RC=0: `device: gpu`, agreement **0.9997194609668691**, GPU picture 0.1896 s vs CPU
+0.6215 s, utilization peak 100 % / busy 100 % of 85 samples / model on card 85/85.
+Three gate-script repairs rode in (`9868c0f`, `c28d85d`, `df0159c`): the model pins read
+`models.rs`, the compose legs run under their own project (`COMPOSE_PROJECT_NAME=digup-gate`
+— it had recreated the live pilot container before the isolation; restored byte-exact from
+`docker inspect`, healthy, 3 hits on the pinned query, top z 5.909), and the CUDA leg asks
+the payload stage's Rust-era name.
+
+**The faces home keys the index PATH (`04672c5`).** The privacy move keyed the device-side
+home by the store's anchor set — measured on the live store (173,225 rows): the v6→v7
+migration creates one anchor per row cluster (dozens) and every roots change adds anchors,
+so an anchor-keyed home MOVES under the running app (the People tab would empty and
+re-scan). The key is now `sha256(index path)[:16]` — stable across migration and roots
+changes; the pins rewritten 3/3 + the server pin mirrors it. Migration-order law: migrate
+the store BEFORE the first faces-daemon open (the live store migrated 173,225 rows in
+**43.40 s**, `user_version 7`, backup kept local).
+
+**App chain (the faces UI law: evaluated on the Linux desktop app).** `scripts/package-linux.sh`
+(the bundler that declares the helper as a resource; `scripts/rust/package-linux.sh --shell`
+builds engine-less bundles — recorded in the script header): PKG3 RC=0 553.5 s, deb 1.28 GiB
++ AppImage 746.21 MiB carrying `usr/lib/DigUp/helper/{digup,ffmpeg,ffprobe}` + the CUDA
+seams (`libggml-cuda.so`, cublas/cublasLt/cudart/nvrtc/nvrtc-builtins/nccl, 11.8). Extract →
+kill old instance → relaunch via the canonical GPU-pin script. The bundle's own binary
+answers the live store on the app's surfaces: `ok:true · faces 195,604 · persons 8,837 ·
+assigned 150,196 · named 36` (adaface tier; the embedder-switch guard fires — the store's
+tier is enforced, not assumed).
+
+**`unload` — the bulk dissolve of the unnamed group (c553d91, both frontends).** The user's
+law: named clusters are the anchors — unload the unnamed people and the next scan
+re-clusters every face onto the names. Engine verb `unload` = the `delete-person` law
+verbatim over the unnamed group (faces requeue as evidence, no photo touched), the reply
+relays the engine's own counts; `POST /api/v1/faces/unload` (admin wall, consent guard);
+the shell's `faces_unload` command + the People panel's "Unload unnamed" button with its
+confirm; the server UI carries the same button (controller + panel + vitest pins).
+Gates: workspace suite **46 suites / 306 passed / 0 failed** RC=0; contract suite
+**178 / 0 / 0** (251.32 s); vitest 90/90; faces feature 3/3 + 3/3; clippy plain + faces 0;
+the store gate's unload pin 13/13 (named members stand, unnamed requeue, re-cluster joins
+the named centroid, idempotent). PKG4 RC=0 rebuilt the bundles with the button.
+**Live unload on the app store (the bundle's binary, 5.7 s):** reply
+`{"ok":true,"persons":8800,"faces":87896}` → persons 8,836 → **36** (all named), assigned
+150,196 → 62,300, review queue 45,408 → **133,304**, faces **195,604 unchanged** — every
+count reconciles; full store backup taken first (local, gitignored).
+
+## Round eleven + twelve (2026-11-27 night): cover cards, the person-POOLED search, the bar law
+
+**Cover cards (round eleven).** The People grid's cards are engine files stored INSIDE the
+faces home (`<config>/faces/<home>/covers/<id>.jpg`, beside `face.sqlite`): the scan fills
+them as a byproduct at the cluster tail (the photos it decodes are the decodes it pays for
+detection), and `unload`/`delete`/`merge`/`confirm` sweep the card files with the rows they
+dissolve — the cache follows the store, no reset is ever needed, the first Scan press fills
+a store that has no cards. The persons relay carries `cover_render`; the server mints
+`cover_media` like every media row; `/media/{id}/file` serves a card with **zero render** via
+the narrow faces-cover exception — exactly three path segments under `<config>/faces`, middle
+segment `covers`: faces data rides the consent wall (only the persons relay mints a card
+handle, behind the consent guard), never the roots wall, and the store file beside the cards
+is never servable.
+
+**The person-POOLED search (round twelve, the user's crowding fix).** The verb gains `person`
+(int ≥ 1): the face store's photo paths POOL the search inside the engine — the pool's files
+are the candidates AND the z-statistics (modality means, pool mean, deviation) compute over
+the pool's rows only. Measured on the pinned fixture (her 6 photos + a 4-photo crowd scoring
+higher than her best): the global answer is EMPTY (she is crowded out), `under:`-scope is
+EMPTY (the pinned #178 shape keeps whole-field z — a keep-filter, not a pool; the two fields
+are proven different on one store), the pool answers her standout at z = 2.225 ≥ 2.0σ. The
+keyword leg rides the same join (`AND s.file IN (...)`), coverage restricted; the empty pool
+answers no hits, like an empty scope. `search-service` takes `--faces-dir`/`--faces-consent`
+(the faces daemon's spellings), re-reads the consent record on EVERY People-scoped request
+(grants take effect without a daemon restart), and opens the store through the engine's new
+READ-ONLY window (`db::open_read_only` — a WAL reader, the faces writer never blocks); all
+walls gate engine-side, and the GUI wall rides unchanged (no consent → the 400 faces body
+before any daemon call; `code` + `person` → the daemon's refusal relayed). Round six's
+post-filter is retired: the engine's pool IS the filter.
+`keyword_rank` rides as the engine's per-answer position (the pool re-ranks its restricted
+list; the bm25 order is proven preserved).
+
+**The bar law (the user, 2026-11-27).** The names toggle and the Anywhere scope dropdown are
+OFF both search bars — the only extra control right of the kind chips is the **People**
+dropdown, which sends `person`. Typed `name:`/`code:` prefixes stay in the field; the verb
+fields the retired controls rode (`name_only`, `under`, `ext`) stay published for CLI/API
+clients (pinned server-side). The bundle pins now REJECT the retired ids.
+
+**Gates.** Workspace suite RC=0, 46 suites, 697 s (core pool pin + the vector laws green);
+services faces lib 23/23 (the daemon `person_scope` pin: pool join, empty pool, all four
+walls, consent revoke/restore); face-store gate 13/13 (covers fill + sweeps); contract suite
+**180 passed / 0 failed / 0 skipped** (252.54 s — the pool-law pin, covers pins, MCP parity
+strip of the per-answer `cover_media`, bar-law bundle pins); vitest 84/84; vite build;
+clippy plain + faces 0; fmt clean; shell cargo check + argv pins 2/2 (the faces flags ride
+the saved argv into every restart). API.md: the `person`/`under`/`ext` rows with the pool
+semantics, the cover-card law, the unload sweep, the bar law.

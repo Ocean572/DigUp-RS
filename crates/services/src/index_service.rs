@@ -755,10 +755,21 @@ fn sync_part(
             } else {
                 scope.to_vec()
             };
-            part(state, code)
-                .indexer
-                .sync_scoped(&roots, &walk, &mut progress)
-                .map_err(|e| e.to_string())
+            // #110: a full sync (no watcher scope) rides the gate — the prefilter +
+            // gated walk + row-check, the snapshot law inside. A watcher burst (a
+            // non-empty scope) is ALREADY folder-limited: the scoped sync is its own
+            // cheap path, unchanged.
+            if scope.is_empty() {
+                part(state, code)
+                    .indexer
+                    .sync_gated(&roots, &mut progress)
+                    .map_err(|e| e.to_string())
+            } else {
+                part(state, code)
+                    .indexer
+                    .sync_scoped(&roots, &walk, &mut progress)
+                    .map_err(|e| e.to_string())
+            }
         }
         Err(error) => Err(error),
     };

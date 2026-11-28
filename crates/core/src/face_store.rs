@@ -256,6 +256,15 @@ impl FaceStore {
 
     // MARK: meta (model stamps, consent stamps)
 
+    /// The pre-rendered cover cards live INSIDE the faces home, beside
+    /// `face.sqlite` (the consent-scoped device-side folder — the covers are
+    /// faces too, they follow every privacy law the store follows). Names are
+    /// the person id: the fill at the end of a scan creates what is missing,
+    /// `delete`/`unload` remove what they dissolve.
+    pub fn cover_file(&self, person: i64) -> PathBuf {
+        self.directory.join("covers").join(format!("{person}.jpg"))
+    }
+
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
         let mut out = None;
         self.db.query(
@@ -737,6 +746,44 @@ impl FaceStore {
             )?;
             self.db
                 .run("DELETE FROM persons WHERE id = ?1", [Sql::Int(id)])
+        })
+    }
+
+    /// `unload-unnamed`: the bulk shape of `delete-person` over the whole
+    /// unnamed group (the user's law 2026-11-27, the app's "Unload unnamed"
+    /// button): unnamed persons are gone, their faces return to the pending
+    /// queue — the same evidence law, one statement per layer. Named persons
+    /// are never touched, so the next clustering pass assigns the freed faces
+    /// to the NAMED centroids first. Returns (persons dropped, faces queued);
+    /// an empty store is a no-op (0, 0), so the verb is idempotent.
+    pub fn unload_unnamed(&self) -> Result<(usize, usize)> {
+        self.db.transaction(|| {
+            let mut counts = (0i64, 0i64);
+            self.db.query(
+                "SELECT (SELECT COUNT(*) FROM persons WHERE name IS NULL),
+                        (SELECT COUNT(*) FROM faces
+                         WHERE person IN (SELECT id FROM persons WHERE name IS NULL))",
+                [],
+                |r| {
+                    counts.0 = r.int(0);
+                    counts.1 = r.int(1);
+                    Ok(())
+                },
+            )?;
+            let (persons, faces) = counts;
+            self.db.run(
+                "INSERT INTO pending(face, ts)
+                 SELECT id, ?1 FROM faces
+                 WHERE person IN (SELECT id FROM persons WHERE name IS NULL)",
+                [Sql::Double(now())],
+            )?;
+            self.db.run(
+                "UPDATE faces SET person = NULL
+                 WHERE person IN (SELECT id FROM persons WHERE name IS NULL)",
+                [],
+            )?;
+            self.db.run("DELETE FROM persons WHERE name IS NULL", [])?;
+            Ok((persons as usize, faces as usize))
         })
     }
 

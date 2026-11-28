@@ -25,9 +25,15 @@ export function cropGeometry(row) {
   return { cw, ch, cx0, cy0, W };
 }
 
-/* The face crop: a cw/ch window over the enlarged photo (see header). */
-export const faceCrop = (row, pixels = 512) => {
-  const src = `/api/v1/media/${row.media_id}/preview?pixels=${pixels}`;
+/* The face crop: a cw/ch window over the enlarged photo (see header).
+   The pre-rendered cover card (round eleven): with `cover_media` (the server's
+   minted handle for the scan's pre-rendered card file) the crop reads that file
+   whole — `/media/{id}/file`, no render. Without it the `/preview` seam answers,
+   as it always did. */
+export const faceCrop = (row, pixels = 512, coverMedia) => {
+  const src = coverMedia
+    ? `/api/v1/media/${coverMedia}/file`
+    : `/api/v1/media/${row.media_id}/preview?pixels=${pixels}`;
   const g = cropGeometry(row);
   if (!g) return html`<img class="plain" src=${src} alt=${""} loading="lazy">`;
   const { cw, ch, cx0, cy0, W } = g;

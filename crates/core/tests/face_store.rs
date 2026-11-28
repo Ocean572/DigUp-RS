@@ -54,6 +54,12 @@ fn schema_lands_at_version_three_with_the_faces_layout() {
         .expect("the scans table is there (schema 2)");
     s.db.query("SELECT width, height FROM faces", [], |_| Ok(()))
         .expect("the crop map is there (schema 3)");
+    // The cover cards (round eleven): the file for a person rides a `covers`
+    // folder INSIDE the faces home, named by the person id — beside
+    // face.sqlite, never beside the index.
+    let cover = s.cover_file(7);
+    assert!(cover.starts_with(s.directory.join("covers")));
+    assert!(cover.to_str().unwrap().ends_with("/7.jpg"));
 }
 
 #[test]
@@ -260,6 +266,69 @@ fn verbs_the_person_surface_needs_work_on_the_store() {
     let c = s.counts().unwrap();
     assert_eq!((c.faces, c.assigned, c.pending), (3, 3, 0));
     let _ = q;
+}
+
+#[test]
+fn unload_unnamed_drops_the_unnamed_group_and_requeues_their_faces() {
+    // The user's law (2026-11-27, the "Unload unnamed" button): the named people are
+    // the anchors — the unnamed clusters dissolve, their faces requeue (the same
+    // evidence law as `delete-person`), the named members are never touched.
+    let s = tmp_store("unload");
+    assert_eq!(
+        s.unload_unnamed().unwrap(),
+        (0, 0),
+        "an empty store is a no-op"
+    );
+    s.record_scan(
+        scan_of("/p/a.jpg"),
+        &[rec(1.0, 0.02), rec(1.0, -0.02), rec(0.9, 0.05)],
+        1.0,
+    )
+    .unwrap();
+    s.record_scan(scan_of("/p/b.jpg"), &[rec(0.0, 1.0), rec(0.02, 1.0)], 1.0)
+        .unwrap();
+    s.run_clustering(0.5, 0.10, 1, 100).unwrap();
+    // Name exactly one of the two clusters: the one carrying /p/a.jpg.
+    let named_id = s
+        .list_persons()
+        .unwrap()
+        .iter()
+        .find(|p| {
+            s.person_faces(p.id)
+                .unwrap()
+                .iter()
+                .any(|f| f.path == "/p/a.jpg")
+        })
+        .expect("a person carries the named faces")
+        .id;
+    s.name_person(named_id, "Dean", 2.0).unwrap();
+
+    let (persons_dropped, faces_queued) = s.unload_unnamed().unwrap();
+    assert_eq!((persons_dropped, faces_queued), (1, 2));
+    let c = s.counts().unwrap();
+    assert_eq!(
+        (c.faces, c.persons, c.named, c.assigned, c.pending),
+        (5, 1, 1, 3, 2),
+        "the unnamed person is gone, its faces are queued, the named members stand"
+    );
+    assert_eq!(s.person_faces(named_id).unwrap().len(), 3);
+
+    // Idempotent: nothing unnamed is left, so nothing moves.
+    assert_eq!(s.unload_unnamed().unwrap(), (0, 0));
+
+    // The requeued faces are clustering material again: the close ones join the
+    // named centroid, the far ones reform their own cluster (the engine's law,
+    // the counts relay it).
+    s.record_scan(scan_of("/p/c.jpg"), &[rec(1.0, 0.01)], 1.0)
+        .unwrap();
+    s.run_clustering(0.5, 0.10, 1, 100).unwrap();
+    let c = s.counts().unwrap();
+    assert_eq!(
+        (c.faces, c.assigned, c.pending),
+        (6, 6, 0),
+        "the queue is clustering material: close joins the name, far reforms its own cluster"
+    );
+    assert_eq!(s.person_faces(named_id).unwrap().len(), 4);
 }
 
 #[test]

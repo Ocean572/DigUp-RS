@@ -33,7 +33,7 @@ const People = {
   openId: null, facesFor: null,
   detail: null,                     // the person whose gallery fills the panel (round-six view)
   names: [],                        // the named people (autocomplete/merge targets, ?named=1 law)
-  withdrawing: false, deleting: null,
+  withdrawing: false, deleting: null, unloading: false,
   error: null,
 };
 
@@ -59,7 +59,11 @@ const faceRenders = new Map();
 /// The helper's own JPEG for a photo, as an asset URL (`ask op:"render"` → reply.image →
 /// convertFileSrc — the exact chain panel.js/window.js use; the previews folder is scoped by the
 /// search helper's `ready` event, main.rs).
-function renderedFace(path, pixels) {
+function renderedFace(path, pixels, preset) {
+  // The pre-rendered cover card (round eleven): when the scan has filled it, the
+  // card is a plain file read — no decode, no daemon call, no queue. Without it
+  // the render seam answers, as it always did.
+  if (preset) return Promise.resolve(fURL(preset));
   const key = `${path}|${pixels}`;
   if (!faceRenders.has(key)) {
     faceRenders.set(key, fAsk({ op: "render", path, kind: "image", loc: null, pixels }).then((reply) => fURL(reply.image)));
@@ -69,10 +73,10 @@ function renderedFace(path, pixels) {
 
 /// The face crop: a cw/ch window over the enlarged photo (the server's faceCrop law, DOM-built).
 /// 512 pixels (2026-11-23, the user's sharpness brief): the card crop is the face you judge.
-function faceCrop(row, pixels = 512) {
+function faceCrop(row, pixels = 512, preset) {
   const box = element("span", "crop");
   const geometry = cropGeometry(row);
-  renderedFace(row.path, pixels).then((url) => {
+  renderedFace(row.path, pixels, preset).then((url) => {
     const img = element("img");
     img.src = url;
     img.loading = "lazy";
@@ -513,10 +517,18 @@ function peopleConsentedView() {
   scanButton.title = "Scan the whole folder for faces — one long run; files already recorded are skipped, so the next press resumes";
   scanButton.disabled = People.scanning;
   scanButton.onclick = peopleScan;
+  // The user's law (2026-11-27): the named people are the anchors — the unnamed
+  // clusters are dissolved so the next scan re-clusters every face onto the names.
+  // The engine's own bulk delete; counts shown after the act are the engine's.
+  const named = c.named ?? 0;
+  const unnamed = Math.max(0, (c.persons ?? 0) - named);
+  const unload = element("button", "", "Unload unnamed");
+  unload.title = "Dissolve every unnamed person — their faces move to the review queue, the named people stay, no photo is deleted";
+  unload.onclick = () => { People.unloading = true; peopleRender(); };
   const withdraw = element("button", "", "Withdraw consent");
   withdraw.title = "Withdraw the acceptance — the People verbs close";
   withdraw.onclick = () => { People.withdrawing = true; peopleRender(); };
-  line.append(scanButton, withdraw);
+  line.append(scanButton, ...(unnamed > 0 ? [unload] : []), withdraw);
   const badges = element("span", "people-facts");
   badges.replaceChildren(
     peopleBadge(`${c.faces.toLocaleString()} faces`, c.faces > 0),
@@ -531,6 +543,11 @@ function peopleConsentedView() {
   if (People.withdrawing) view.append(peopleConfirm(
     "Withdraw face-recognition consent? The People verbs close; the face store stays on disk until you delete it.",
     "Withdraw", peopleWithdraw, () => { People.withdrawing = false; peopleRender(); }));
+  if (People.unloading) view.append(peopleConfirm(
+    `Unload all ${unnamed.toLocaleString()} unnamed people? Their faces move to the review queue, the ${named.toLocaleString()} named ${named === 1 ? "person stays" : "people stay"} — no photo is deleted. The next Scan re-clusters them onto the names.`,
+    "Unload unnamed",
+    () => { People.unloading = false; peopleVerb("faces_unload", {}, "unload"); },
+    () => { People.unloading = false; peopleRender(); }));
   if (People.error) view.append(element("p", "note problem", People.error));
   peopleProgressLine();
 
@@ -592,7 +609,7 @@ function peopleConfirm(text, label, go, cancel) {
 function peopleCard(person) {
   const card = element("div", "person-card");
   const expanded = People.facesFor && People.facesFor.person === person.id;
-  const crop = faceCrop(person.cover_face, 512);
+  const crop = faceCrop(person.cover_face, 512, person.cover_render);
   crop.setAttribute("role", "button");
   crop.setAttribute("tabindex", "0");
   crop.setAttribute("aria-expanded", String(Boolean(expanded)));

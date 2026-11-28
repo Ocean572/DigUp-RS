@@ -127,15 +127,18 @@ for (const view of ['panel', 'window']) {
   });
 }
 
-/* The scope chips (2026-11-25, #66 + #206/#132/#188): the chip state rides the daemon's
-   verb fields — the engine scopes and keeps, the UI invents no filter of its own. An
-   unset chip leaves the field UNDEFINED — JSON.stringify drops it, the verb a plain
-   search ever sent (byte-parity for every existing pin). */
-test('window: the Names + Scope chips ride the search verb fields', async () => {
+/* The bar law (2026-11-27, the user's search-bar cleanup): the Names chip (#66) and the
+   Anywhere scope panel (#206/#132/#188) are OFF the bar — the only extra control right of
+   the kind chips is the People dropdown, and its one verb field is `person`: the ENGINE
+   pools the search into that person's photos (candidates and z inside the pool). The
+   retired fields (name_only/under/ext) stay published for CLI/API clients — the UI never
+   sends them (the bundle pins reject the retired controls, test_media_ui). An unset
+   dropdown leaves the field UNDEFINED — JSON.stringify drops it, the verb a plain search
+   ever sent (byte-parity for every existing pin). */
+test('window: the People dropdown pools the search — the verb rides person', async () => {
   const f = field('window');
   f.call('FILTERS.push({ key: "images", title: "Images", kinds: ["image"], icon: "image" })');
-  f.call('state.info.folders = ["/photos/vienna"]');
-  f.call('setScope("/photos/vienna"); setExtension("mp4"); setNamesOnly(true); setFilter("images")');
+  f.call('state.people = [{ id: 7, name: "Vienna", count: 12 }]; setPerson(7); setFilter("images")');
   f.input('wakeboard');
   f.flush();
   f.requests.filter(r => r.op === 'search').at(-1).resolve({ hits: [], strong: 0, meaning: true });
@@ -143,12 +146,18 @@ test('window: the Names + Scope chips ride the search verb fields', async () => 
   const searches = f.requests.filter(r => r.op === 'search');
   assert.equal(searches.length, 2, 'the kind filter re-runs the search (the counts law)');
   for (const search of searches) {
-    assert.equal(search.name_only, true);
-    assert.deepEqual(JSON.parse(JSON.stringify(search.under)), ['/photos/vienna']);
-    assert.deepEqual(JSON.parse(JSON.stringify(search.ext)), ['mp4']);
+    assert.equal(search.person, 7, 'the pool rides every leg of the answer');
+    assert.equal(search.name_only, undefined, 'the retired Names chip never rides');
+    assert.equal(search.under, undefined, 'the retired scope panel never rides');
+    assert.equal(search.ext, undefined, 'the retired file-types list never rides');
   }
   assert.equal(searches[0].kinds, undefined);
   assert.deepEqual(JSON.parse(JSON.stringify(searches[1].kinds)), ['image']);
+  // "People: everyone" (the menu's null row) clears the field back to the plain verb.
+  f.call('setPerson(null)');
+  f.input('wakeboard');
+  f.flush();
+  assert.equal(f.requests.filter(r => r.op === 'search').at(-1).person, undefined);
 });
 
 test('window: an unscoped search stays the field-less verb (byte-parity)', () => {
@@ -161,23 +170,20 @@ test('window: an unscoped search stays the field-less verb (byte-parity)', () =>
   assert.equal(search.ext, undefined);
 });
 
-test('window: code mode drops names-only; a folder out of Settings drops out of scope', () => {
+test('window: code mode answers un-pooled; a picked person rides again on leaving code', () => {
   const f = field('window');
-  f.call('state.info.hasCode = true; state.info.folders = ["/photos/vienna"]');
-  f.call('setNamesOnly(true)');
-  f.call('setFilter("code")');   // entering code: the Names chip is a file search, it clears
-  f.call('setScope("/photos/vienna")');
+  f.call('state.info.hasCode = true; state.people = [{ id: 7, name: "Vienna", count: 12 }]');
+  f.call('setPerson(7)');
+  f.call('setFilter("code")');   // entering code: the pool is a file act, it leaves the verb
   f.flush();
   f.input('retry with backoff');
   f.flush();
   const code = f.requests.filter(r => r.op === 'search').at(-1);
   assert.equal(code.code, true);
-  assert.equal(code.name_only, undefined);
-  // The folder left the Settings' list (state.info.folders): run() clears the stale scope.
+  assert.equal(code.person, undefined);
+  // Leaving code: the person the human picked is still on the bar, and rides again.
   f.call('setFilter(null)');
-  f.call('state.info.folders = []');
   f.input('dog');
   f.flush();
-  const plain = f.requests.filter(r => r.op === 'search').at(-1);
-  assert.equal(plain.under, undefined);
+  assert.equal(f.requests.filter(r => r.op === 'search').at(-1).person, 7);
 });

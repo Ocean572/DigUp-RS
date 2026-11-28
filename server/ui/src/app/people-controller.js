@@ -147,6 +147,14 @@ export function createPeopleController({ api, store, confirm = (m) => window.con
     return verb("delete", { person }, "delete");
   }
 
+  /* The user's law (2026-11-27): the named people are the anchors — the unnamed clusters
+     are dissolved in one act so the next scan re-clusters every face onto the names.
+     The engine's own bulk delete; the panel relays, never invents. */
+  async function unloadUnnamed(unnamed) {
+    if (!confirm(`Unload all ${unnamed.toLocaleString()} unnamed people? Their faces move to the review queue, the named people stay — no photo is deleted. The next Scan re-clusters them onto the names.`)) return false;
+    return verb("unload", {}, "unload");
+  }
+
   /* A card's face grid: GET /faces/person/{id} as a PAINTED page (2026-11-23): the
      newest photos first (`order=photo` = the photos' own dates), 50 at a time; the
      panel keeps scrolling as the user scrolls (the minted preview handles ride the
@@ -207,7 +215,7 @@ export function createPeopleController({ api, store, confirm = (m) => window.con
     if (await loadStatus()) loadNames();
   })();
 
-  return { open, accept, withdraw, scanNow, namePerson, merge, deletePerson, confirmFace,
+  return { open, accept, withdraw, scanNow, namePerson, merge, deletePerson, unloadUnnamed, confirmFace,
            openPerson, closePerson, morePerson, loadNames, close,
            get scanToken() { return seq.scan; } };
 }

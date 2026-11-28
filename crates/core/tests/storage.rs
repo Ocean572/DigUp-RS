@@ -27,10 +27,11 @@ fn open_conn(store: &IndexStore) -> Connection {
 }
 
 #[test]
-fn fresh_open_is_v6_and_matches_the_engine_schema() {
+fn fresh_open_is_v7_and_matches_the_portable_schema() {
     let tmp = tempfile::tempdir().unwrap();
     let store = open(tmp.path(), digup_core::MAIN_FILE);
     assert_eq!(store.db.user_version().unwrap(), digup_core::SCHEMA_VERSION);
+    assert_eq!(store.mode(), digup_core::StoreMode::V7);
 
     let conn = open_conn(&store);
     let names: Vec<(String, String)> = conn
@@ -42,8 +43,15 @@ fn fresh_open_is_v6_and_matches_the_engine_schema() {
         .unwrap();
     let has = |t: &str, n: &str| names.iter().any(|(name, ty)| name == n && ty == t);
 
-    // Core tables + the v6 counters tables.
-    for t in ["meta", "files", "segments", "counters", "segcounters"] {
+    // Core tables + the v6 counters tables + the v7 anchors table (#195).
+    for t in [
+        "meta",
+        "files",
+        "segments",
+        "counters",
+        "segcounters",
+        "anchors",
+    ] {
         assert!(has("table", t), "missing table {t}");
     }
     assert!(has("table", "fts"), "missing FTS5 table fts");
@@ -70,8 +78,56 @@ fn fresh_open_is_v6_and_matches_the_engine_schema() {
     ] {
         assert!(has("index", i), "missing index {i}");
     }
+    // v7: the UNIQUE is (anchor, path) — the same relative name stands under two roots, and
+    // every anchor-prefixed range scan rides this index. Auto-indexes carry a NULL `sql`, so
+    // the pins ride the pragmas: `index_list` origin 'u' (a UNIQUE constraint) whose columns
+    // are (anchor, path).
+    let unique_columns = |conn: &rusqlite::Connection, table: &str| -> Vec<Vec<String>> {
+        let names: Vec<(String, i64, String)> = conn
+            .prepare(&format!("PRAGMA index_list('{table}')"))
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        names
+            .into_iter()
+            .filter(|(_, uniq, origin)| *uniq == 1 && origin == "u")
+            .map(|(name, _, _)| {
+                conn.prepare(&format!("PRAGMA index_info('{name}')"))
+                    .unwrap()
+                    .query_map([], |r| {
+                        let s = r.get::<_, String>(2)?;
+                        Ok(s)
+                    })
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap()
+            })
+            .collect()
+    };
+    let files_uniques = unique_columns(&conn, "files");
+    assert!(
+        files_uniques
+            .iter()
+            .any(|cols| cols.join(",") == "anchor,path"),
+        "files needs the UNIQUE(anchor, path) index; got {files_uniques:?}"
+    );
+    let anchor_uniques = unique_columns(&conn, "anchors");
+    assert!(
+        anchor_uniques.iter().any(|cols| cols.join(",") == "abs"),
+        "anchors(abs) is UNIQUE — ensure_anchor upserts on it; got {anchor_uniques:?}"
+    );
 
-    // Exactly the eight maintenance triggers (CounterTests pins "eight, not nine").
+    // Exactly the eight maintenance triggers (CounterTests pins "eight, not nine") — the v7
+    // table swap re-creates the same eight, on the new `files` (schema law: their SQL is
+    // shared with v6 verbatim).
     let triggers: Vec<String> = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name")
         .unwrap()
