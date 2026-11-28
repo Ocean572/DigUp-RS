@@ -1171,6 +1171,17 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     for root in &options.roots {
         let _ = app.asset_protocol_scope().allow_directory(root, true);
     }
+    // The cover cards (round eleven, 2026-11-27): the People grid reads the pre-rendered
+    // cards — files in the FACES home (`<config>/faces/<home>/covers/<id>.jpg`), which is
+    // no crawl root, so no folder grant ever reached it: an unscoped asset URL answers 403
+    // and the cards never painted (measured on the live store: 8,779 cards, an empty grid).
+    // The faces home is consent-scoped data — the People panel that reads it is behind the
+    // consent wall — so the grant is the whole faces home and nothing wider (the index and
+    // the media roots are scoped by their own rules above).
+    {
+        let (faces_dir, _faces_consent) = faces_scope(&settings_path);
+        let _ = app.asset_protocol_scope().allow_directory(&faces_dir, true);
+    }
     let shell = Arc::new(Shell {
         options,
         settings: Mutex::new(settings),
