@@ -45,6 +45,26 @@ class DeadServerError(RuntimeError):
     a dead server with no words is an hour of guessing)."""
 
 
+class _LiveClient(httpx.Client):
+    """The plain client with the same lesson baked in for MID-RUN deaths: a connection
+    the server closes without an answer (`Server disconnected without sending a
+    response`) is the server process dying between requests, and on a runner that
+    traceback names nothing. The server's own log tail rides the exception, in the
+    SAME exception type the suite's transports raise (a pin that expects a transport
+    error keeps its type; every HTTP answer — 200/401/403/503 — rides untouched)."""
+
+    def __init__(self, *args, tail_fn=None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._tail_fn = tail_fn
+
+    def send(self, request, **kwargs):
+        try:
+            return super().send(request, **kwargs)
+        except (httpx.RemoteProtocolError, httpx.ConnectError) as exc:
+            tail = self._tail_fn() if self._tail_fn is not None else "(no log)"
+            raise type(exc)(f"{exc}\nserver log tail:\n{tail}") from exc
+
+
 class LiveApp:
     def __init__(self, cfg: EngineConfig, *, config_dir: str | None = None,
                  env_extra: dict[str, str | None] | None = None,
@@ -88,7 +108,8 @@ class LiveApp:
         self.proc = subprocess.Popen([binary], env=self._env(),
                                      stdout=log, stderr=subprocess.STDOUT)
         self.log = log
-        self.client = httpx.Client(base_url=f"http://127.0.0.1:{self.port}", timeout=10.0)
+        self.client = _LiveClient(base_url=f"http://127.0.0.1:{self.port}", timeout=10.0,
+                                  tail_fn=self.tail)
         deadline = time.monotonic() + self.ready_timeout
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
