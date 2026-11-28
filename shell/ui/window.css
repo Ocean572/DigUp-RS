@@ -793,8 +793,33 @@ svg { display: block; }
 .big .head button { padding: 5px 14px; font-size: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text); }
 .big .head button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 .big .head button.close { padding: 2px 10px; font-size: 18px; line-height: 1; border-color: transparent; background: none; color: var(--secondary); }
-.big .view { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--pane); }
+.big .view { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--pane); position: relative; }
 .big .view img, .big .view video { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* Issue #99: the big look shows its highlighted hits — the sentence the engine matched, on
+   the picture's own scrim band (the moment chrome's shape), the query's words lit like the
+   passage's. Clamped to a few lines with NO scroller: long text keeps its tail, the way a
+   thumbnail's excerpt does. */
+.big .found-here {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 30px 16px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: start;
+  color: var(--on-accent);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  background: linear-gradient(transparent, var(--marks-dim) 30%);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: clip;
+  overflow-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.big .found-here mark { background: var(--mark); color: var(--on-paper); border-radius: 2px; }
 .big .view audio { width: min(560px, 80%); }
 .big .view.text { align-items: stretch; justify-content: stretch; overflow: auto; }
 .big .view.text > * { flex: 1; max-height: none; font-size: 14px; }

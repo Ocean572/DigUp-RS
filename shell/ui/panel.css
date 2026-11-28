@@ -411,3 +411,22 @@ html, body {
 .big .view > video { max-width: 100%; max-height: 100%; }
 .big .view > * { max-width: 100%; max-height: 100%; }
 .big .view img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* Issue #99: the matched sentence under the big preview — the query's words marked like the
+   passage's. Clamped to a few lines with NO scroller: the tail rides as an ellipsis. */
+.big .found-here {
+  flex: none;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--line, rgba(0,0,0,0.1));
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: clip;
+  overflow-wrap: break-word;
+  text-align: start;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.big .found-here mark { background: var(--mark); color: var(--text); border-radius: 2px; }

@@ -315,10 +315,25 @@ async function setSkipped(skipped) {
   await refresh();
 }
 
+/// Issue #129: Settings → Code's skipped list — the code twin of `set_skipped`.
+async function setCodeSkipped(skipped) {
+  try {
+    await invoke("set_code_skipped", { skipped });
+  } catch (error) {
+    fail(error);
+  }
+  await refresh();
+}
+
 $("add-folders").onclick = () => invoke("choose_folders").catch(fail);
 $("skip-folder").onclick = async () => {
   const picked = await invoke("pick_folders");
   if (picked.length) setSkipped([...(info.skipped || []), ...picked.filter((path) => !info.skipped.includes(path))]);
+};
+$("skip-code-folder").onclick = async () => {
+  const skipped = info.code?.skipped || [];
+  const picked = await invoke("pick_folders");
+  if (picked.length) setCodeSkipped([...skipped, ...picked.filter((path) => !skipped.includes(path))]);
 };
 
 // File types: applied on Return, and when the field is left.
@@ -364,7 +379,7 @@ async function loadCodeSummaries() {
 }
 
 function renderCode() {
-  const code = info.code || { folders: [], editors: [], editor: "default" };
+  const code = info.code || { folders: [], skipped: [], editors: [], editor: "default" };
   const on = code.folders.length > 0;
   // How far the code index is, over all code folders.
   const total = { files: 0, indexed: 0, pending: 0 };
@@ -385,6 +400,22 @@ function renderCode() {
     const summary = (codeSummaries || []).find((item) => samePath(item.path, folder)) || null;
     rows.append(folderRow(folder, summary, true));
     if (removingCode && samePath(removingCode, folder)) rows.append(confirmRemoval(folder, summary, true));
+  }
+  // Issue #129: the same skipped list the Folders tab has, writing codeExcludedFolders' twin
+  // (settings.code_skipped → the crawl's code excludes). Remove = index this folder again.
+  const skipped = $("code-skipped-rows");
+  skipped.replaceChildren();
+  if (!code.skipped?.length) {
+    skipped.append(element("div", "empty", "None. Git-ignored folders, dependencies and build output are skipped anyway."));
+  }
+  for (const folder of code.skipped || []) {
+    const row = element("div", "row");
+    const text = element("div", "text");
+    text.append(element("div", "path", shown(folder)));
+    row.append(text, removeButton("Index this folder again", () => {
+      setCodeSkipped(code.skipped.filter((path) => path !== folder));
+    }));
+    skipped.append(row);
   }
   $("add-code").textContent = on ? "Add Folders…" : "Choose Code Folders…";
 
